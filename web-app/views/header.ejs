@@ -14,7 +14,7 @@
     <!-- FontAwesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Style -->
-    <link rel="stylesheet" href="/css/style.css?v=91">
+    <link rel="stylesheet" href="/css/style.css?v=99">
     <!-- Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <!-- 各頁共用:吐司 + 備選歌詞 + 重新載入歌詞 -->
@@ -291,6 +291,10 @@
                             <button class="hk-reset" onclick="clearDbData('history')">清除</button>
                         </div>
                         <div class="hk-row">
+                            <span class="hk-label">猜歌紀錄 <b id="usage-game">—</b></span>
+                            <button class="hk-reset" onclick="clearDbData('game')">清除</button>
+                        </div>
+                        <div class="hk-row">
                             <span class="hk-label">手動修正 <b id="usage-manual">—</b></span>
                         </div>
                         <div class="hk-row">
@@ -342,6 +346,11 @@
                 <a href="/editor" class="nav-item <%= activePage === 'editor' ? 'active' : '' %>">
                     <i class="fa-solid fa-pen-to-square"></i>
                     <span>歌詞編輯器</span>
+                </a>
+                <%# 猜歌不掛 nav-stats-item —— 那個 class 是 track_history 的隱藏開關,與猜歌無關 %>
+                <a href="/game" class="nav-item <%= activePage === 'game' ? 'active' : '' %>">
+                    <i class="fa-solid fa-gamepad"></i>
+                    <span>猜歌</span>
                 </a>
             </nav>
             

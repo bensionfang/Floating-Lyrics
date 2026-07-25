@@ -91,6 +91,7 @@ bridge.onDocked(d => el.island.classList.toggle('docked', d));
 // ── 狀態 ──
 let lyrics = [], songKey = '', pos = 0, playing = false, lastSync = 0, offset = 0;
 let lastThumb = null;   // 已套用的封面 —— 縮圖可能換歌後晚一拍才由 media_monitor 補送
+let gameMask = false;   // 猜歌遊戲進行中:歌名與歌詞都要遮起來,否則島直接公布答案
 let islandLines = 2, lastLine1 = null, idleTimer = null, wasPlaying = null, wasHasSession = null;
 // 第二行顯示什麼:'next' 下一句歌詞 (預設) / 'translation' 本句翻譯
 let islandLine2 = 'next';
@@ -135,7 +136,13 @@ function connect() {
       if (msg.settings) applySettings(msg.settings);
       onMediaState(msg.state || {});
     } else if (msg.type === 'lyrics_updated') {
-      if (msg.artist + '|||' + msg.title === songKey) setLyrics(msg.lyrics || '');
+      // 猜歌中連別的分頁抓歌詞的廣播也要擋 —— 島是置頂的,歌詞裡多半唱著歌名
+      if (!gameMask && msg.artist + '|||' + msg.title === songKey) setLyrics(msg.lyrics || '');
+    } else if (msg.type === 'game_state') {
+      gameMask = !!msg.active;
+      lyrics = []; lastLine1 = null;
+      if (gameMask) showSongName('', '');
+      else songKey = '';   // 清掉才會被下一次 media_state 當成換歌,重抓歌名與歌詞
     } else if (msg.type === 'settings_updated') {
       applySettings(msg.settings);
     } else if (msg.type === 'sync_offset_updated') {
@@ -195,6 +202,7 @@ async function onMediaState(m) {
   songKey = key;
   lyrics = []; lastLine1 = null;
   showSongName(m.title, m.artist);
+  if (gameMask) return;   // 猜歌中:歌名已被遮蔽,歌詞也不抓
 
   const q = new URLSearchParams({ title: m.title, artist: m.artist });
   try {
@@ -208,7 +216,8 @@ async function onMediaState(m) {
 }
 
 function showSongName(title, artist) {
-  el.song.textContent = artist ? `${title} - ${artist}` : title;
+  // 猜歌遊戲進行中,島直接寫著答案 —— 一律換成固定字樣
+  el.song.textContent = gameMask ? '猜歌中' : (artist ? `${title} - ${artist}` : title);
   el.song.classList.remove('hidden');
   el.l1.classList.add('hidden');
   el.l2.classList.add('hidden');

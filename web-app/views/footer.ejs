@@ -200,25 +200,30 @@
 
         async function loadDbUsage() {
             const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
-            set('usage-lyrics', '…'); set('usage-history', '…'); set('usage-manual', '…'); set('usage-file', '…');
+            set('usage-lyrics', '…'); set('usage-history', '…'); set('usage-manual', '…');
+            set('usage-game', '…'); set('usage-file', '…');
             try {
                 const d = await (await fetch('/api/db-usage', { cache: 'no-store' })).json();
                 set('usage-lyrics', `${d.lyrics.rows} 首 · ${fmtBytes(d.lyrics.bytes)}`);
                 set('usage-history', `${d.history.rows} 筆 · ${fmtBytes(d.history.bytes)}`);
+                set('usage-game', `${d.game.rows} 題`);
                 set('usage-manual', `${d.manual.rows} 筆`);
                 set('usage-file', fmtBytes(d.file));
             } catch (e) {
                 set('usage-lyrics', '讀取失敗'); set('usage-history', '讀取失敗');
-                set('usage-manual', '—'); set('usage-file', '—');
+                set('usage-game', '—'); set('usage-manual', '—'); set('usage-file', '—');
             }
         }
 
         async function clearDbData(target) {
-            // 聆聽紀錄清了回不來,歌詞快取只是要重抓 —— 文案要讓使用者分得出差別
-            const prompt = target === 'history'
-                ? '確定清除全部聆聽紀錄嗎？\n\n統計數據與排行榜會歸零，這個動作無法復原。'
-                : '確定清除歌詞快取嗎？\n\n之後播到的歌會重新上網抓一次。\n你手動修正過的假名與時間軸校正不會被清掉。';
-            if (!confirm(prompt)) return;
+            // 聆聽紀錄與猜歌紀錄清了回不來,歌詞快取只是要重抓 —— 文案要讓使用者分得出差別
+            const PROMPTS = {
+                history: '確定清除全部聆聽紀錄嗎？\n\n統計數據與排行榜會歸零，這個動作無法復原。',
+                game: '確定清除全部猜歌紀錄嗎？\n\n這個動作無法復原。',
+                lyrics: '確定清除歌詞快取嗎？\n\n之後播到的歌會重新上網抓一次。\n你手動修正過的假名與時間軸校正不會被清掉。',
+            };
+            const DONE = { history: '聆聽紀錄已清除', game: '猜歌紀錄已清除', lyrics: '歌詞快取已清除' };
+            if (!confirm(PROMPTS[target])) return;
             try {
                 const r = await fetch('/api/db-clear', {
                     method: 'POST',
@@ -226,7 +231,7 @@
                     body: JSON.stringify({ target })
                 });
                 if (!r.ok) throw new Error((await r.json()).error || r.status);
-                showToast(target === 'history' ? '聆聽紀錄已清除' : '歌詞快取已清除', 'fa-solid fa-circle-check', 2500);
+                showToast(DONE[target], 'fa-solid fa-circle-check', 2500);
                 loadDbUsage();
             } catch (e) {
                 showToast('清除失敗：' + e.message, 'fa-solid fa-triangle-exclamation', 4000);

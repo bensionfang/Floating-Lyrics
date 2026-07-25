@@ -1,0 +1,151 @@
+<%- include('header') %>
+
+<div class="page-header animate-fade-in">
+    <div>
+        <h1>猜歌</h1>
+        <p class="subtitle">邊聽邊猜。按開始後會切到隨機一首歌，歌名藏起來，靠耳朵作答。</p>
+    </div>
+</div>
+
+<!-- 開始畫面:說明 + 選玩法 -->
+<div class="game-panel glass-panel animate-fade-in" id="game-setup">
+    <div class="game-setup-grid">
+
+        <!-- 左:怎麼玩 -->
+        <div class="game-guide">
+            <h2 class="game-guide-title">怎麼玩</h2>
+
+            <ol class="game-steps">
+                <li>
+                    <b>先填要考哪位歌手</b>
+                    <span>右邊輸入歌手名按「載入」，四個選項就<b>全是這位歌手的歌</b>，不能靠「歌手不對」刷掉。
+                        曲目取自 iTunes 日本區，所以是日文原名而不是羅馬字。</span>
+                </li>
+                <li>
+                    <b>在播放器裡放這位歌手的歌</b>
+                    <span>Spotify、YouTube 都可以，打開他的歌單或專輯按播放。
+                        <b>題目就是實際播到的那首</b> —— 放別人的歌，答案會跟選項對不起來。</span>
+                </li>
+                <li>
+                    <b>回到這頁按「開始」</b>
+                    <span>Kanaric 會替你打開隨機播放，然後切下一首當第一題。</span>
+                </li>
+                <li>
+                    <b>只靠耳朵作答</b>
+                    <span>歌名、封面、歌詞、靈動島全部會被藏起來，只剩聲音。四個選項選一個，答完 3 秒自動換下一題。</span>
+                </li>
+            </ol>
+
+            <div class="game-guide-block">
+                <h3>猜不出來的時候</h3>
+                <p><i class="fa-solid fa-forward"></i> <b>跳過</b>：當作答錯，直接看答案換下一題。</p>
+                <p><i class="fa-solid fa-flag-checkered"></i> <b>結束</b>：隨時可以收攤看成績，音樂也會跟著停下來。</p>
+            </div>
+
+            <div class="game-guide-block">
+                <h3>怎麼算分</h3>
+                <p>答對的分數看你花多久：<b>5 秒內滿分 10 分</b>，之後每 5 秒少 1 分，<b>最低 3 分</b>。碼表旁邊會即時寫「現在答對 +N」。</p>
+                <p>答錯或跳過 0 分。</p>
+            </div>
+
+            <p class="game-note game-guide-foot">
+                遊戲中的播放<b>不會</b>寫進聆聽紀錄，統計與排行榜不受影響。<br>
+                靈動島會先收起來，結束後自己開回來；隨機播放則不會自動改回原本的設定。
+            </p>
+        </div>
+
+        <!-- 右:選玩法 + 開始 -->
+        <div class="game-choose">
+            <h2 class="game-guide-title">選玩法</h2>
+
+            <div class="game-setup-row">
+                <span class="game-setup-label">考哪位歌手（必填）</span>
+                <div class="game-artist-input">
+                    <input type="text" id="game-artist-name" placeholder="輸入歌手名（ヨルシカ、米津玄師…）">
+                    <button class="game-btn-ghost" id="game-artist-load">載入</button>
+                </div>
+                <p class="game-setup-hint">
+                    <span id="game-artist-status"></span>
+                    <button class="game-link-btn hidden" id="game-artist-clear">清除</button>
+                </p>
+                <p class="game-setup-hint">
+                    找不到的話換個寫法試試（日文原名、羅馬字都可以查）。
+                </p>
+            </div>
+
+            <div class="game-setup-row">
+                <span class="game-setup-label">一局多長</span>
+                <div class="mode-tabs" id="game-modes">
+                    <button class="mode-tab active" data-mode="10"><i class="fa-solid fa-list-ol"></i> 10 題</button>
+                    <button class="mode-tab" data-mode="endless"><i class="fa-solid fa-infinity"></i> 無限</button>
+                    <button class="mode-tab" data-mode="lives"><i class="fa-solid fa-heart"></i> 三條命</button>
+                </div>
+                <p class="game-setup-hint">
+                    <b>10 題</b>：答滿 10 題結算。<br>
+                    <b>無限</b>：一直出題，按「結束」才停。<br>
+                    <b>三條命</b>：答錯或跳過扣一條，扣完就結算。
+                </p>
+            </div>
+
+            <div class="game-setup-row">
+                <span class="game-setup-label">從哪裡開始播</span>
+                <div class="mode-tabs" id="game-starts">
+                    <button class="mode-tab active" data-start="intro"><i class="fa-solid fa-backward-fast"></i> 前奏</button>
+                    <button class="mode-tab" data-start="random"><i class="fa-solid fa-shuffle"></i> 隨機時間</button>
+                </div>
+                <p class="game-setup-hint">
+                    <b>前奏</b>：從頭播，考的是前奏跟第一句。<br>
+                    <b>隨機時間</b>：跳到歌曲中段某處，前奏背得再熟也沒用。
+                </p>
+            </div>
+
+            <button class="game-btn-primary" id="game-start" disabled><i class="fa-solid fa-play"></i> 開始</button>
+            <p class="game-setup-hint game-setup-ready">按下去之前，先確認播放器<b>正在放這位歌手的歌</b>。</p>
+        </div>
+    </div>
+</div>
+
+<!-- 出題畫面 -->
+<div class="game-panel glass-panel animate-fade-in hidden" id="game-play">
+    <div class="game-hud">
+        <span id="game-progress">第 1 題</span>
+        <span id="game-score">0 分</span>
+        <span id="game-lives" class="hidden"></span>
+        <span id="game-timer">0:00</span>
+    </div>
+
+    <div class="game-body">
+        <div class="game-left">
+            <div class="game-stage" id="game-stage">
+                <div class="game-listening">
+                    <i class="fa-solid fa-compact-disc"></i>
+                    <span>聽聽看</span>
+                </div>
+            </div>
+            <div class="game-reveal hidden" id="game-reveal"></div>
+        </div>
+
+        <div class="game-right">
+            <div class="game-options" id="game-options"></div>
+            <div class="game-actions">
+                <button class="game-btn-ghost" id="game-skip"><i class="fa-solid fa-forward"></i> 跳過</button>
+                <button class="game-btn-ghost" id="game-quit"><i class="fa-solid fa-flag-checkered"></i> 結束</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 結算畫面 -->
+<div class="game-panel glass-panel animate-fade-in hidden" id="game-over">
+    <h2 id="game-result-score">0 分</h2>
+    <p id="game-result-line" class="game-note"></p>
+    <div class="game-wrong" id="game-wrong"></div>
+    <div class="game-actions">
+        <button class="game-btn-primary" id="game-again"><i class="fa-solid fa-rotate-right"></i> 再玩一局</button>
+        <button class="game-btn-ghost" id="game-remode"><i class="fa-solid fa-sliders"></i> 重選模式</button>
+    </div>
+</div>
+
+<script src="/js/game.js?v=7"></script>
+
+<%- include('footer') %>

@@ -20,6 +20,7 @@ const { toTraditional, toSimplified } = require('./s2t');   // 簡體歌詞轉�
 const { cleanBrowserQuery, isMusicAppSource } = require('./browser-query');   // 瀏覽器來源的影片標題去噪
 const { autoMarkTitleLines } = require('./title-lines');   // 製作人員/版權列標記 #TITLE#
 const { mergeTranslations } = require('./translations');   // 中文譯文合併 #TRANS# (注音之後才做)
+const { pickDistractors, filterArtistTracks } = require('./game');   // 猜歌遊戲:選項與提示句的挑選規則
 require('dotenv').config();
 
 const app = express();
@@ -193,6 +194,13 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
     // 中文譯文快取 (data 為 JSON: {正規化後的日文行: 譯文};空 {} = 查過但沒有來源附翻譯)。
     // Python 端 db.py 也會建同一張,改一邊要改兩邊
     db.run(`CREATE TABLE IF NOT EXISTS lyrics_translations (artist TEXT, title TEXT, data TEXT, PRIMARY KEY (artist, title))`);
+    // 猜歌遊戲的每題紀錄。Python 端不碰這張表,所以 db.py 不必跟著建。
+    db.run(`CREATE TABLE IF NOT EXISTS game_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      played_at TEXT DEFAULT (datetime('now')),
+      artist TEXT, title TEXT,
+      correct INTEGER, hints INTEGER, answer_ms INTEGER, mode TEXT
+    )`);
   }
 });
 
@@ -327,6 +335,8 @@ let lastResumeTime = 0;
 global.logListen = function(state) {
   songLogged = true;
   if (readSettings().track_history === false) return;
+  // 猜歌遊戲中的播放不算聆聽:題目是隨機切出來的歌,記進去會污染統計與排行榜
+  if (isGameActive()) return;
   // 瀏覽器來源:抓不到歌詞的就不記錄。YouTube 上聽歌與看雜談影片是同一個 session,
   // 不擋的話「第1回ぶいすぽスポーツテストを見て…」這種影片會混進統計與排行榜。
   // 談話性影片幾乎都抓不到歌詞;副作用是在 YouTube 聽的冷門歌 (真的沒有歌詞) 也不會被記錄。
@@ -538,6 +548,10 @@ app.get('/leaderboard', (req, res) => {
 
 app.get('/editor', (req, res) => {
   res.render('editor', { activePage: 'editor' });
+});
+
+app.get('/game', (req, res) => {
+  res.render('game', { activePage: 'game' });
 });
 
 // 靈動島視窗的內容 (由 Electron 主進程的 island.js 載入,見該檔說明)
@@ -1842,6 +1856,99 @@ app.get('/api/leaderboard', (req, res) => {
   });
 });
 
+// 5a-2. 猜歌遊戲。
+// 遊戲狀態 (分數、題號、模式) 全在前端,server 只做三件事:給干擾選項、給提示句、記結果。
+// 播放控制沿用現成的 /api/media-control (shuffle / next),不另外開端點。
+const gameQuery = (sql, params = []) => new Promise(
+  (resolve) => db.all(sql, params, (err, rows) => resolve(err ? [] : rows))
+);
+const shuffle = (a) => a.map(v => [Math.random(), v]).sort((x, y) => x[0] - y[0]).map(p => p[1]);
+
+app.post('/api/game/options', express.json(), async (req, res) => {
+  const { title, artist } = req.body || {};
+  if (!title || !artist) return res.status(400).json({ error: 'title and artist are required' });
+
+  // 使用者指定的歌手曲目 (POST /api/game/artist 抓回來的那份) 排第一順位:
+  // 四個選項全是同一位歌手,才不能靠「歌手不對」刷掉。
+  // 前端傳來的東西照樣要洗:只留字串、上限 200 筆
+  const pool = (Array.isArray(req.body.pool) ? req.body.pool : [])
+    .filter((s) => s && typeof s.artist === 'string' && typeof s.title === 'string')
+    .slice(0, 200);
+
+  // 其餘三個池子:同歌手 → 常聽 → 全庫隨機。挑選規則在 game.js,
+  // SQL 只負責撈 (常聽的那份取前 40 名再洗牌,否則每一題的干擾項都是同樣那幾首)
+  const [same, popular, rand] = await Promise.all([
+    gameQuery('SELECT artist, title FROM cache WHERE artist = ? ORDER BY RANDOM() LIMIT 20', [artist]),
+    gameQuery(`SELECT artist, base_title AS title FROM listening_history
+               GROUP BY artist, base_title ORDER BY COUNT(*) DESC LIMIT 40`),
+    gameQuery('SELECT artist, title FROM cache ORDER BY RANDOM() LIMIT 20'),
+  ]);
+
+  // 排除清單裡「就是答案本身」的那筆。**要連 iTunes 還原前的原名一起排除** ——
+  // 清單給的是 Spotify 原字串 (Haru Dorobou),播放狀態早就被還原成日文原名 (春泥棒),
+  // 只比對還原後的名字會讓答案以另一個寫法混進干擾項,四選一變成兩個都對
+  const exclude = [{ artist, title }];
+  if (req.body.original_title) {
+    exclude.push({ artist: req.body.original_artist || artist, title: req.body.original_title });
+  }
+
+  const picked = pickDistractors(exclude, shuffle(pool), same, shuffle(popular), rand);
+  if (!picked) return res.json({ error: 'not_enough' });
+  res.json({ options: shuffle([...picked, { artist, title }]) });
+});
+
+// 歌手模式:給一個歌手名 → iTunes 抓他的曲目當干擾選項的來源。
+// **country=JP 不能改成別的 storefront** —— tw/us 會把日文歌手與歌名換成羅馬字/英譯
+// (`ヨルシカ / 晴る` → `Yorushika / Sunny`),整份干擾項就變成使用者不認得的名字。
+// 這也是 getResolvedMetadata 用 JP 的同一個理由。
+app.post('/api/game/artist', express.json(), async (req, res) => {
+  const name = String((req.body && req.body.name) || '').trim();
+  if (!name) return res.status(400).json({ error: 'bad_name' });
+
+  const itunes = async (path) => {
+    const r = await fetch(`https://itunes.apple.com/${path}`, { signal: AbortSignal.timeout(15000) });
+    if (!r.ok) throw new Error(`itunes ${r.status}`);
+    return r.json();
+  };
+
+  try {
+    // **入口用 entity=song 而不是 entity=musicArtist**:artist entity 的 artistName 是羅馬字
+    // (`Yorushika`),曲目列才帶日文原名 (`ヨルシカ`) —— 這正是別的猜歌網站歌名不對的成因。
+    const found = await itunes(`search?term=${encodeURIComponent(name)}&entity=song&limit=1&country=JP`);
+    const hit = (found.results || [])[0];
+    if (!hit || !hit.artistId) return res.json({ error: 'no_artist' });
+
+    const songs = await itunes(`lookup?id=${hit.artistId}&entity=song&limit=200&country=JP`);
+    // lookup 的第一筆是歌手本身而不是歌曲,filterArtistTracks 會因為沒有 trackName 自己跳過
+    const tracks = filterArtistTracks(songs.results);
+    if (!tracks.length) return res.json({ error: 'no_tracks' });
+
+    // 歌手名取「曲目列裡出現最多次的那個寫法」,再收斂成正規名 (魚韻 → サカナクション),
+    // 才跟 cache 與播放狀態同一個寫法
+    const tally = new Map();
+    for (const t of tracks) tally.set(t.artist, (tally.get(t.artist) || 0) + 1);
+    const common = [...tally.entries()].sort((a, b) => b[1] - a[1])[0][0];
+    const artist = canonicalArtist(common);
+    res.json({ artist, count: tracks.length, tracks: tracks.map((t) => ({ ...t, artist })) });
+  } catch (e) {
+    res.status(502).json({ error: 'fetch_failed', message: e.message });
+  }
+});
+
+
+app.post('/api/game/result', express.json(), (req, res) => {
+  const { title, artist, correct, hints, answer_ms, mode } = req.body || {};
+  if (!title || !artist) return res.status(400).json({ error: 'title and artist are required' });
+  db.run(
+    `INSERT INTO game_history (artist, title, correct, hints, answer_ms, mode) VALUES (?, ?, ?, ?, ?, ?)`,
+    [artist, title, correct ? 1 : 0, hints || 0, answer_ms || 0, mode || ''],
+    (err) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ success: true });
+    }
+  );
+});
+
 // 5b. 資料用量與清除。
 // 資料分兩類,清除只碰得到第一類:
 //   可重建 —— cache / romaji_hints / llm_hints / lyrics_translations,清掉只是下次重抓
@@ -1849,9 +1956,12 @@ app.get('/api/leaderboard', (req, res) => {
 //   不可重建 —— word_corrections (使用者手改的假名)、sync_offsets、artist_aliases、
 //              search_overrides。這些是使用者親手打的,任何清除功能都不准碰,只顯示筆數。
 // listening_history 自成一類:可清但清了回不來,前端要二次確認。
+// game_history 與 listening_history 同一類 (可清但清了回不來),但刻意是獨立的 target ——
+// 猜歌成績與聆聽紀錄是兩件事,清一個不該順手把另一個清掉
 const CLEAR_TARGETS = {
   history: ['listening_history'],
   lyrics: ['cache', 'romaji_hints', 'llm_hints', 'lyrics_translations'],
+  game: ['game_history'],
 };
 
 // 這個 sqlite3 build 沒編 dbstat,所以用 length() 加總估算。全表掃描在幾萬筆下仍是毫秒級,不必快取
@@ -1876,7 +1986,8 @@ app.get('/api/db-usage', (req, res) => {
               + (SELECT COUNT(*) FROM sync_offsets)
               + (SELECT COUNT(*) FROM artist_aliases)
               + (SELECT COUNT(*) FROM search_overrides) AS rows, 0 AS bytes`),
-  ]).then(([cache, romaji, llm, trans, history, manual]) => {
+    one(`SELECT COUNT(*) AS rows, 0 AS bytes FROM game_history`),
+  ]).then(([cache, romaji, llm, trans, history, manual, game]) => {
     // 對使用者而言「歌詞快取」就是一首歌的全部衍生資料,提示與譯文不另外列一項
     const lyrics = { rows: cache.rows, bytes: cache.bytes + romaji.bytes + llm.bytes + trans.bytes };
     // 實際佔用要含 WAL —— 剛寫入的資料還在 -wal 裡,只看主檔會少算
@@ -1884,7 +1995,7 @@ app.get('/api/db-usage', (req, res) => {
     for (const p of [DB_PATH, DB_PATH + '-wal']) {
       try { file += fs.statSync(p).size; } catch (e) {}
     }
-    res.json({ file, lyrics, history, manual });
+    res.json({ file, lyrics, history, manual, game });
   });
 });
 
@@ -2131,11 +2242,55 @@ wss.on('connection', (ws) => {
   if (currentSettings.island_lines === undefined) currentSettings.island_lines = 2;
   
   ws.send(JSON.stringify({ type: 'init', state: currentMediaState, settings: currentSettings }));
+  ws.send(JSON.stringify({ type: 'game_state', active: isGameActive() }));
+
+  // 「猜歌遊戲進行中」綁在遊戲頁自己的連線上,不用旗標檔也不用逾時 ——
+  // 關頁/重整/當掉都會斷線,旗標自動歸零,不會卡成「聆聽紀錄永久停寫」。
+  ws.on('message', (raw) => {
+    let msg;
+    try { msg = JSON.parse(raw); } catch (e) { return; }
+    if (!msg || msg.type !== 'game_active') return;
+    const active = !!msg.active;
+    if (ws.isGame === active) return;
+    ws.isGame = active;
+    const on = isGameActive();
+    global.broadcast({ type: 'game_state', active: on });
+    syncIslandForGame(on);
+  });
 
   ws.on('close', () => {
     console.log('WebSocket client disconnected');
+    // 遊戲頁直接關掉時,島要自己開回來並解除遮蔽
+    if (ws.isGame) {
+      const on = isGameActive();
+      global.broadcast({ type: 'game_state', active: on });
+      syncIslandForGame(on);
+    }
   });
 });
+
+// 任何一個連線掛著遊戲旗標就算進行中 (同時開兩個遊戲頁不會互相取消)
+function isGameActive() {
+  for (const c of wss.clients) if (c.isGame && c.readyState === 1) return true;
+  return false;
+}
+
+// 猜歌開始就把靈動島整個收起來。島上的字雖然已經換成「猜歌中」,但它是置頂視窗,
+// 遊戲期間擋在畫面上沒有任何用處。**只有「是我們收起來的」才自動開回來** ——
+// 使用者本來就沒開島的話,結束時不該自作主張生一個出來。
+let islandHiddenByGame = false;
+function syncIslandForGame(active) {
+  if (typeof global.isIslandOpen !== 'function') return;   // 純 node (npm start) 沒有主進程
+  try {
+    if (active && global.isIslandOpen()) {
+      islandHiddenByGame = true;
+      global.closeIsland();
+    } else if (!active && islandHiddenByGame) {
+      islandHiddenByGame = false;
+      global.openIsland();
+    }
+  } catch (e) { console.error('猜歌切換靈動島失敗:', e.message); }
+}
 
 global.broadcast = function(message) {
   const msgStr = JSON.stringify(message);

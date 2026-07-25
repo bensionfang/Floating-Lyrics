@@ -53,7 +53,7 @@ gh release create v1.1.0 \
 tag 沒帶 `v` 或漏推,純 node 模式的更新提醒也抓不到新版。安裝檔未簽章,`gh release create` 會直接
 公開發布,屬於「發布公開內容」的動作,不要自動執行,要使用者自己按。
 - 靈動島 = Electron 的一個視窗 (`web-app/island.js`),由 `npm run app` 一起帶起,沒有獨立進程也沒有 build 步驟。
-- 沒有 test runner 或 linter。零星的獨立測試檔直接用直譯器跑:`node test_origin_guard.js` (同源守門)、`node test_s2t.js` (簡轉繁)、`node test_search_query.js` (繁轉簡 + 瀏覽器標題去噪)、`node test_title_lines.js` (製作人員/版權列標記)、`node test_translations.js` (中文譯文合併)、`node test_itunes_resolving.js` (iTunes 原名還原的時序)、`node test_history_toggle.js` (聆聽紀錄開關 + 清除白名單)、`node test_backup_restore.js` (備份/還原 + 還原前的驗證守門)、`node test_scroll_zone.js` (歌詞自動捲動的三段判定)、`python test_pick_session.py`、`python test_furigana_hint.py` (Python 的要用 `venv/Scripts/python.exe`,系統 python 沒裝 fugashi)。
+- 沒有 test runner 或 linter。零星的獨立測試檔直接用直譯器跑:`node test_origin_guard.js` (同源守門)、`node test_s2t.js` (簡轉繁)、`node test_search_query.js` (繁轉簡 + 瀏覽器標題去噪)、`node test_title_lines.js` (製作人員/版權列標記)、`node test_translations.js` (中文譯文合併)、`node test_itunes_resolving.js` (iTunes 原名還原的時序)、`node test_history_toggle.js` (聆聽紀錄開關 + 清除白名單)、`node test_backup_restore.js` (備份/還原 + 還原前的驗證守門)、`node test_scroll_zone.js` (歌詞自動捲動的三段判定)、`node test_game.js` (猜歌的干擾選項挑選)、`python test_pick_session.py`、`python test_furigana_hint.py` (Python 的要用 `venv/Scripts/python.exe`,系統 python 沒裝 fugashi)。
 - `ROADMAP.md` (repo 根,**本機檔案,不進版控**) 記著 v1.0.0 之後的規劃與**明確不做的事**。動到「未來要做什麼」的討論先看它,免得重新提案已經否決過的方向 (雲端同步、換 tokenizer、離線辭典、Steam 式強制更新)。clone 下來沒有這個檔屬正常。
   主軸是**歌詞體驗**,不是學日文 —— 翻譯/查詞這類功能要進來,得先過「它讓歌詞更好讀嗎」這一關。
 
@@ -178,6 +178,56 @@ GitHub repo 也已改名 `bensionfang/Kanaric`,`server.js` 的 `GITHUB_REPO` 跟
   否則點歌詞跳轉會變成「不捲過去還跳出按鈕」。
 - `scrollLocked` 只剩兩個硬鎖來源:編輯假名中 (`startRubyEdit`)、鍵盤上下鍵手動切行 (`handleManualScroll`),都靠 `resumeSync()` 解鎖。
 - 回歸測試 `node test_scroll_zone.js`。
+
+### 猜歌小遊戲 (`/game`)
+
+邊聽邊猜:題目就是**現在正在播的那首歌**,app 只做三件事 —— 控播放 (`/api/media-control` 的 `shuffle`/`next`)、
+藏答案、判分。局面狀態全在前端 (`public/js/game.js`),server 只補選項/提示並記每題結果 (`game_history`)。
+挑選規則 (`pickDistractors`:指定歌手的曲目 → cache 同歌手 → 常聽 → 全庫隨機) 與 iTunes 曲目清洗
+(`filterArtistTracks`) 都在 `web-app/game.js`,獨立成檔的理由同 `s2t.js`:測試 require 得到而不必起 server。
+
+- **題庫來源只有一種:指定一位歌手,而且是必填** (`POST /api/game/artist` → 前端把 tracks 當 `pool` 送回,
+  沒載入之前「開始」是 disabled)。四個選項全同一位歌手,才不能靠「歌手不對」刷掉。
+  - 走 iTunes,**`country=JP` 不能改**,而且**入口要用 `entity=song` 不能用 `entity=musicArtist`** ——
+    artist entity 的 `artistName` 即使在 JP storefront 也是羅馬字 (`Yorushika`),只有曲目列帶日文原名
+    (`ヨルシカ`)。歌手名取曲目列的眾數再過 `canonicalArtist`。曲目用 `filterArtistTracks()` 清洗:
+    砍掉 `カラオケ/karaoke/instrumental` (那些是翻唱,歌名一樣但不是本人)、`trackId` 與正規化歌名兩層去重。
+    實測 ヨルシカ 201 筆 → 114 首。
+  - **`pickDistractors` 的第一個參數要連 iTunes 還原前的原名一起排除** (`original_title`/`original_artist`):
+    播放器給的是 Spotify 原字串 (`Haru Dorobou`),播放狀態早被還原成日文原名 (`春泥棒`) —— 只排除還原後的
+    名字,答案就會以另一個寫法混進干擾項,四選一變成兩個都對。
+  - 做過又**移除**的兩條,不要重新提案:**貼 Spotify/YouTube 播放清單連結**(爬網頁內嵌 JSON,最脆弱的一條;
+    使用者認為「不會有人同時猜多位歌手的歌」)、**拿本局出現過的歌當干擾項**(重複出現一眼就認得,不好玩)。
+    清單解析的實作細節記在 ROADMAP,那份程式碼刪除時還沒進版控。
+  - Spotify **不可能**由 app 指定播哪一首 (要 OAuth + Premium + Connect API),所以歌手只決定選項,
+    題目照舊是「隨機播到什麼就考什麼」—— 使用者要自己在播放器裡放那位歌手的歌。
+
+- **開局會把靈動島整個收起來** (`syncIslandForGame`,走 `global.closeIsland/openIsland`),結束/關頁再開回來。
+  **只有「是我們收起來的」才自動開回來** —— 本來就沒開島的人,結束時不該多一個視窗跑出來。
+  純 node 模式沒有那幾支 global,直接跳過。島上的遮字仍然留著:遊戲中手動開島、或用瀏覽器開 `/island` 除錯時還是要遮。
+- **答案在三個地方會自己洩出去,少遮一個就白做**:靈動島 (置頂視窗,寫著歌名)、播放列的歌名與封面
+  (`syncPlayerBar` 每秒把歌名寫回 DOM,所以用 `body.game-masked` 讓 CSS 遮,不是用 JS 清)、
+  歌詞本身 (出題時畫面上什麼都不顯示)。
+  **提示功能 (給一句歌詞、扣分) 做過又拿掉了 —— 使用者不要**,連帶刪掉 `/api/game/hint` 與
+  `pickHintLines`。要翻舊實作看 git 歷史,不要重新提案。
+- **一局結束 (含中途按「結束」) 會送 `pause`**:不停的話播放器自己接著跑下一首,使用者還在看成績、
+  背景卻在放沒人聽的歌。
+- 計分是**時間分**:5 秒內滿分 10,之後每 5 秒 −1,下限 3 (冷門歌本來就要聽久一點,扣到 0 只會讓人放棄)。
+  碼表旁邊直接寫「現在答對 +N」—— 時間扣分不寫出來就是看不見的規則。
+  `game_history.hints` 這欄留著但永遠是 0 (提示功能已移除),不為了它做 migration。
+- 起始位置 (`startMode`) 走既有的 `/api/seek`:`intro` 位置 >3 秒才跳回 0,`random` 落在 10%~80% 之間。
+  **沒有時長 (瀏覽器來源 `currentDuration()` 回 null) 就不 seek**,亂跳只會跑到歌尾。
+- **開局時 `S.key` 要設成「開局當下正在播的那首」而不是空字串** —— `next` 生效前監控還在推那一首,
+  空字串會讓它被當成第一題:選項是上一首的,使用者聽到的卻是切過去的新歌。而 `lastKey` **只記非空狀態**,
+  沒有播放來源時監控照樣推空 payload,記進去等於把要擋的那首忘掉。
+- **出題必須等 `state.resolving === false`** —— iTunes 日文原名還原是非同步的,不等它答案會在作答途中被換掉。
+  跟前端抓歌詞是同一條規則。
+- **「遊戲進行中」綁在遊戲頁自己的 WebSocket 連線上** (`ws.isGame` + `isGameActive()`),不是設定檔也不是逾時:
+  關頁/重整/當掉都會斷線,旗標自動歸零。**這條很重要** —— 旗標卡住 = `logListen` 永久停寫聆聽紀錄。
+  遊戲中不記錄的閘門只寫在 `global.logListen` 裡,跟 `track_history` 同一個位置,不要在呼叫端再判斷一次。
+- `game_history` 有自己的 `CLEAR_TARGETS` key (`game`),不跟 `history` 合併清 —— 猜歌成績與聆聽紀錄是兩件事。
+  備份自動涵蓋 (`VACUUM INTO` 是整庫快照)。
+- 回歸測試:`node test_game.js` (純邏輯)、`node test_history_toggle.js` 最後兩項 (遊戲中不寫入 + 關頁後恢復)。
 
 ### Furigana editing (web frontend)
 

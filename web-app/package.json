@@ -44,6 +44,7 @@
       "browser-query.js",
       "title-lines.js",
       "translations.js",
+      "game.js",
       "island.js",
       "preload-island.js",
       "views/**",

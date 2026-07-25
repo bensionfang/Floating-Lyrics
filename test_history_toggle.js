@@ -8,6 +8,7 @@
  *     直接呼叫 global.logListen 而不是等 handleMediaUpdate 的 30 秒計時器,測試才跑得動。
  *  2. 清除功能的白名單:word_corrections 這類使用者親手打的資料絕對不能被清掉。
  *     清除是不可逆的,這條界線壞掉會直接毀掉使用者的心血。
+ *  3. 猜歌遊戲進行中不寫入,而且遊戲頁一關就恢復 —— 旗標卡住的話聆聽紀錄會永久停寫。
  */
 const PORT = process.env.PORT || '5733';
 process.env.PORT = PORT;
@@ -134,6 +135,26 @@ async function run() {
     `${usage.history.rows}`);
   check(usage.manual.rows >= 1, '/api/db-usage 有算到手動修正', `${usage.manual.rows}`);
   check(usage.file > 0, '/api/db-usage 有回報檔案大小', `${usage.file}`);
+
+  // 9. 猜歌遊戲進行中不寫聆聽紀錄。題目是隨機切出來的歌,記進去會污染統計與排行榜。
+  //    旗標綁在遊戲頁自己的 WebSocket 連線上 —— 斷線就自動歸零,不靠逾時,
+  //    所以「關掉連線後恢復寫入」那條跟前一條一樣重要 (卡住的話聆聽紀錄會永久停寫)
+  const WebSocket = require('./web-app/node_modules/ws');
+  await new Promise((r) => probe.run('DELETE FROM listening_history', r));
+
+  const gameWs = new WebSocket(`ws://localhost:${PORT}`);
+  await new Promise((res) => gameWs.on('open', res));
+  gameWs.send(JSON.stringify({ type: 'game_active', active: true }));
+  await sleep(300);
+  play('遊戲中的隨機題目', 'Spotify.exe');
+  await sleep(300);
+  check(await count('listening_history') === 0, '猜歌遊戲進行中 -> 不寫聆聽紀錄');
+
+  gameWs.close();
+  await sleep(500);
+  play('遊戲頁關掉之後', 'Spotify.exe');
+  await sleep(300);
+  check(await count('listening_history') === 1, '遊戲頁關掉後恢復寫入');
 }
 
 (async () => {
