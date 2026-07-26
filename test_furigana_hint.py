@@ -92,3 +92,16 @@ assert '<rt>しょくん</rt>' in build_ruby_html('諸君、聞いてくれ', 'x
 assert '<rt>ぼうくん</rt>' in build_ruby_html('暴君のように', 'x', 'y')
 
 print('OK')
+
+# 9. 兩邊來源一起錯的字:unidic 給 良い/好い/善い 一律 ヨイ,平台的機器羅馬字也給 yoi。
+#    整詞比對,所以活用形與複合詞不受影響。
+assert '<rt>い</rt>' in build_ruby_html('食み出せば好いさ', 'NOMELON NOLEMON', 'SUGAR')
+# hint 說 よい 也要被壓過去 (_COMMON_READING 在 apply_hint 之上)
+ant = build_ruby_html('良いから一緒に堕ちろよ', 'Chevon', 'antlion',
+                      [('よいからいっしょにおちろよ', False)])
+assert "data-orig='良' data-hira='い'" in ant, ant
+# 誤殺守門:活用形與複合詞照舊 よ
+assert "data-hira='よ'" in build_ruby_html('良くない', 'x', 'y')
+assert '<rt>なかよ</rt>' in build_ruby_html('仲良くしよう', 'x', 'y')
+
+print('OK')
