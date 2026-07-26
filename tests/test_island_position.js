@@ -1,6 +1,6 @@
 // 靈動島多螢幕位置記憶的回歸測試:node test_island_position.js
 const assert = require('assert');
-const { displayKey, pickPosition } = require('./web-app/island-position.js');
+const { displayKey, pickPosition } = require('../web-app/island-position.js');
 
 const SIZE = { width: 468, height: 64 };   // BASE_WIDTH + EDGE*2, BASE_HEIGHT
 

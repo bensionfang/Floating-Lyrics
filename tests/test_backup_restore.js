@@ -29,8 +29,8 @@ process.env.DATA_DIR = TMP;
 process.env.LYRICS_SETTINGS_PATH = SETTINGS;
 fs.writeFileSync(SETTINGS, JSON.stringify({ font_size: 41, track_history: true }), 'utf8');
 
-const sqlite3 = require('./web-app/node_modules/sqlite3');
-require('./web-app/server.js');
+const sqlite3 = require('../web-app/node_modules/sqlite3');
+require('../web-app/server.js');
 
 const BASE = `http://localhost:${PORT}`;
 let failed = 0;

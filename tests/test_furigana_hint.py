@@ -1,4 +1,9 @@
-"""apply_hint 的最小自檢:python test_furigana_hint.py"""
+"""apply_hint 的最小自檢:python tests/test_furigana_hint.py"""
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # repo 根,才 import 得到受測模組
+
 from furigana_inject import apply_hint
 
 def hira_of(words, orig):

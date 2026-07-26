@@ -23,8 +23,8 @@ process.env.DB_PATH = path.join(TMP, 'test.db');
 process.env.DATA_DIR = TMP;
 process.env.LYRICS_SETTINGS_PATH = SETTINGS;
 
-const sqlite3 = require('./web-app/node_modules/sqlite3');
-require('./web-app/server.js');
+const sqlite3 = require('../web-app/node_modules/sqlite3');
+require('../web-app/server.js');
 
 const BASE = `http://localhost:${PORT}`;
 let failed = 0;
@@ -139,7 +139,7 @@ async function run() {
   // 9. 猜歌遊戲進行中不寫聆聽紀錄。題目是隨機切出來的歌,記進去會污染統計與排行榜。
   //    旗標綁在遊戲頁自己的 WebSocket 連線上 —— 斷線就自動歸零,不靠逾時,
   //    所以「關掉連線後恢復寫入」那條跟前一條一樣重要 (卡住的話聆聽紀錄會永久停寫)
-  const WebSocket = require('./web-app/node_modules/ws');
+  const WebSocket = require('../web-app/node_modules/ws');
   await new Promise((r) => probe.run('DELETE FROM listening_history', r));
 
   const gameWs = new WebSocket(`ws://localhost:${PORT}`);

@@ -1,6 +1,9 @@
-"""pick_session() 自檢:python test_pick_session.py，全數通過才會印 OK。"""
+"""pick_session() 自檢:python tests/test_pick_session.py，全數通過才會印 OK。"""
+import os
 import sys
 import types
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # repo 根,才 import 得到受測模組
 
 # media_monitor 會 import winrt (只有 Windows 有)，測純邏輯時塞假模組頂替
 for name in ("winrt", "winrt.windows", "winrt.windows.media",

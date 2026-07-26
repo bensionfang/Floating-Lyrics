@@ -2,9 +2,9 @@
 // 這是靜默失效型的東西 —— 選項重複、或答案以兩種寫法同時出現,都只是「看起來怪」,
 // 不會有錯誤訊息,所以要釘住。
 const assert = require('assert');
-const { pickDistractors, filterArtistTracks } = require('./web-app/game');
-const { scoreFor, round1 } = require('./web-app/public/js/game-score');
-const { songKey, titleKey } = require('./web-app/public/js/song-key');
+const { pickDistractors, filterArtistTracks } = require('../web-app/game');
+const { scoreFor, round1 } = require('../web-app/public/js/game-score');
+const { songKey, titleKey } = require('../web-app/public/js/song-key');
 
 let pass = 0, fail = 0;
 function check(name, fn) {

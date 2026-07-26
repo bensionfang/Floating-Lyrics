@@ -104,7 +104,7 @@ async function run() {
   }
 
   // WebSocket 的 upgrade 不經過 express middleware,要另外擋 (否則惡意網頁能收播放狀態廣播)
-  const WebSocket = require('./web-app/node_modules/ws');
+  const WebSocket = require('../web-app/node_modules/ws');
   for (const [label, origin, wantOpen] of [
     ['靈動島 (無 Origin)', undefined, true],
     ['後台自己 (同源)', BASE, true],
@@ -123,7 +123,7 @@ async function run() {
 
 (async () => {
   const server = spawn(process.execPath, ['server.js'], {
-    cwd: path.join(__dirname, 'web-app'),
+    cwd: path.join(__dirname, '..', 'web-app'),
     env: {
       ...process.env,
       PORT: String(PORT),

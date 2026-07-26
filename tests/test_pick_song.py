@@ -1,4 +1,9 @@
-"""_pick_song 的最小自檢:venv/Scripts/python.exe test_pick_song.py"""
+"""_pick_song 的最小自檢:venv/Scripts/python.exe tests/test_pick_song.py"""
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # repo 根,才 import 得到受測模組
+
 from cn_music import _pick_song
 
 S = lambda n: {'id': n}

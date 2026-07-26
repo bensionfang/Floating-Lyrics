@@ -2,7 +2,7 @@
 // 案例全部取自實際快取 (lyrics_data.db,393 首) 撈出來的真實歌詞行 ——
 // 該標的那批是舊版漏標的,不該標的那批是「有冒號但其實是歌詞」的誤殺候選。
 const assert = require('assert');
-const { autoMarkTitleLines } = require('./web-app/title-lines');
+const { autoMarkTitleLines } = require('../web-app/title-lines');
 
 let pass = 0, fail = 0;
 function check(name, got, want) {

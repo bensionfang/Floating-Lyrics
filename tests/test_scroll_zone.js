@@ -1,6 +1,6 @@
 // 歌詞自動捲動三段判定的回歸測試:node test_scroll_zone.js
 const assert = require('assert');
-const { scrollZoneAction, nextScrollState } = require('./web-app/public/js/scroll-zone.js');
+const { scrollZoneAction, nextScrollState } = require('../web-app/public/js/scroll-zone.js');
 
 const H = 600;      // 歌詞區高度 → 中間帶 = 行中心落在 210 (35%) ~ 540 (90%)
 const LH = 60;      // 一行高 (兩邊保底都用不到:300-60=240 > 210、300+60=360 < 540)

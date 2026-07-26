@@ -1,8 +1,8 @@
 // 搜尋字串的兩道加工:繁->簡 (查中國平台用) 與瀏覽器影片標題去噪。
 // 執行:node test_search_query.js
 const assert = require('assert');
-const { toSimplified, toTraditional } = require('./web-app/s2t');
-const { cleanBrowserQuery, isMusicAppSource } = require('./web-app/browser-query');
+const { toSimplified, toTraditional } = require('../web-app/s2t');
+const { cleanBrowserQuery, isMusicAppSource } = require('../web-app/browser-query');
 
 // --- toSimplified ---
 assert.strictEqual(toSimplified('告白氣球'), '告白气球');

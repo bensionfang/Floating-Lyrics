@@ -16,7 +16,7 @@ const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'kanaric-nolyr-'));
 process.env.DB_PATH = path.join(TMP, 'test.db');
 process.env.DATA_DIR = TMP;
 process.env.LYRICS_SETTINGS_PATH = path.join(TMP, 'settings.json');
-require('./web-app/server.js');
+require('../web-app/server.js');
 
 const BASE = `http://localhost:${PORT}`;
 let failed = 0;

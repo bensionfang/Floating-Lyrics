@@ -27,7 +27,7 @@ process.env.DB_PATH = path.join(TMP, 'test.db');
 process.env.DATA_DIR = TMP;
 process.env.LYRICS_SETTINGS_PATH = path.join(TMP, 'settings.json');
 
-require('./web-app/server.js');
+require('../web-app/server.js');
 
 let failed = 0;
 const check = (ok, label, detail) => {

@@ -2,7 +2,7 @@
 // 最關鍵的一條是 normalizeLine 必須與 cn_music.normalize_line 產生完全相同的字串 ——
 // 對不上的話譯文永遠不會出現,而且是靜默失效 (沒有錯誤、沒有 log)。
 const assert = require('assert');
-const { mergeTranslations, normalizeLine, stripRuby, lookupTranslation } = require('./web-app/translations');
+const { mergeTranslations, normalizeLine, stripRuby, lookupTranslation } = require('../web-app/translations');
 
 let pass = 0, fail = 0;
 function check(name, got, want) {
