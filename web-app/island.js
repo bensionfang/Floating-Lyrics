@@ -11,6 +11,7 @@
  */
 const { BrowserWindow, screen, ipcMain } = require('electron');
 const path = require('path');
+const { displayKey, pickPosition } = require('./island-position.js');
 
 // 視窗要比島本體寬:貼齊頂端時左右的「外擴角」畫在這段透明邊裡
 const EDGE = 24;
@@ -39,27 +40,36 @@ function windowSize() {
   };
 }
 
-// 還原位置時要防呆:上次那台螢幕可能已經拔掉了,拉回最近螢幕的工作區內
-function clampToScreen(x, y, width, height) {
-  const display = screen.getDisplayNearestPoint({ x: Math.round(x), y: Math.round(y) });
-  const wa = display.workArea;
-  return {
-    x: Math.round(Math.min(Math.max(x, wa.x), wa.x + wa.width - width)),
-    y: Math.round(Math.min(Math.max(y, wa.y), wa.y + wa.height - height))
+// 位置判定 (含多螢幕記憶與防呆) 全在 island-position.js,這裡只負責餵現況給它
+function startPosition(width, height) {
+  return pickPosition(settings(), screen.getAllDisplays(), { width, height }, screen.getPrimaryDisplay());
+}
+
+// 螢幕熱插拔:記住的那台被拔掉/插回來/改解析度,島都要跟著重新落位,
+// 否則島會留在一個已經不存在的座標上 (看起來就是「島不見了」)。
+let screenWatched = false;
+function watchScreens() {
+  if (screenWatched) return;
+  screenWatched = true;
+  const relocate = () => {
+    if (!win) return;
+    const b = win.getBounds();
+    const { x, y, docked } = startPosition(b.width, b.height);
+    win.setBounds({ x, y, width: b.width, height: b.height });
+    win.webContents.send('island:docked', docked);
   };
+  screen.on('display-added', relocate);
+  screen.on('display-removed', relocate);
+  screen.on('display-metrics-changed', relocate);
 }
 
 function openIsland(port) {
   if (port) serverPort = port;
   if (win) { win.show(); return win; }
 
-  const s = settings();
   const { width, height } = windowSize();
-  const { workArea } = screen.getPrimaryDisplay();
-  // 用 isFinite 而不是 !== undefined:重設位置是把設定寫成 null,那時要當作「沒記過」
-  const wantX = Number.isFinite(s.island_x) ? s.island_x : workArea.x + (workArea.width - width) / 2;
-  const wantY = Number.isFinite(s.island_y) ? s.island_y : workArea.y;
-  const { x, y } = clampToScreen(wantX, wantY, width, height);
+  const { x, y, docked } = startPosition(width, height);
+  watchScreens();
 
   win = new BrowserWindow({
     width, height, x, y,
@@ -78,7 +88,7 @@ function openIsland(port) {
   win.once('ready-to-show', () => {
     if (!win) return;
     win.show();
-    win.webContents.send('island:docked', s.island_docked !== false);
+    win.webContents.send('island:docked', docked);
   });
   win.on('closed', () => { stopDrag(); win = null; });
   return win;
@@ -97,7 +107,13 @@ function isIslandOpen() { return !!win; }
 function resetIslandPosition() {
   clearInterval(dockAnim);   // 吸附動畫還在跑的話會把 y 拉回去,重置就白做了
   if (global.updateSettings) {
-    try { global.updateSettings({ island_x: null, island_y: null, island_docked: true }); } catch (e) {}
+    // 每台螢幕的記錄也要一起清 —— 只清 island_x/y 的話,下次開島又從 island_pos 跳回舊位置
+    try {
+      global.updateSettings({
+        island_x: null, island_y: null, island_docked: true,
+        island_pos: {}, island_display: null
+      });
+    } catch (e) {}
   }
   if (!win) return;
   const b = win.getBounds();
@@ -114,11 +130,21 @@ function stopDrag() {
   if (dragTimer) { clearInterval(dragTimer); dragTimer = null; }
 }
 
+// 位置存兩份:island_pos 是「每台螢幕各記一組」(多螢幕記憶的正路),
+// island_x/y 留著當退路 —— 改版前的設定、以及 island_pos 裡的螢幕全被拔掉時還有東西可用。
+// updateSettings 是淺層合併,所以整份 map 要自己併好再交出去,不能只傳新增的那一筆。
 function savePosition(docked) {
   if (!win || !global.updateSettings) return;
   const b = win.getBounds();
+  const key = displayKey(screen.getDisplayNearestPoint({ x: b.x, y: b.y }));
+  const s = settings();
+  const pos = Object.assign({}, s.island_pos);
+  pos[key] = { x: b.x, y: b.y, docked: !!docked };
   try {
-    global.updateSettings({ island_x: b.x, island_y: b.y, island_docked: !!docked });
+    global.updateSettings({
+      island_x: b.x, island_y: b.y, island_docked: !!docked,
+      island_pos: pos, island_display: key
+    });
   } catch (e) {}
 }
 

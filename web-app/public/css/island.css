@@ -39,9 +39,12 @@ body {
   height: auto;
   box-sizing: border-box;   /* JS 設的 width 是含 padding 的外框寬,量到的 chrome 也含 padding */
   --island-r: calc(var(--island-fs) * 1.3);
+  /* 直向:上排 (#top) + 展開才出現的控制列 (#ctrl)。
+     **不要用 flex-wrap 讓 #ctrl 自己換行** —— wrap 是「放不下就換行」不是「先壓縮」,
+     寬度 transition 中島比內容窄的那幾幀,上排三個元素會各自跳成一列 (島瞬間變三倍高)。 */
   display: inline-flex;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  align-items: stretch;
   max-width: 100%;
   /* 內距要留得住:島的高度就是內容高度,padding 給太少字會像被框擠住。
      左右多留一點:封面是實心方塊,貼太近圓角看起來就快溢出去了。
@@ -57,6 +60,14 @@ body {
      (透明視窗改尺寸才會閃,見 island.js)。曲線接近 iOS 靈動島。 */
   transition: width 0.32s cubic-bezier(0.32, 0.72, 0, 1), border-radius 0.22s ease, opacity 0.4s ease;
   /* 恢復播放時淡回來 */
+}
+
+/* 上排:封面 / 歌詞 / 等化器。原本這排的排法直接掛在 #island 上,搬過來一字未改 */
+#top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
 }
 
 /* 貼齊螢幕頂端:上緣切平,兩側長出反向圓角,做出「從瀏海長出來」的連續曲線 */
@@ -88,6 +99,12 @@ body {
 #island.idle {
   opacity: 0;
   transition: opacity 1s ease, border-radius 0.22s ease;
+}
+
+/* 滑鼠移上去要看得見才能操作。選擇器比 .idle 更具體,不必動用 !important */
+#island.idle.expanded {
+  opacity: 1;
+  transition: opacity 0.2s ease;
 }
 
 /* 封面是配角:小的圓角方圖,不要和文字等高的大圓 */
@@ -176,6 +193,7 @@ body {
 }
 
 #song,
+#l0,
 #l1,
 #l2 {
   white-space: nowrap;
@@ -202,8 +220,107 @@ body {
   color: rgba(255, 255, 255, 0.45);
 }
 
+/* 上一句:只有展開時才出現,比下一句更淡 (往回看是輔助,往前看才是重點)。
+   用自己的 .has 而不是共用 .hidden —— 兩者疊在一起時誰贏要靠 specificity,很難讀。 */
+#l0 {
+  display: none;
+  font-size: calc(var(--island-fs) - 2px);
+  color: rgba(255, 255, 255, 0.3);
+}
+
+#island.expanded #l0.has {
+  display: block;
+}
+
 .hidden {
   display: none;
+}
+
+/* ── 展開模式:控制列 + 進度條 ───────────────────────────────
+   flex-basis:100% 讓它自己換到第二列,上面那排 [封面][歌詞][等化器] 不受影響。 */
+#ctrl {
+  display: none;
+  flex-direction: column;
+  gap: 7px;
+  padding-top: 4px;
+}
+
+#island.expanded #ctrl {
+  display: flex;
+}
+
+#btns {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+}
+
+#btns button {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: rgba(255, 255, 255, 0.8);
+  cursor: pointer;
+  display: flex;
+}
+
+#btns button[data-act="playpause"] {
+  width: 30px;
+  height: 30px;
+}
+
+#btns button:hover {
+  color: #fff;
+}
+
+#btns svg {
+  width: 100%;
+  height: 100%;
+  fill: currentColor;
+}
+
+#bar {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+/* 點擊 seek 的命中區要比視覺上的 4px 細線高,不然很難點中 */
+#bar-track {
+  position: relative;
+  flex: 1;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+#bar-track::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+#bar-fill {
+  position: relative;
+  height: 4px;
+  width: 0;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.85);
+}
+
+#bar-time {
+  flex: none;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.5);
+  font-variant-numeric: tabular-nums;
 }
 
 /* 換行時淡入 + 微上浮 (舊島 621-630 的 QuarticEase) */

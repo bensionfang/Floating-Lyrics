@@ -53,7 +53,7 @@ gh release create v1.1.0 \
 tag 沒帶 `v` 或漏推,純 node 模式的更新提醒也抓不到新版。安裝檔未簽章,`gh release create` 會直接
 公開發布,屬於「發布公開內容」的動作,不要自動執行,要使用者自己按。
 - 靈動島 = Electron 的一個視窗 (`web-app/island.js`),由 `npm run app` 一起帶起,沒有獨立進程也沒有 build 步驟。
-- 沒有 test runner 或 linter。零星的獨立測試檔直接用直譯器跑:`node test_origin_guard.js` (同源守門)、`node test_s2t.js` (簡轉繁)、`node test_search_query.js` (繁轉簡 + 瀏覽器標題去噪)、`node test_title_lines.js` (製作人員/版權列標記)、`node test_translations.js` (中文譯文合併)、`node test_itunes_resolving.js` (iTunes 原名還原的時序)、`node test_history_toggle.js` (聆聽紀錄開關 + 清除白名單)、`node test_backup_restore.js` (備份/還原 + 還原前的驗證守門)、`node test_scroll_zone.js` (歌詞自動捲動的三段判定)、`node test_game.js` (猜歌的干擾選項挑選)、`python test_pick_session.py`、`python test_furigana_hint.py` (Python 的要用 `venv/Scripts/python.exe`,系統 python 沒裝 fugashi)。
+- 沒有 test runner 或 linter。零星的獨立測試檔直接用直譯器跑:`node test_origin_guard.js` (同源守門)、`node test_s2t.js` (簡轉繁)、`node test_search_query.js` (繁轉簡 + 瀏覽器標題去噪)、`node test_title_lines.js` (製作人員/版權列標記)、`node test_translations.js` (中文譯文合併)、`node test_itunes_resolving.js` (iTunes 原名還原的時序)、`node test_history_toggle.js` (聆聽紀錄開關 + 清除白名單)、`node test_backup_restore.js` (備份/還原 + 還原前的驗證守門)、`node test_scroll_zone.js` (歌詞自動捲動的三段判定)、`node test_game.js` (猜歌的干擾選項挑選)、`node test_island_position.js` (靈動島的多螢幕位置記憶)、`python test_pick_session.py`、`python test_furigana_hint.py` (Python 的要用 `venv/Scripts/python.exe`,系統 python 沒裝 fugashi)。
 - `ROADMAP.md` (repo 根,**本機檔案,不進版控**) 記著 v1.0.0 之後的規劃與**明確不做的事**。動到「未來要做什麼」的討論先看它,免得重新提案已經否決過的方向 (雲端同步、換 tokenizer、離線辭典、Steam 式強制更新)。clone 下來沒有這個檔屬正常。
   主軸是**歌詞體驗**,不是學日文 —— 翻譯/查詞這類功能要進來,得先過「它讓歌詞更好讀嗎」這一關。
 
@@ -103,6 +103,17 @@ One Node.js backend, multiple thin clients, with Python scripts as helpers spawn
 - **靈動島 (`web-app/island.js` + `preload-island.js` + `views/island.ejs` + `public/css/island.css`)** — Electron 的 frameless 透明置頂視窗,載入 server 的 `/island`,靠 WebSocket 廣播吃資料,是純顯示端。
   - **視窗歸主進程管,頁面只負責畫。** 拖曳時 renderer 只在 mousedown/mouseup 各送一次 IPC,移動期間由主進程自己輪詢 `screen.getCursorScreenPoint()` 並 `setBounds` —— 逐幀送 IPC 會掉幀,`-webkit-app-region: drag` 則沒有拖曳結束事件、做不了吸附判定。吸附動畫是 easeOutQuart,沿用舊 C# 島的曲線。
   - 島也是**設定的寫入方** (拖曳結束存 `island_x/island_y/island_docked`),所以主進程走 `global.updateSettings()` —— 那是 `POST /api/settings` 的同一支實作,才會一起發 `settings_updated`,不會島與網頁各存各的。同理主進程讀設定用 `global.readSettings`。
+  - **hover = 展開模式** (`.expanded`):上一句 (`#l0`) + 控制列 (⏮⏯⏭,打 `/api/media-control`) + 進度條 (點擊 seek,打 `/api/seek`)。三件事共用同一個狀態,因為島沒有多餘的手勢可用 (mousedown 給拖曳、單擊給切吸附)。
+    - **上排 (`#top`) 一定要是自己一個容器,不可以改回 `#island { flex-wrap: wrap }` 讓控制列自己換行。** flex-wrap 的規則是「放不下就整行換行」而不是「先壓縮」,而島的寬度有 0.32s 的 CSS transition —— 過渡中島比內容窄的那幾幀,封面/歌詞/等化器會各自跳成一列。後果不只是難看:`fitSize` 就是在設完 `style.width` 的當下量 `offsetHeight`,量到的是換行後的高度 (實測 157px 變 242px),那個值會直接 `setBounds` 到視窗上。
+    - `measurePillW` 的 `gap` 因此要讀 `#top` 而不是 `#island`(`#island` 現在是直向、gap 0)。
+    - **`document` 的 mousedown 要 `if (e.target.closest('#ctrl')) return`** —— 不擋的話按鈕按下去是在拖島,放開還會被當成單擊去切吸附。連帶好處:`downAt` 留 null,mouseup 自己早退。
+    - **進度條的位置不套 `offset`、也不套那 +0.5 秒補償** (`playPos()` 與 `frame()` 的 `now` 是兩件事):那兩個是歌詞對齊用的,不是真實播放位置。進度更新要放在 `frame()` 對 `lyrics.length` 的早退**之前**,找不到歌詞的歌也要會動。時長是 0 (瀏覽器來源,`currentDuration()` 回 null) 就整條收起來。
+    - 猜歌中 (`gameMask`) 不展開:控制列的「下一首」會打亂 `game.js` 自己的切歌流程 (同一支 API)。
+  - **多螢幕位置記憶**:位置判定全在 **`web-app/island-position.js`** (純函式,不 require electron,理由同 `s2t.js`;**`build.files` 白名單要記得加**)。設定 `island_pos` 是「每台螢幕一組座標」,`island_display` 記最後用的那台。
+    - **鍵是工作區幾何 (`x,y,WxH`) 而不是 `display.id`** —— Windows 的 id 是每次列舉時生成的,重開機或重接線就可能變,存進 settings.json 後對不上等於沒記。
+    - 順序:記住的那台還在 → `island_pos` 裡任一還在的 → 舊的 `island_x/y` (相容) → 主螢幕上緣置中,最後一律夾進工作區。`resetIslandPosition()` **要一併清掉 `island_pos`/`island_display`**,只清 `island_x/y` 的話下次開島又跳回舊位置。
+    - `screen` 的 `display-added`/`display-removed`/`display-metrics-changed` 三個事件都重跑一次落位,否則螢幕拔掉後島會留在一個不存在的座標上 (看起來就是「島不見了」)。
+    - 回歸測試 `node test_island_position.js`。
   - 網頁的島開關 (`/api/island/status`、`/api/island/toggle`) 只是轉呼叫主進程掛上來的 `global.openIsland/closeIsland/isIslandOpen`。**純 node (`npm start`) 沒有主進程,回 `available:false`**,前端吐司提示需要桌面版 —— 不要為了讓純 node 也能開島而把島改回獨立進程。
   - preload 暴露的物件叫 **`window.islandBridge` 而不是 `island`**:頁面裡有 `<div id="island">`,瀏覽器的具名元素會占用 `window.island`,讓「不在 Electron 裡就降級成空實作」的判斷失效 (直接用瀏覽器開 `/island` 除錯就會壞)。
   - 舊的 C# WPF 島 (`DynamicIslandUI/`) 已刪除,要回頭參考就翻 git 歷史 (commit `ca16b66` 之前)。

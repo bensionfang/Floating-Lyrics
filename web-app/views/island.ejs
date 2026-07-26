@@ -4,18 +4,35 @@
 <head>
 <meta charset="UTF-8">
 <title>Kanaric Island</title>
-<link rel="stylesheet" href="/css/island.css?v=13">
+<link rel="stylesheet" href="/css/island.css?v=15">
 </head>
 <body>
 <div id="island" class="docked">
-  <div id="art"></div>
-  <div id="lines">
-    <div id="song">等待播放…</div>
-    <div id="l1" class="hidden"></div>
-    <div id="l2" class="hidden"></div>
+  <!-- 上排要自己一個容器,不能靠 #island 的 flex-wrap 換行:wrap 的規則是「放不下就整個換行」
+       而不是「先壓縮」,寬度過渡的那 0.32 秒島比內容窄,封面/歌詞/等化器會各自跳成一列。 -->
+  <div id="top">
+    <div id="art"></div>
+    <div id="lines">
+      <div id="l0"></div>
+      <div id="song">等待播放…</div>
+      <div id="l1" class="hidden"></div>
+      <div id="l2" class="hidden"></div>
+    </div>
+    <!-- 右端的播放狀態:跟左端封面等寬,版面才左右平衡 (播放中跳動、暫停時定住) -->
+    <div id="state"><i></i><i></i><i></i></div>
   </div>
-  <!-- 右端的播放狀態:跟左端封面等寬,版面才左右平衡 (播放中跳動、暫停時定住) -->
-  <div id="state"><i></i><i></i><i></i></div>
+  <!-- 展開 (hover) 才出現的控制列。島沒有載任何 icon font,圖示直接 inline SVG -->
+  <div id="ctrl">
+    <div id="btns">
+      <button data-act="prev" title="上一首"><svg viewBox="0 0 24 24"><path d="M6 6h2.5v12H6zm3.5 6L19 6v12z"/></svg></button>
+      <button data-act="playpause" title="播放/暫停"><svg id="pp-icon" viewBox="0 0 24 24"><path d="M8 5h3v14H8zm5 0h3v14h-3z"/></svg></button>
+      <button data-act="next" title="下一首"><svg viewBox="0 0 24 24"><path d="M15.5 6H18v12h-2.5zM5 6l9.5 6L5 18z"/></svg></button>
+    </div>
+    <div id="bar">
+      <div id="bar-track"><div id="bar-fill"></div></div>
+      <span id="bar-time">0:00 / 0:00</span>
+    </div>
+  </div>
 </div>
 <div id="measure"><div id="m1"></div><div id="m2"></div></div>
 
@@ -23,9 +40,17 @@
 const el = {
   island: document.getElementById('island'), art: document.getElementById('art'),
   song: document.getElementById('song'), l1: document.getElementById('l1'), l2: document.getElementById('l2'),
-  state: document.getElementById('state'),
+  l0: document.getElementById('l0'), state: document.getElementById('state'),
+  top: document.getElementById('top'),
+  ctrl: document.getElementById('ctrl'), btns: document.getElementById('btns'),
+  bar: document.getElementById('bar'), track: document.getElementById('bar-track'),
+  fill: document.getElementById('bar-fill'), time: document.getElementById('bar-time'),
+  ppIcon: document.getElementById('pp-icon'),
   m1: document.getElementById('m1'), m2: document.getElementById('m2')
 };
+
+// 展開時控制列本身要放得下 (三顆按鈕 + 進度條),歌詞比它短時視窗不能縮到切掉按鈕
+const CTRL_MIN_W = 240;
 
 // 量一組 (line1,line2) 的藥丸外框寬 (含封面/等化器/gap/padding)。純量測,不動畫面。
 // 寬度量在 #measure (絕對定位) 上,視窗此刻多窄都不影響量到的自然寬度。
@@ -42,7 +67,7 @@ function measurePillW(line1, line2, firstEl) {
   copyFont(el.m2, el.l2);
   const textW = Math.max(el.m1.offsetWidth, el.m2.offsetWidth);
   const cs = getComputedStyle(el.island);
-  const gap = parseFloat(cs.gap || 12);
+  const gap = parseFloat(getComputedStyle(el.top).gap || 12);   // 封面/歌詞/等化器的間距現在掛在 #top
   const chrome = el.art.offsetWidth + el.state.offsetWidth + gap * 2
     + parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
   return Math.ceil(textW + chrome) + 2;   // +2 避免尾字被四捨五入切掉
@@ -62,10 +87,23 @@ function computeSongMaxW() {
 // windowW 給定時 (歌詞模式) 視窗寬固定為整首最寬,藥丸的 CSS 寬照樣是本行實際寬 → 短行居中、
 // 兩側透明,不留黑空隙。沒給 (歌名/前奏/設定) 就用本行寬,視窗剛好貼合。
 function fitSize(line1, line2, firstEl, growOnly = false, windowW = null) {
-  const pillW = measurePillW(line1, line2, firstEl);
+  let pillW = measurePillW(line1, line2, firstEl);
+  if (expanded) {
+    // 展開時多了「上一句」與控制列,兩者都可能比本句寬 —— 不算進去按鈕就會被切掉
+    if (el.l0.classList.contains('has')) pillW = Math.max(pillW, measurePillW(el.l0.innerHTML, '', el.l2));
+    pillW = Math.max(pillW, CTRL_MIN_W);
+    if (windowW != null) windowW = Math.max(windowW, pillW);
+    growOnly = false;   // 收合時高度要縮回去,grow-only 會讓島永遠停在展開的高度
+  }
   // 藥丸寬度用 CSS transition 平滑補間
   el.island.style.width = pillW + 'px';
   bridge.resize({ width: windowW != null ? windowW : pillW, height: Math.ceil(el.island.offsetHeight), growOnly });
+}
+
+// 依目前畫面上顯示的是歌名還是歌詞,重新回報尺寸 (展開/收合、l0 出現消失時用)
+function refit() {
+  if (!el.song.classList.contains('hidden')) return fitSize(el.song.textContent, '', el.song);
+  fitSize(el.l1.innerHTML, el.l2.classList.contains('hidden') ? '' : el.l2.innerHTML, null, false, songMaxW);
 }
 
 // preload 只有在 Electron 島視窗裡才存在;用瀏覽器直接開 /island 除錯時降級成空實作
@@ -76,6 +114,8 @@ const bridge = window.islandBridge || {
 // ── 拖曳:自己判斷有沒有真的移動,幾乎沒動就當成單擊 (切換吸附) ──
 let downAt = null;
 document.addEventListener('mousedown', (e) => {
+  // 控制列上的按下不啟動拖曳,也不會被 mouseup 當成單擊去切吸附 (downAt 留 null)
+  if (e.target.closest('#ctrl')) return;
   downAt = { x: e.screenX, y: e.screenY };
   bridge.dragStart();
 });
@@ -88,8 +128,77 @@ document.addEventListener('mouseup', (e) => {
 });
 bridge.onDocked(d => el.island.classList.toggle('docked', d));
 
+// ── 展開模式:滑鼠移上去 = 上一句 + 控制列 + 進度條,移開收回 ──
+// 掛在 #island 而不是 body:視窗左右各有 --edge 透明邊,掛 body 會滑過空白處就展開。
+el.island.addEventListener('mouseenter', () => setExpanded(true));
+el.island.addEventListener('mouseleave', () => setExpanded(false));
+
+function setExpanded(on) {
+  // 猜歌中不展開:控制列的「下一首」會打亂遊戲自己的切歌流程 (game.js 用同一支 API)
+  if (on && gameMask) return;
+  if (on === expanded) return;
+  expanded = on;
+  el.island.classList.toggle('expanded', on);
+  updateL0();
+  updateProgress();
+  refit();
+}
+
+// 上一句:往回找最近一句有字的。顯示歌名 (前奏/剛換歌) 時不顯示 —— 那時「上一句」沒有意義
+function updateL0() {
+  let html = '';
+  if (expanded && curIdx > 0 && el.song.classList.contains('hidden')) {
+    for (let k = curIdx - 1; k >= 0; k--) if (lyrics[k].html) { html = lyrics[k].html; break; }
+  }
+  el.l0.innerHTML = html;
+  el.l0.classList.toggle('has', !!html);
+}
+
+function fmtTime(s) {
+  s = Math.max(0, Math.floor(s));
+  return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+}
+
+// 進度用的位置**不套 offset 也不套那 0.5 秒補償** —— 那兩個是歌詞對齊用的,不是真實播放位置
+function playPos() {
+  return pos + (playing ? (performance.now() - lastSync) / 1000 : 0);
+}
+
+let lastTimeText = '';
+function updateProgress() {
+  if (!expanded) return;
+  // 瀏覽器 (YouTube) 來源拿不到時長,整條收起來只留按鈕 —— 畫一條永遠是 0 的進度條更糟
+  el.bar.classList.toggle('hidden', !duration);
+  if (!duration) return;
+  const t = Math.min(duration, playPos());
+  el.fill.style.width = (t / duration * 100) + '%';
+  const txt = fmtTime(t) + ' / ' + fmtTime(duration);
+  if (txt !== lastTimeText) el.time.textContent = lastTimeText = txt;   // 每秒才變,不必每幀寫
+}
+
+el.btns.addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (b) post('/api/media-control', { action: b.dataset.act });
+});
+
+// 點擊 seek 就夠用。ponytail: 要拖曳刷桿再加 pointermove
+el.track.addEventListener('click', (e) => {
+  if (!duration) return;
+  const r = el.track.getBoundingClientRect();
+  const target = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) * duration;
+  pos = target; lastSync = performance.now();   // 先自己跳過去,不等監控回報 (它有 0.1 秒延遲)
+  updateProgress();
+  post('/api/seek', { position: target });
+});
+
+function post(url, body) {
+  fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    .catch(() => {});
+}
+
 // ── 狀態 ──
-let lyrics = [], songKey = '', pos = 0, playing = false, lastSync = 0, offset = 0;
+let lyrics = [], songKey = '', pos = 0, playing = false, lastSync = 0, offset = 0, duration = 0;
+let expanded = false, curIdx = -1;   // curIdx = 目前唱到第幾句 (展開時要往回找上一句)
 let lastThumb = null;   // 已套用的封面 —— 縮圖可能換歌後晚一拍才由 media_monitor 補送
 let gameMask = false;   // 猜歌遊戲進行中:歌名與歌詞都要遮起來,否則島直接公布答案
 let islandLines = 2, lastLine1 = null, idleTimer = null, wasPlaying = null, wasHasSession = null;
@@ -140,7 +249,8 @@ function connect() {
       if (!gameMask && msg.artist + '|||' + msg.title === songKey) setLyrics(msg.lyrics || '');
     } else if (msg.type === 'game_state') {
       gameMask = !!msg.active;
-      lyrics = []; lastLine1 = null;
+      lyrics = []; lastLine1 = null; curIdx = -1;
+      if (gameMask) setExpanded(false);   // 開局時滑鼠正停在島上的話,控制列要收掉
       if (gameMask) showSongName('', '');
       else songKey = '';   // 清掉才會被下一次 media_state 當成換歌,重抓歌名與歌詞
     } else if (msg.type === 'settings_updated') {
@@ -157,6 +267,7 @@ connect();
 async function onMediaState(m) {
   playing = !!m.is_playing;
   pos = m.position || 0;
+  duration = m.duration || 0;
   lastSync = performance.now();
   // 暫停 3 秒後淡出,恢復播放立刻淡回來。
   // **只在狀態真的改變時才動計時器**:media_monitor 每 0.1 秒就回報一次,
@@ -169,6 +280,10 @@ async function onMediaState(m) {
     wasPlaying = playing;
     wasHasSession = hasSession;
     el.island.classList.toggle('playing', playing);   // 右端等化器動不動看這個
+    // 控制列中間那顆:播放中顯示暫停符號,暫停中顯示播放符號
+    el.ppIcon.innerHTML = playing
+      ? '<path d="M8 5h3v14H8zm5 0h3v14h-3z"/>'
+      : '<path d="M8 5l11 7-11 7z"/>';
     clearTimeout(idleTimer);
     if (playing) el.island.classList.remove('idle');
     else idleTimer = setTimeout(() => el.island.classList.add('idle'), 3000);
@@ -184,6 +299,7 @@ async function onMediaState(m) {
       el.song.classList.remove('hidden');
       el.l1.classList.add('hidden');
       el.l2.classList.add('hidden');
+      curIdx = -1; updateL0();
       fitSize(el.song.textContent, '', el.song);
     }
     return;
@@ -221,6 +337,7 @@ function showSongName(title, artist) {
   el.song.classList.remove('hidden');
   el.l1.classList.add('hidden');
   el.l2.classList.add('hidden');
+  curIdx = -1; updateL0();
   fitSize(el.song.textContent, '', el.song);
 }
 
@@ -281,17 +398,20 @@ function paint(node, html) {
 }
 
 // 島沒有 DevTools 可開 (無邊框視窗),留一個查狀態的入口:瀏覽器開 /island 或主進程都能問
-window.__islandDebug = () => ({ songKey, lines: lyrics.length, pos, playing, offset, islandLines, lastLine1 });
+window.__islandDebug = () => ({ songKey, lines: lyrics.length, pos, duration, playing, offset, islandLines, lastLine1, expanded, curIdx });
 
 // 進度用 rAF 內插,跟網頁同一套做法,免得一秒才跳一次
 function frame() {
   requestAnimationFrame(frame);
+  // 進度條要在歌詞的早退之前更新:找不到歌詞的歌、瀏覽器來源,進度照樣要走
+  updateProgress();
   if (!lyrics.length) return;
   // 早 0.5 秒切換:抵銷淡入動畫與傳輸延遲,看起來才「跟手」(沿用舊島的補償值)
   const now = pos + (playing ? (performance.now() - lastSync) / 1000 : 0) - offset + 0.5;
   if (now < lyrics[0].t) {                    // 前奏:顯示歌名
     if (lastLine1 !== 'INTRO') { lastLine1 = 'INTRO'; el.song.classList.remove('hidden');
       el.l1.classList.add('hidden'); el.l2.classList.add('hidden');
+      curIdx = -1; updateL0();
       fitSize(el.song.textContent, '', el.song); }
     return;
   }
@@ -303,8 +423,10 @@ function frame() {
   // 上一個狀態也是歌詞行才 grow-only;從前奏歌名 (通常較寬) 切到第一句歌詞要允許縮
   const fromLyric = lastLine1 !== null && lastLine1 !== 'INTRO';
   lastLine1 = line1;
+  curIdx = i;
   el.song.classList.add('hidden');
   paint(el.l1, line1);
+  updateL0();
   const showLine2 = !!line2 && islandLines === 2;
   if (showLine2) paint(el.l2, line2);
   else el.l2.classList.add('hidden');

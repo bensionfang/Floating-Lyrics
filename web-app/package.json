@@ -46,6 +46,7 @@
       "translations.js",
       "game.js",
       "island.js",
+      "island-position.js",
       "preload-island.js",
       "views/**",
       "public/**"
