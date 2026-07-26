@@ -17,6 +17,7 @@ const fs = require('fs');
 const os = require('os');
 const { spawn } = require('child_process');
 const { toTraditional, toSimplified } = require('./s2t');   // 簡體歌詞轉繁 (日文歌會跳過,見該檔註解)
+const { hasInlineRuby } = require('./lyric-quality');       // 內嵌注音的爛歌詞,抓取階段就換下一家
 const { cleanBrowserQuery, isMusicAppSource } = require('./browser-query');   // 瀏覽器來源的影片標題去噪
 const { autoMarkTitleLines } = require('./title-lines');   // 製作人員/版權列標記 #TITLE#
 const { mergeTranslations } = require('./translations');   // 中文譯文合併 #TRANS# (注音之後才做)
@@ -1181,21 +1182,42 @@ async function searchBestLyric(title, artist, searchTitle, searchArtist) {
   let fallbackSearched = false;
   let finalSource = "";
 
-  // 網易/酷狗:歌詞與日文讀音提示一次抓回,注音時就不用再打一次網路
+  // 每一家回來的候選都先過這道:內嵌注音 (漢字後面黏著讀音) 的版本整份沒救,當作沒抓到,
+  // 讓後面的來源接手 (網易 → fallback → lrclib)。全部都這樣才真的沒歌詞,那也比一份標爛的好。
+  // 全部來源都只有這種版本時,擋到最後會變成「找不到歌詞」—— 那比一份難讀的歌詞更糟,
+  // 所以擋下來的第一份留著當墊底,跑完整條鏈都沒有乾淨的才拿出來用。
+  let inlineBackup = "";
+  let inlineSource = "";
+  const usable = (lyric, src) => {
+    if (!hasInlineRuby(lyric)) return true;
+    console.log(`歌詞內嵌注音,判為不可用略過:${src} / ${title}`);
+    if (!inlineBackup) { inlineBackup = lyric; inlineSource = src; }
+    return false;
+  };
+
+  // 網易/酷狗:歌詞與日文讀音提示一次抓回,注音時就不用再打一次網路。
+  // cn_music.fetch() 自己會在「這家沒歌詞」時往下一家問,但**它不知道內嵌注音這回事** (那個判斷
+  // 只有 JS 這一份,不複製到 Python),所以被擋下來時要由這裡指定另一家再問一次 —— 實測
+  // モザイクロール 網易是內嵌注音版、酷狗那份乾淨,不重問就會白白掉到 fallback。
+  // 這個迴圈只有在被擋掉時才會多打,成功路徑跟以前一樣一次。
   if (preferredSource === 'NetEase' || preferredSource === 'Kugou') {
-    const cnData = await fetchCnLyricsS2({
-      title, artist, searchTitle: cleanTitle, searchArtist: trueArtist, source: preferredSource
-    });
-    if (cnData && cnData.lyrics) {
+    const cnOrder = [preferredSource, ...['NetEase', 'QQMusic', 'Kugou'].filter((s) => s !== preferredSource)];
+    for (const src of cnOrder) {
+      const cnData = await fetchCnLyricsS2({
+        title, artist, searchTitle: cleanTitle, searchArtist: trueArtist, source: src
+      });
+      if (!cnData || !cnData.lyrics) break;              // 一家都沒有 = 三家都沒有 (cn_music 內部已經問過)
+      if (!usable(cnData.lyrics, cnData.source)) continue;
       if (/\[\d{2}:\d{2}/.test(cnData.lyrics)) { bestLyric = cnData.lyrics; finalSource = cnData.source; }
       else if (!plainBackup) { plainBackup = cnData.lyrics; finalSource = cnData.source; }
+      break;
     }
   }
 
   if (!bestLyric && preferredSource !== 'Lrclib') {
     const fbData = await fetchFallback(cleanTitle, qArtist);
     fallbackSearched = true;
-    if (fbData && fbData.lyrics) {
+    if (fbData && fbData.lyrics && usable(fbData.lyrics, fbData.source)) {
       if (/\[\d{2}:\d{2}/.test(fbData.lyrics)) { bestLyric = fbData.lyrics; finalSource = fbData.source; }
       else { plainBackup = fbData.lyrics; finalSource = fbData.source; }
     }
@@ -1214,8 +1236,8 @@ async function searchBestLyric(title, artist, searchTitle, searchArtist) {
       const durOff = !!(ourDur && data.duration && Math.abs(data.duration - ourDur) > 3);
       if (durOff) {
         console.log('Lrclib 時長不符,判為撞名略過:', data.duration, 'vs', ourDur);
-      } else if (data.syncedLyrics) { bestLyric = data.syncedLyrics; finalSource = 'Lrclib'; }
-      else if (data.plainLyrics && !plainBackup) { plainBackup = data.plainLyrics; finalSource = 'Lrclib'; }
+      } else if (data.syncedLyrics && usable(data.syncedLyrics, 'Lrclib')) { bestLyric = data.syncedLyrics; finalSource = 'Lrclib'; }
+      else if (data.plainLyrics && !plainBackup && usable(data.plainLyrics, 'Lrclib')) { plainBackup = data.plainLyrics; finalSource = 'Lrclib'; }
     }
   } catch (e) {
     console.warn('Lrclib 查詢失敗,略過:', e.message);
@@ -1223,18 +1245,27 @@ async function searchBestLyric(title, artist, searchTitle, searchArtist) {
 
   if (!bestLyric && !fallbackSearched) {
     const fbData = await fetchFallback(cleanTitle, qArtist);
-    if (fbData && fbData.lyrics) {
+    if (fbData && fbData.lyrics && usable(fbData.lyrics, fbData.source)) {
       if (/\[\d{2}:\d{2}/.test(fbData.lyrics) || !plainBackup) { bestLyric = fbData.lyrics; finalSource = fbData.source; }
     }
   }
 
   if (!bestLyric && plainBackup) bestLyric = plainBackup;
+  if (!bestLyric && inlineBackup) {
+    console.log(`只找得到內嵌注音的版本,照用:${inlineSource} / ${title}`);
+    bestLyric = inlineBackup;
+    finalSource = inlineSource;
+  }
   if (!bestLyric) return { lyric: "", source: "" };
 
   const sourceName = finalSource || 'Fallback';
   const finalLyric = autoMarkTitleLines(toTraditional(`[source:${sourceName}]\n${bestLyric}`), title);
   return { lyric: finalLyric, source: sourceName };
 }
+
+// 快取裡是內嵌注音、已經重抓過一次的歌 (見 /api/lyrics/fetch);重開 app 會再試一次,那是刻意的:
+// 來源網站之後補上乾淨版本的話,重開就換得到。
+const inlineRetried = new Set();
 
 // 無歌詞背景重查:搜到「跟標記時那份不同」的非空結果 = 真的被收錄了 → 解除標記、寫快取、廣播套用。
 const NOLYRICS_RECHECK_MS = Number(process.env.NOLYRICS_RECHECK_MS) || 7 * 24 * 3600 * 1000;
@@ -1321,6 +1352,23 @@ app.get('/api/lyrics/fetch', async (req, res) => {
     
     console.log("DB returned:", row ? "found" : "not found");
     if (row && row.lyrics) {
+      // 改版前抓的內嵌注音爛歌詞:重抓一次,別家有乾淨版本就換掉。
+      // **一個 process 只試一首一次** (`inlineRetried`):只有這種版本的歌重抓也還是同一份,
+      // 沒有這道記號就會變成「每次播都重抓」。也**不先刪快取** —— 重抓沒有更好的話還要靠它顯示。
+      // **`[source:ManualEdit]` 不碰**:那是使用者自己編輯或親手套用的備選歌詞,即使是內嵌注音版
+      // 也是他選的 (整個網路只有這種版本時就得這樣用),自動換掉等於推翻他的決定。
+      const inlineKey = `${artist}|||${title}`;
+      if (!row.lyrics.startsWith('[source:ManualEdit]') && !inlineRetried.has(inlineKey)
+          && hasInlineRuby(row.lyrics)) {
+        inlineRetried.add(inlineKey);
+        console.log('快取裡的歌詞是內嵌注音,重抓一次看有沒有更好的:', artist, title);
+        const { lyric } = await searchBestLyric(title, artist, searchTitle, searchArtist);
+        if (lyric && !hasInlineRuby(lyric)) {
+          db.run('INSERT OR REPLACE INTO cache (artist, title, lyrics) VALUES (?, ?, ?)', [artist, title, lyric]);
+          invalidateFurigana(artist, title);
+          row.lyrics = lyric;
+        }
+      }
       row.lyrics = toTraditional(row.lyrics);
       const injected = await injectFurigana(artist, title, row.lyrics);
       return res.json({ lyrics: injected, source: 'cache' });

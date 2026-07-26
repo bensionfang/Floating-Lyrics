@@ -53,7 +53,7 @@ gh release create v1.1.0 \
 tag 沒帶 `v` 或漏推,純 node 模式的更新提醒也抓不到新版。安裝檔未簽章,`gh release create` 會直接
 公開發布,屬於「發布公開內容」的動作,不要自動執行,要使用者自己按。
 - 靈動島 = Electron 的一個視窗 (`web-app/island.js`),由 `npm run app` 一起帶起,沒有獨立進程也沒有 build 步驟。
-- 沒有 test runner 或 linter。零星的獨立測試檔直接用直譯器跑:`node test_origin_guard.js` (同源守門)、`node test_s2t.js` (簡轉繁)、`node test_search_query.js` (繁轉簡 + 瀏覽器標題去噪)、`node test_title_lines.js` (製作人員/版權列標記)、`node test_translations.js` (中文譯文合併)、`node test_itunes_resolving.js` (iTunes 原名還原的時序)、`node test_history_toggle.js` (聆聽紀錄開關 + 清除白名單)、`node test_backup_restore.js` (備份/還原 + 還原前的驗證守門)、`node test_scroll_zone.js` (歌詞自動捲動的三段判定)、`node test_game.js` (猜歌的干擾選項挑選)、`node test_island_position.js` (靈動島的多螢幕位置記憶)、`python test_pick_session.py`、`python test_furigana_hint.py` (Python 的要用 `venv/Scripts/python.exe`,系統 python 沒裝 fugashi)。
+- 沒有 test runner 或 linter。零星的獨立測試檔直接用直譯器跑:`node tests/test_origin_guard.js` (同源守門)、`node tests/test_s2t.js` (簡轉繁)、`node tests/test_lyric_quality.js` (內嵌注音的歌詞守門)、`node tests/test_search_query.js` (繁轉簡 + 瀏覽器標題去噪)、`node tests/test_title_lines.js` (製作人員/版權列標記)、`node tests/test_translations.js` (中文譯文合併)、`node tests/test_itunes_resolving.js` (iTunes 原名還原的時序)、`node tests/test_history_toggle.js` (聆聽紀錄開關 + 清除白名單)、`node tests/test_backup_restore.js` (備份/還原 + 還原前的驗證守門)、`node tests/test_scroll_zone.js` (歌詞自動捲動的三段判定)、`node tests/test_game.js` (猜歌的干擾選項挑選)、`node tests/test_island_position.js` (靈動島的多螢幕位置記憶)、`python tests/test_pick_session.py`、`python tests/test_furigana_hint.py` (Python 的要用 `venv/Scripts/python.exe`,系統 python 沒裝 fugashi)。
 - `ROADMAP.md` (repo 根,**本機檔案,不進版控**) 記著 v1.0.0 之後的規劃與**明確不做的事**。動到「未來要做什麼」的討論先看它,免得重新提案已經否決過的方向 (雲端同步、換 tokenizer、離線辭典、Steam 式強制更新)。clone 下來沒有這個檔屬正常。
   主軸是**歌詞體驗**,不是學日文 —— 翻譯/查詞這類功能要進來,得先過「它讓歌詞更好讀嗎」這一關。
 
@@ -65,24 +65,35 @@ One Node.js backend, multiple thin clients, with Python scripts as helpers spawn
   - 同源守門是 server.js 的第一個 middleware,`cors()` 已經移除 (開 CORS 等於自己拆掉這道牆)。它同時看 `Origin` 與 `Sec-Fetch-Site`,兩層都必要:`Origin` 只有 fetch/XHR 會帶,`<script src>` 這類不帶,而 `Sec-Fetch-Site` 瀏覽器對所有請求都帶。兩個 header 都沒有 = 非瀏覽器客戶端 (curl、腳本),放行;靈動島現在是 Electron 視窗,兩個 header 都會帶,走的是同源那條。WebSocket 的 upgrade 不經過 express middleware,所以 `verifyClient` 要再擋一次。
   - **綁 127.0.0.1 擋不住跨站攻擊**,這是這道守門存在的理由:使用者開著 Kanaric 時瀏覽任一網頁,那個網頁就能打這裡的 API —— 跨站 POST `/api/settings` 把 `llm_base_url` 改成攻擊者的位址,再觸發 `/api/llm-models` 或 `/api/llm-furigana/run`,BYOK 的 API key 就送出去了。`<form>` POST 屬於 simple request,不觸發 preflight,所以光靠 CORS 設定擋不住。
   - **跨站的「頂層導覽」是例外,要放行** (`GET`/`HEAD` + `Sec-Fetch-Dest: document`):使用者從 README、聊天視窗點 `http://localhost:5720` 連結進來就是這種請求,擋掉只會讓人看到一行 JSON 錯誤。放行不開洞 —— 跨站 `<form>` POST 的 dest 也是 document,但方法是 POST,照樣擋住;`<img>`/`<script src>` 的 dest 是 image/script,iframe 內嵌是 iframe,都不是 document。**只認 dest 不要再比 mode**:mode 多擋不到東西,而且 undici 會把 fetch 的 `Sec-Fetch-Mode` 硬改成 `cors`,測試根本設不進去。
-  - 回歸測試:`node test_origin_guard.js` (repo 根目錄,自己帶起一份 server)。動到這段 middleware、`ALLOWED_ORIGINS`、或 WebSocket 的 `verifyClient` 就跑它。
+  - 回歸測試:`node tests/test_origin_guard.js` (repo 根目錄,自己帶起一份 server)。動到這段 middleware、`ALLOWED_ORIGINS`、或 WebSocket 的 `verifyClient` 就跑它。
   - 簡轉繁 = `web-app/s2t.js` 的 `toTraditional()` (opencc-js `cn`→`tw`)。掛在**四個 `SELECT lyrics FROM cache` 的讀取點**,外加寫入前的兩個外部歌詞入口 (自動抓取、`/api/lyrics/custom` —— 它同時是「套用備選歌詞」的入口)。**讀取時轉是必要的**:只在寫入時轉的話,改版前就存在快取裡的歌詞永遠不會變繁體,使用者重載/重開都沒用。編輯器的 `/api/lyrics/update`、`/api/lyrics/save` 是使用者自己打的字,寫入時刻意不轉。
     - **日文歌詞本體絕不能過這個轉換** (日文漢字大量與簡體同形,`声`→`聲`、`学校`→`學校`),所以有假名就跳過 —— 跟 `furigana_inject.py` 是同一條假名分界規則。唯一的例外是已標 `#TITLE#` 的製作人員列:網易連日文歌都給簡體的 `作词 : …`,那幾列照轉。
-    - 回歸測試 `node test_s2t.js`。邏輯獨立成一個檔案就是為了讓測試 require 得到而不必啟動 server。
+    - 但**整行跳過會留下混進日文歌詞的簡體字** (網易的 `モザイクロール` 整份是簡體漢字打的:`爱/谁/终/伤`),所以其餘各行走 `fixStraySimplified()` **逐字**修:字在 **JIS X 0208** 裡 = 日文字,不動;不在裡面 = 不是日文字,才轉。判斷用 `TextDecoder('shift_jis')` 把整張 JIS 表倒出來當集合 (Node 的 TextDecoder 只能解碼,所以是反著建表),不必為此塞幾千字的常數進原始碼。
+      - **轉的目標是新字體 (`cn`→`jp`) 不是繁體**:`弹`→`弾`、`脑`→`脳`、`摇`→`揺` 才是日文寫法,繁體形 (彈/腦/搖) 連 unidic 都查不到、注音會跟著壞。順帶把 QQ/酷狗給的傳統中文字形也收斂成日文形 (`噓`→`嘘`、`醬`→`醤`)。
+      - **JIS 那道閘門不可以省** —— `cn`→`jp` 對日文本來就有的字照樣改 (`机`→`機`、`后`→`後`、`里`→`裏`、`干`→`幹`),整份直接轉會毀掉正常日文歌詞。相對地閘門也讓 `言叶` 修不成 `言葉` (`叶` 是合法日文漢字 かなう),這是刻意的取捨。
+      - 全庫實測 (433 首日文歌) 只有 9 首的歌詞本體被改到,全部是真的簡體/傳統字殘留。因為掛在**讀取**點,舊快取不必 migration。
+    - 回歸測試 `node tests/test_s2t.js`。邏輯獨立成一個檔案就是為了讓測試 require 得到而不必啟動 server。
     - 反向的 `toSimplified()` 只給**查中國平台**用:三家的搜尋結果標題是簡體,`cn_music._title_matches` 是正規化後互相包含,繁體歌名 (告白氣球) 永遠對不上簡體結果 (告白气球),整首歌 MISS。**不能無條件轉** —— 純漢字的日文歌名 (新宝島 → 新宝岛) 轉了反而查不到,所以 `fetchCnLyricsS2()` (server.js) 是「原名先查、全 MISS 且轉換後真的不同才用簡體重試一次」,成功路徑零額外請求。快取鍵不受影響:`pytools.py cnlyrics` 的 `searchTitle/searchArtist` 與存 DB 用的 `title/artist` 本來就分開。
+  - **內嵌注音的歌詞在抓取階段就擋掉** (`web-app/lyric-quality.js` 的 `hasInlineRuby()`)。網易的使用者上傳常有「漢字後面直接黏著讀音」的版本 (`とある言葉ことばが君きみに突つき刺ささり`),那種歌詞**沒有任何自動修法**:fugashi 會把 `言葉ことば` 當沒見過的詞硬斷,注音、譯文比對、猜歌的歌名比對全部跟著錯。
+    - 判準是「漢字串後面接著的平假名長度 ≥ 漢字數 ×2」的比例 ≥ **0.85** (且至少 20 個漢字串)。全庫 433 首日文歌實測:內嵌注音那首 0.93、乾淨的最高 0.75、中位數 0.47,擋下來的就那一首。**門檻是拿一份樣本配出來的**,誤判的代價只是換下一個來源,所以抓緊一點。
+    - 套用點是 `searchBestLyric()` 裡的 `usable()`,每一家的候選都過 (網易/酷狗、fallback、lrclib)。**判斷只有 JS 這一份,不複製到 Python** —— 但 `cn_music.fetch()` 只有在「這家沒歌詞」時才會自己往下一家問,不知道被 JS 擋掉這回事,所以那段改成由 server 依序指定三家 (`cnOrder`) 重問;實測モザイクロール 網易是內嵌注音版、**酷狗那份乾淨**,不重問就白白掉到 fallback。成功路徑仍然只打一次。
+    - **擋到最後全空的話,把擋下來的第一份拿回來用** (`inlineBackup`)。整個網路只有這種版本的歌是有的,那時「找不到歌詞」比一份難讀的歌詞更糟。
+    - 讀取快取時也重抓一次 (`/api/lyrics/fetch` 的 cache 命中處):改版前存進去的爛歌詞,別家有乾淨版本就換掉。三個限制條件都是必要的:**一個 process 只試一次** (`inlineRetried`,不然每次播都重抓)、**不先刪快取** (重抓沒有更好的還要靠它顯示)、**`[source:ManualEdit]` 完全不碰** (使用者自己編輯或親手套用的備選歌詞,即使是內嵌注音版也是他選的)。
+    - **沒有自動修復** (把黏著的讀音拆掉還原成正常歌詞):原型做過,複合詞可以 (`言葉ことば` → `言葉`),但帶送假名的詞會拆爛 —— `触ふれない` 變成 `触ない`、`突つき` 拆不動。要靠的是使用者手動套用備選歌詞或用編輯器改,不要重新提案自動拆詞。
+    - 回歸測試 `node tests/test_lyric_quality.js`。
   - **中文譯文 (`web-app/translations.js`) 絕對不能存進 `cache`,只能在注音之後才併進廣播內容。** 理由是 `s2t.js` 的簡轉繁與 `furigana_inject.process_lrc` 的注音,**兩個 kana gate 都是「整份有沒有假名」而不是逐行**:譯文混進去會 (a) 不被轉繁 (b) 被 fugashi 標上一堆亂七八糟的音讀。所以譯文獨立存 `lyrics_translations` 表 (與 `romaji_hints`/`llm_hints` 同形,空 `{}` 是負快取),由 `mergeTranslations()` 在 `injectFurigana()` 之後插成 `[同一個時間戳]#TRANS#譯文` 行。
     - **`translations.js` 的 `normalizeLine()` 必須與 `cn_music.normalize_line` 產生逐字相同的字串**,對不上就是靜默失效 (沒有錯誤、沒有 log)。Python 的 `\w` 對 str 是 Unicode 感知的,JS 的 `\w` 只有 `[A-Za-z0-9_]`,所以 JS 那份要明寫 `\p{L}\p{N}\p{M}`。比對前還要 `stripRuby()` 把 `<rt>` 的內容**整塊**刪掉 —— 只脫標籤的話「夢<rt>ゆめ</rt>」會變成「夢ゆめ」,永遠對不上。
     - **歌詞來源常把兩三個短句併成一行 (中間全形空白),譯文的鍵卻是逐句的** —— 整行比對就整行 MISS,而且靜默。`lookupTranslation()` 因此在整行對不上時把行拆段、由長到短貪婪比對 (段落本身可能要合起來才是一個鍵:`いつしか海に流れ着いて 光って`),**任一段查不到就整行放棄** (只翻半句更難讀)。實測全庫 2612 行缺譯文 173 → 114 行,`米津玄師 / 春雷` 缺 38 → 13、`back number / 水平線` 缺 11 → 0。
     - 合併刻意在 `furiganaCache` **之外**:切換「顯示翻譯」不必重跑 python,快取也不用多一個比對維度 (對照 `kata` 那個旗標)。
     - 譯文只在抓歌詞時搭便車存下來,所以改版前的舊快取一首都沒有。`ensureTranslations()` 會在開了設定卻查無資料時背景補抓一次。**`translationJobs` 成功失敗都留著鍵** —— 抓失敗時 pytools 不會寫負快取,鍵一刪就變成「補抓 → rebroadcast → 還是沒有 → 再補抓」的無窮迴圈。
     - 三家的譯文位置:網易 `tlyric` (自帶時間戳)、酷狗 krc `language` 軌 `type=1` (行序對齊)、QQ `contentts`。**QQ 那條是明文 LRC 而非加密 QRC**,所以走 `_qq_plain_track()` 不走 `_qq_track()`;而且那支端點不回 charset,`requests` 會猜成 ISO-8859-1 把譯文變亂碼,`r.encoding = "utf-8"` 不能拿掉 (主歌詞軌是 hex ASCII 所以看不出問題)。
-    - 回歸測試 `node test_translations.js`。
+    - 回歸測試 `node tests/test_translations.js`。
   - **瀏覽器 (YouTube) 來源的三道處理都以 `web-app/browser-query.js` 的 `isMusicAppSource()` 為閘門** (`MUSIC_APPS` 是 `media_monitor.py` 那份的手動鏡射;未知來源保守當音樂 app)。
     - 歌名去噪 `cleanBrowserQuery()`:含噪音關鍵字的整塊括號、`「」`/`『』`/`【】` 內文優先當歌名、無括號的尾綴噪音 (Official Music Video / MV / 中文字幕…)、尾段確實等於歌手時的 `歌名／歌手`、開頭確實等於歌手時的 `歌手 - 歌名` (YouTube 最常見的形狀,不剝的話快取鍵是「ヨルシカ - 春泥棒」,跟 Spotify 聽的「春泥棒」分裂成兩筆)、歌手的 `- Topic`/`VEVO` 尾綴。全部剝光時退回原始標題。`歌名／歌手` 與 `歌手 - 歌名` 用同一條判準 (正規化後互相包含),對不上就原樣留著 —— 所以歌名本身帶連字號的 (`怪獣の花唄 - replica -`) 不受影響。
     - **套用點是 `handleMediaUpdate` 的第一步 (去噪 → iTunes 還原 → `canonicalArtist` 別名收斂)**,不是只洗搜尋字串:每張表的鍵都是 (artist, title),不進場洗的話「Chevon-シェボン / ダンス・デカダンス／Chevon 【Lyric Video】」會跟 Spotify 聽的同一首在 cache 與排行榜分裂成兩筆 (`base_title` 只剝圓括號,`【】` 不在範圍)。原字串留在 `original_title`/`original_artist`。音樂 app 來源一個字都不動 —— `(Live)`/`(feat. …)` 是真的版本資訊。
     - `global.logListen` 對瀏覽器來源多一道閘門:**cache 裡沒有這首的歌詞就不記錄**。YouTube 上聽歌與看雜談影片是同一個 session,不擋的話「第1回ぶいすぽスポーツテストを見て…」這種影片會混進統計與排行榜。副作用是在 YouTube 聽的、真的找不到歌詞的冷門歌也不會被記錄。
     - `currentDuration()` 對瀏覽器來源回 `null`:YouTube 的 MV 含前奏/對白/outro 比音源長,而 `_pick_song` 在歌手對不上時要求 ±3 秒才收,拿影片長度當證據只會把正確的歌退貨。同理 `getResolvedMetadata` 也不吃瀏覽器來源的時長。
-    - 回歸測試:`node test_search_query.js` (去噪規則 + `isMusicAppSource` + `toSimplified`)、`node test_history_toggle.js` (logListen 的瀏覽器閘門)、`node test_itunes_resolving.js` (進場去噪與音樂 app 不去噪)。
+    - 回歸測試:`node tests/test_search_query.js` (去噪規則 + `isMusicAppSource` + `toSimplified`)、`node tests/test_history_toggle.js` (logListen 的瀏覽器閘門)、`node tests/test_itunes_resolving.js` (進場去噪與音樂 app 不去噪)。
   - 不要為了「手機/別台電腦也能連」把 bind 改寬 —— 那要先做真正的 auth,同源守門對區網另一台機器沒有意義。
 - **Python scripts (repo root)** are stateless workers `server.js` spawns via `child_process`, always through the **`pytools.py` dispatcher** (`spawnPy()` in server.js): `pytools.py monitor|furigana|fallback|cnlyrics|romaji|minimize|seek|media-action|sessions|diff`. In dev it runs `venv python pytools.py <sub>`; in the packaged app the `PYTOOLS_EXE` env var points at the PyInstaller-built `pytools.exe`.
   - **`main()` 開頭把 stdin **與** stdout 都 `reconfigure(encoding='utf-8')` —— 兩行都必要,少一行就是 bug。** 打包的 `pytools.exe` **不吃 `PYTHONIOENCODING`** (spawnPy 有設也沒用),stdio 編碼跟著 OS codepage 走。node 一律以 UTF-8 寫含日文的 JSON 進 stdin,所以在非 UTF-8 codepage 的機器 (**繁中 Windows 預設 cp950**) 上,stdin 會用 Big5 解 → 日文變亂碼 → `json.loads` 崩 → **假名整份消失** (furigana/cnlyrics/diff 都讀 stdin,全中)。曾經只補了 stdout,漏掉 stdin,害兩個不同使用者的打包版假名全掛。**開發機若開了 Windows「Beta: 使用 Unicode UTF-8」(codepage 65001) 會完全遮掉這個 bug** —— 打包版在你機器上跑得好、cp950 使用者卻壞,`chcp 950` 也模擬不出來 (系統層設定蓋不掉);要嘛在真 cp950 機器測,要嘛信這條。clone 跑原始碼不受影響:一般 `python.exe` (非 frozen) 對重導向 stdin 預設就給 UTF-8。
@@ -93,12 +104,12 @@ One Node.js backend, multiple thin clients, with Python scripts as helpers spawn
     - The empty (no session) payload must keep listing **every** field, because `handleMediaUpdate` merges shallowly (`server.js:146`); an omitted key leaves the previous song's value on screen.
   - `furigana_inject.py` — one-shot; JSON in via stdin, lyrics with furigana out via stdout. Readings come from fugashi/unidic-lite, then get corrected in three layers, each beating the last: `apply_hint()` (romaji hints from `cn_music`, aligned to the tokens with difflib) → `_COMMON_READING` (a tiny table of words *every* source gets wrong — 私 → わたし、良い/好い/善い → いい；比對的是**整個斷詞**,所以活用形 `良く` 與複合詞 `仲良く` 都不受影響,而 `格好良い`/`気持ち良い` 斷成兩詞後正好得到 かっこいい/きもちいい) → `word_corrections` from the DB (user's manual edits, always final).
     - **「有沒有假名」是日文歌/中文歌的分界線,兩個地方共用這條規則**:`process_lrc()` 整份沒假名就原文回傳 (中文歌的漢字丟給 fugashi 只會得到亂七八糟的音讀,也順便省掉 `get_hints()` 的網路請求);`web-app/s2t.js` 的簡轉繁同理只在沒假名時動手。
-    - **`_SPLIT_WORD` 是「unidic 把兩個詞黏成一個罕見詞條」的拆詞表** (`道君` ドウクン、`中君` ナカノキミ)。黏詞讓兩個字**同時**標錯,而且羅馬字來源也跟著錯 (實測網易/酷狗給 doukun / chuukun),所以要套在 `apply_hint` 之後 —— 先拆的話 hint 會把錯讀音貼回來。**只能是列表,不可以寫成「名詞尾巴是君就拆」的通則**:`道君`/`中君` 與 `諸君`/`暴君`/`主君`/`若君` 全都是「名詞 普通名詞 一般」,詞性與讀音形狀都分不出來,寫通則會把 諸君(しょくん) 拆成 諸+君。實測 429 首日文歌只黏出這兩個詞,增長率低,手動加即可。回歸測試 `test_furigana_hint.py` 第 8 組。
+    - **`_SPLIT_WORD` 是「unidic 把兩個詞黏成一個罕見詞條」的拆詞表** (`道君` ドウクン、`中君` ナカノキミ)。黏詞讓兩個字**同時**標錯,而且羅馬字來源也跟著錯 (實測網易/酷狗給 doukun / chuukun),所以要套在 `apply_hint` 之後 —— 先拆的話 hint 會把錯讀音貼回來。**只能是列表,不可以寫成「名詞尾巴是君就拆」的通則**:`道君`/`中君` 與 `諸君`/`暴君`/`主君`/`若君` 全都是「名詞 普通名詞 一般」,詞性與讀音形狀都分不出來,寫通則會把 諸君(しょくん) 拆成 諸+君。實測 429 首日文歌只黏出這兩個詞,增長率低,手動加即可。回歸測試 `tests/test_furigana_hint.py` 第 8 組。
     - `katakana_ruby` 設定 (預設關) 讓純片假名的詞也標平假名 ruby (`class='kata-ruby'`,刻意不是 `editable-ruby`:純字形轉換,不進 `word_corrections`)。讀音直接用 `kata2hira()`,不查字典,長音符 `ー` 保留。旗標由 server.js 讀 `settings.json` 後隨 stdin JSON 傳進來 —— 因此 `furiganaCache` 的命中條件除了歌詞本身還要比對這個旗標,`/api/settings` 收到它時也要 `rebroadcastLyrics()`,否則切換設定要等換歌才生效。
-    - `build_ruby_html()` 裡「讀音 = 原文」的詞 (unidic 查不到的字,中文歌整行都是) 削掉前後綴後 `root_orig` 會變空字串 —— 那個分支必須把 `orig` 原樣 append 回去,否則整個詞會從畫面上消失。這就是舊版「中文歌缺字」的成因,回歸測試在 `test_furigana_hint.py`。
+    - `build_ruby_html()` 裡「讀音 = 原文」的詞 (unidic 查不到的字,中文歌整行都是) 削掉前後綴後 `root_orig` 會變空字串 —— 那個分支必須把 `orig` 原樣 append 回去,否則整個詞會從畫面上消失。這就是舊版「中文歌缺字」的成因,回歸測試在 `tests/test_furigana_hint.py`。
   - `cn_music.py` — client for NetEase / QQMusic / Kugou. One API call per platform yields both the LRC **and** a per-syllable romaji track (NetEase `romalrc`, QQ QRC `contentroma`, Kugou krc `type=0`), which is converted back to kana and used to fix readings unidic-lite gets wrong (e.g. 君 くん → きみ). Only readings that still differ after equivalence-normalization are overridden, since romaji can't distinguish づ/ず or は/わ.
     - **`_SOURCES` order is the hint priority** (first source with any romaji wins), and QQ deliberately sits ahead of Kugou: both are machine-generated, but Kugou tends to agree with unidic-lite's mistakes (both say 私 = わたくし) while QQ gets it right (わたし). QQ's *search* endpoint (`u.y.qq.com`) rate-limits hard and starts returning empty results after a burst — that's expected, it just falls through to Kugou.
-    - `_pick_song()` gates every source's search results: the title must match, then artist and duration (±3s) break ties. 歌手不合時**時長是唯一的證據**,所以要落在同一個 ±3 秒才收 —— 單憑歌手不合就退貨會誤殺太多 (あいみょん 在 QQ 叫「爱缪」),但放寬到 ±10 秒等於沒把關:神はサイコロを振らない 的「初恋」(239 秒) 就那樣被判成林志美的粵語同名曲 (230 秒)。沒有時長資訊時照舊放行。回歸測試 `test_pick_song.py`。 Duration comes from `currentMediaState` in server.js and is what stops the 147-second preview clips QQ loves to return.
+    - `_pick_song()` gates every source's search results: the title must match, then artist and duration (±3s) break ties. 歌手不合時**時長是唯一的證據**,所以要落在同一個 ±3 秒才收 —— 單憑歌手不合就退貨會誤殺太多 (あいみょん 在 QQ 叫「爱缪」),但放寬到 ±10 秒等於沒把關:神はサイコロを振らない 的「初恋」(239 秒) 就那樣被判成林志美的粵語同名曲 (230 秒)。沒有時長資訊時照舊放行。回歸測試 `tests/test_pick_song.py`。 Duration comes from `currentMediaState` in server.js and is what stops the 147-second preview clips QQ loves to return.
   - `qrc_decrypt.py` — pure-Python 3DES for QQ's QRC lyrics. **Do not replace this with a crypto library**: QQ uses a widely-copied C DES implementation with two typo'd S-box entries (sbox2 has a 15 that should be 2; sbox4 has a 10 that should be 13), so standard DES cannot decrypt it. Ported from Lyricify's `DESHelper.cs`.
   - `search_fallback.py` — one-shot fallback lyrics scraper (syncedlyrics providers + iTunes JP-title retry) when the preferred source misses. QQ is not fetched here; `cn_music._fetch_qqmusic` (working `musicu.fcg` endpoint) owns QQ. The old `fetch_qqmusic()` here (dead `client_search_cp` endpoint, HTTP 500) was removed.
 - **靈動島 (`web-app/island.js` + `preload-island.js` + `views/island.ejs` + `public/css/island.css`)** — Electron 的 frameless 透明置頂視窗,載入 server 的 `/island`,靠 WebSocket 廣播吃資料,是純顯示端。
@@ -114,21 +125,21 @@ One Node.js backend, multiple thin clients, with Python scripts as helpers spawn
     - **鍵是工作區幾何 (`x,y,WxH`) 而不是 `display.id`** —— Windows 的 id 是每次列舉時生成的,重開機或重接線就可能變,存進 settings.json 後對不上等於沒記。
     - 順序:記住的那台還在 → `island_pos` 裡任一還在的 → 舊的 `island_x/y` (相容) → 主螢幕上緣置中,最後一律夾進工作區。`resetIslandPosition()` **要一併清掉 `island_pos`/`island_display`**,只清 `island_x/y` 的話下次開島又跳回舊位置。
     - `screen` 的 `display-added`/`display-removed`/`display-metrics-changed` 三個事件都重跑一次落位,否則螢幕拔掉後島會留在一個不存在的座標上 (看起來就是「島不見了」)。
-    - 回歸測試 `node test_island_position.js`。
+    - 回歸測試 `node tests/test_island_position.js`。
   - 網頁的島開關 (`/api/island/status`、`/api/island/toggle`) 只是轉呼叫主進程掛上來的 `global.openIsland/closeIsland/isIslandOpen`。**純 node (`npm start`) 沒有主進程,回 `available:false`**,前端吐司提示需要桌面版 —— 不要為了讓純 node 也能開島而把島改回獨立進程。
   - preload 暴露的物件叫 **`window.islandBridge` 而不是 `island`**:頁面裡有 `<div id="island">`,瀏覽器的具名元素會占用 `window.island`,讓「不在 Electron 裡就降級成空實作」的判斷失效 (直接用瀏覽器開 `/island` 除錯就會壞)。
   - 舊的 C# WPF 島 (`DynamicIslandUI/`) 已刪除,要回頭參考就翻 git 歷史 (commit `ca16b66` 之前)。
   - **歌詞是外部來源的字串,而前端 (`app.js` 的 `pane.innerHTML`) 與靈動島都是 innerHTML 畫的 —— 送到畫面上的每一段外部文字都必須逃逸。** 不逃逸的話,網易/QQ/酷狗上任何人上傳一份帶 `<img onerror=…>` 的歌詞,就能在同源執行腳本:改 `llm_base_url` 再觸發 `/api/llm-furigana/run`,BYOK 的 key 就送出去了。同源守門完全擋不到,因為腳本本來就在同源裡跑。
     - 逃逸點分兩處,**因為歌詞本體要自己產 `<ruby>`,逃逸必須在產標籤之前**:`furigana_inject.py` 在分詞前 `html.escape(text)` (`build_ruby_html`、中文歌的提早退出、`#TITLE#` 列、`[ar:]` meta 列四條路徑都要);譯文不經過 python,由 `translations.js` 的 `escapeHtml()` 自己來。
     - 連帶的坑:譯文的比對鍵是 python 用**未逃逸**的原文算的,所以 `stripRuby()` 要把實體字串解回來 —— 不解的話 `Don't` → `Don&#x27;t` → 正規化成 `Donx27t`,含 `'` 或 `&` 的行永遠對不上譯文,而且是靜默失效。
-    - 回歸測試:`python test_furigana_hint.py` 第 7 組、`node test_translations.js`。
+    - 回歸測試:`python tests/test_furigana_hint.py` 第 7 組、`node tests/test_translations.js`。
 - **`web-app/views/*.ejs` + `web-app/public/`** — web frontend (lyrics editor, leaderboard, stats).
 - **`lyrics_data.db`** (repo root, SQLite, WAL mode): tables `cache` (lyrics keyed by artist+title), `listening_history`, `sync_offsets`, `word_corrections` (user furigana overrides), `artist_aliases` (maps Spotify's translated artist names back to originals, e.g. 魚韻 → サカナクション), `romaji_hints` (per-song reading hints from `cn_music`; an empty `{}` is a negative-cache entry meaning "already looked, no source has it"). Path configurable via `DB_PATH` env var. The .db file is gitignored (`*.db`),每台機器各自初始化。
   - **歌手名收斂在 `handleMediaUpdate` 做,只此一處。** 每張表的鍵都是 (artist, title),而不同播放 app 對同一位歌手給不同寫法 (Spotify 給「魚韻」、YouTube 給「サカナクション」),同一首歌就會分裂成兩筆。解法是進 `handleMediaUpdate` 時就用 `artistAliases` Map (開機載入 `artist_aliases` 全表,`/api/aliases` 增刪後同步更新;`handleMediaUpdate` 是同步的,不能在那等 `db.get`) 把名字換成正規名,下游的 cache、listening_history、Python 端讀音提示全部自動一致。**不要在各處寫入點各包一次,也不要為了「分開不同來源」把 source 加進主鍵** —— 實測重複全來自 metadata 字串,加 source 一列都修不掉,反而讓五張表都要改鍵。舊資料用 `scripts/merge_aliases.py` 一次性收斂 (預設 dry-run,`--apply` 才寫入並自動備份)。
   - `listening_history` 另有 `base_title` (virtual generated column,剝掉第一個括號起的尾綴):統計/排行榜一律 GROUP BY 它,讓 `(Live)`/`(feat. …)` 算同一首。**歌詞類的表刻意不加這欄** —— Live 版歌詞本來就不同,必須分開快取。定義同時寫在 server.js 建表處與 `db.py`,改一邊要改兩邊。
   - **`track_history` 設定 (預設 true) 的閘門只在 `global.logListen`,不要在別處再判斷一次。** `listening_history` 只有這一個寫入點 (換新歌、暫停後續播兩條計時器路徑共用);判斷刻意放在計時器「觸發時」而非排程時,使用者播到一半關掉就真的不會被記錄。關閉時側欄的統計數據/排行榜也一起隱藏 (`.nav-stats-item`,SSR 靠 `res.locals.settings` 決定,不然會閃一下才隱藏),但**路由保留** —— 關掉是「不記錄 / 不礙眼」,不是鎖起來。舊的 `/api/play-event` 是雲端同步時代的遺留、沒有任何呼叫者,已刪除,不要為了「外部 agent 也能回報」加回來。
-  - **清除功能 (`/api/db-clear`) 的白名單寫死在 `CLEAR_TARGETS`,只碰得到可重建的資料。** `cache`/`romaji_hints`/`llm_hints` 清掉只是下次重抓;`word_corrections`、`sync_offsets`、`artist_aliases`、`search_overrides` 是使用者親手打的,**任何清除路徑都不准碰**,`/api/db-usage` 只顯示筆數。清 `lyrics` 要一併清記憶體的 `furiganaCache` 與 `itunesCache`,否則已刪的歌詞還會被吐出來;最後一定要 `VACUUM`,不然檔案不會真的變小。`romaji_hints`/`llm_hints` 是 Python 端 (`db.py`) 建的,**全新安裝上可能不存在** —— 這幾條 `db.run` 的 callback 不能省,沒 callback 的 "no such table" 會被 node-sqlite3 丟成未捕捉例外、整個 server 掛掉。回歸測試 `node test_history_toggle.js`。
-  - **備份/還原 (`/api/backup`、`/api/restore`) 是那批「不可重建」資料唯一的救生艇。** 備份 = **單一 `.db` 檔**:`VACUUM INTO` 產生壓實且與 WAL 一致的快照 (所以不必打包 `-wal`/`-shm`,也不必引入 zip 函式庫),再把 `settings.json` 的內容寫進備份檔自己的 `_backup_meta` 表。**`secrets.json` (LLM API key) 刻意不進備份** —— 備份檔會被隨手複製傳送。還原走 `express.raw`,前端直接把 File 當 body 送,不為了一支路由裝 multer;**動現有資料前一定要先驗 `_backup_meta.app === 'Kanaric'`**,否則隨便一個 sqlite 檔都能蓋掉使用者心血,而且要先複製一份 `.bak-restore-*` 救援檔。還原成功後 `db.close()` 已經執行,這支 server 不能再服務,靠 `global.relaunchApp()` (electron.js 掛的) 重開;純 node 模式沒有它,改成請使用者手動重啟。回歸測試 `node test_backup_restore.js`。
+  - **清除功能 (`/api/db-clear`) 的白名單寫死在 `CLEAR_TARGETS`,只碰得到可重建的資料。** `cache`/`romaji_hints`/`llm_hints` 清掉只是下次重抓;`word_corrections`、`sync_offsets`、`artist_aliases`、`search_overrides` 是使用者親手打的,**任何清除路徑都不准碰**,`/api/db-usage` 只顯示筆數。清 `lyrics` 要一併清記憶體的 `furiganaCache` 與 `itunesCache`,否則已刪的歌詞還會被吐出來;最後一定要 `VACUUM`,不然檔案不會真的變小。`romaji_hints`/`llm_hints` 是 Python 端 (`db.py`) 建的,**全新安裝上可能不存在** —— 這幾條 `db.run` 的 callback 不能省,沒 callback 的 "no such table" 會被 node-sqlite3 丟成未捕捉例外、整個 server 掛掉。回歸測試 `node tests/test_history_toggle.js`。
+  - **備份/還原 (`/api/backup`、`/api/restore`) 是那批「不可重建」資料唯一的救生艇。** 備份 = **單一 `.db` 檔**:`VACUUM INTO` 產生壓實且與 WAL 一致的快照 (所以不必打包 `-wal`/`-shm`,也不必引入 zip 函式庫),再把 `settings.json` 的內容寫進備份檔自己的 `_backup_meta` 表。**`secrets.json` (LLM API key) 刻意不進備份** —— 備份檔會被隨手複製傳送。還原走 `express.raw`,前端直接把 File 當 body 送,不為了一支路由裝 multer;**動現有資料前一定要先驗 `_backup_meta.app === 'Kanaric'`**,否則隨便一個 sqlite 檔都能蓋掉使用者心血,而且要先複製一份 `.bak-restore-*` 救援檔。還原成功後 `db.close()` 已經執行,這支 server 不能再服務,靠 `global.relaunchApp()` (electron.js 掛的) 重開;純 node 模式沒有它,改成請使用者手動重啟。回歸測試 `node tests/test_backup_restore.js`。
   - 體積實測 (2026-07,393 首歌 / 349 筆紀錄 = 1.7 MB):`cache` 每首約 1.2 KB、`romaji_hints` 每首約 0.9 KB,而 `listening_history` 每筆只有 31 bytes (佔全庫 0.6%)。**要談資料庫大小,施力點是歌詞快取,不是聆聽紀錄。**
 
 ### Desktop packaging (Electron)
@@ -157,7 +168,7 @@ GitHub repo 也已改名 `bensionfang/Kanaric`,`server.js` 的 `GITHUB_REPO` 跟
 
 1. `media_monitor.py` (or an edge agent) reports a track change → `handleMediaUpdate` → WebSocket broadcast to all clients.
 2. Lyrics are lazy-loaded: the **web frontend** reacts to the broadcast by calling `GET /api/lyrics/fetch`; the server checks the SQLite cache, applies artist aliases, fetches externally on miss, runs furigana injection, then broadcasts the result — the C# island never fetches on its own.
-   - **iTunes 查詢「失敗」與「查過了,確定不用還原」不能混為一談。** `getResolvedMetadata` 的失敗路徑寫的是 `{ ..., failedAt }`,`cachedResolution()` 會把過了 `ITUNES_RETRY_MS` (預設 60 秒) 的失敗當成沒查過。舊版失敗也寫成一般結果,一次 3 秒逾時就讓那首歌**整個 process 生命週期**都不再嘗試還原,期間抓的歌詞用未還原的名字寫進 `cache` 與 `listening_history`,永久分裂 (實測 TUYU / ツユ 底下各存了同樣四首歌,排行榜也跟著錯)。冷卻**不能設成 0** —— 媒體監控每 0.1 秒更新一次,不擋就是請求風暴,而且永遠不定案。回歸測試 `node test_itunes_resolving.js` 有一組驗這個 (用 `ITUNES_RETRY_MS` 縮短等待)。
+   - **iTunes 查詢「失敗」與「查過了,確定不用還原」不能混為一談。** `getResolvedMetadata` 的失敗路徑寫的是 `{ ..., failedAt }`,`cachedResolution()` 會把過了 `ITUNES_RETRY_MS` (預設 60 秒) 的失敗當成沒查過。舊版失敗也寫成一般結果,一次 3 秒逾時就讓那首歌**整個 process 生命週期**都不再嘗試還原,期間抓的歌詞用未還原的名字寫進 `cache` 與 `listening_history`,永久分裂 (實測 TUYU / ツユ 底下各存了同樣四首歌,排行榜也跟著錯)。冷卻**不能設成 0** —— 媒體監控每 0.1 秒更新一次,不擋就是請求風暴,而且永遠不定案。回歸測試 `node tests/test_itunes_resolving.js` 有一組驗這個 (用 `ITUNES_RETRY_MS` 縮短等待)。
    - **iTunes JP 給的「歌手名」要另外把關,不能沿用「含假名就收」** —— 它會把西洋歌手音譯成純片假名 (`Coldplay` → `コールドプレイ`、`Juice WRLD` → `ジュース・ワールド`),而片假名也算假名,舊版因此會把整批西洋歌改名寫進 `cache` 的鍵與排行榜。判準在 `acceptsItunesArtist()`,三條依序:(1) 原歌手名帶 CJK = 被翻譯過,結果一定是還原 (`魚韻` → `サカナクション`,曲風是「ロック」也照收);(2) 結果帶平假名或漢字 (`なとり`、`藤井 風`) —— **音譯永遠是純片假名**,帶平假名漢字就不可能是音譯;(3) 純片假名 + 原名純 ASCII 才看 `primaryGenreName`,`J-Pop`/`アニメ` 才收 (`レトロリロン` ✅ / `コールドプレイ` ❌)。
      - **曲風只能當正面訊號,反過來不成立**:實測 `サカナクション` 是「ロック」、`ずっと真夜中でいいのに。` 也是「ロック」、`LiSA` 是「アニメ」。
      - `primaryGenreName` 是 `カラオケ` 的整筆丟掉:羅馬字歌名很容易搜到翻唱版 (`Yorushika / Haru Dorobou` 的第一個 hit 是「歌っちゃ王」),那種結果歌名歌手都有假名,別的閘門攔不住。
@@ -165,7 +176,7 @@ GitHub repo 也已改名 `bensionfang/Kanaric`,`server.js` 的 `GITHUB_REPO` 跟
      - 這一切只在 `hasKana(title)` 早退**沒有**觸發時才跑,所以歌名有假名的 (`きらり`、`10月無口な君を忘れる`) 仍然不查歌手 —— `artist_aliases` 補的正是這個盲區,加上 iTunes 給不了的純偏好 (`Jay Chou` → `周杰倫`,iTunes 自己就登記羅馬字)。
      - 舊資料用 `scripts/restore_jp_titles.py` 一次性收斂 (預設 dry-run,`--apply` 才寫入並備份)。**它的採用條件刻意比 server.js 嚴**:線上判錯只是一時標錯,批次判錯是合併資料列、不可逆。實測 iTunes JP 會把西洋歌音譯成片假名 (`Juice WRLD` → `ジュース・ワールド`),「含假名」擋不住,所以要「時長 ±3 秒吻合」或「新歌名含**平假名**」兩條之一,其餘列進人工確認清單。
    - **`state.resolving` 是「歌名還沒定案」的旗標,前端必須等它變 false 才抓歌詞。** iTunes 日文原名還原 (`getResolvedMetadata`) 是非同步的,`handleMediaUpdate` 不能等,所以換歌後頭幾百毫秒 state 帶的是原始歌名、幾秒後才換成日文原名。前端是靠「title 變了」判斷換歌的,沒有這個旗標就會用兩個不同的鍵各抓一次歌詞 —— 第二次多半撞到來源限流拿到空的,把已經抓對的歌詞蓋成「找不到歌詞」,要重新載入才好。
-   - `itunesCache` 的佔位項帶 `pending: true`,`getResolvedMetadata` **每一條 return 前都要覆寫掉它** (含假名早退、查到、例外三條)。漏掉任何一條,那首歌的 `resolving` 永遠是 true,歌詞就完全不會抓。回歸測試 `node test_itunes_resolving.js`。
+   - `itunesCache` 的佔位項帶 `pending: true`,`getResolvedMetadata` **每一條 return 前都要覆寫掉它** (含假名早退、查到、例外三條)。漏掉任何一條,那首歌的 `resolving` 永遠是 true,歌詞就完全不會抓。回歸測試 `node tests/test_itunes_resolving.js`。
    - 前端 (`app.js`) 用 `lastLyricsKey` 判斷要不要抓,跟 `lastMediaTitle` 分開:換歌時 `lastMediaTitle` 會變兩次 (原名 → 還原後),歌詞只該抓最後定案的那次。自動搜尋備選歌詞也綁在同一個判斷裡,理由相同。
 3. A track is only written to `listening_history` after 30 seconds of accumulated actual playback (pause/resume-aware timer in `server.js`).
 
@@ -189,7 +200,7 @@ GitHub repo 也已改名 `bensionfang/Kanaric`,`server.js` 的 `GITHUB_REPO` 跟
 - `adjacent` (新行號 = 舊行號 +1) 這個參數要**先於** offscreen 判斷:seek / 換歌 / 重畫的目標行常在畫面外,一律置中,
   否則點歌詞跳轉會變成「不捲過去還跳出按鈕」。
 - `scrollLocked` 只剩兩個硬鎖來源:編輯假名中 (`startRubyEdit`)、鍵盤上下鍵手動切行 (`handleManualScroll`),都靠 `resumeSync()` 解鎖。
-- 回歸測試 `node test_scroll_zone.js`。
+- 回歸測試 `node tests/test_scroll_zone.js`。
 
 ### 猜歌小遊戲 (`/game`)
 
@@ -259,7 +270,7 @@ GitHub repo 也已改名 `bensionfang/Kanaric`,`server.js` 的 `GITHUB_REPO` 跟
 - **一局結束 (含中途按「結束」) 會送 `pause`**:不停的話播放器自己接著跑下一首,使用者還在看成績、
   背景卻在放沒人聽的歌。
 - 計分公式在 **`web-app/public/js/game-score.js`** (`scoreFor(elapsedMs, streak)`,獨立成檔的理由同
-  `scroll-zone.js`:`test_game.js` require 得到,瀏覽器則當一般 script 載入 —— 記得 game.ejs 要先載它)。
+  `scroll-zone.js`:`tests/test_game.js` require 得到,瀏覽器則當一般 script 載入 —— 記得 game.ejs 要先載它)。
   **三個加項相加,沒有任何扣分項**:基本 1 + 速度 `5 × 2^(−t/10)` + 連勝 (第 2 題起每題 +1,上限 +5,
   答錯歸零)。舊版是「滿分 10 往下扣」,碼表旁邊掛一個一直變小的數字 —— 使用者要的是加法,答得慢只是
   拿不到加成。速度分刻意是**連續曲線而不是分段門檻** (做過又換掉,不要提案改回去):門檻會讓 4.9 秒與
@@ -292,7 +303,7 @@ GitHub repo 也已改名 `bensionfang/Kanaric`,`server.js` 的 `GITHUB_REPO` 跟
   結算畫面靠 `.game-wrong` 的 `max-height` + `overflow-y: auto` (兩份清單都可能幾十筆)。
   `#game-setup`/`#game-over` 用 `justify-content: safe center` —— 普通的 center 在內容比容器高時
   會往上溢出蓋到頁首,而且捲不到。
-- 回歸測試:`node test_game.js` (干擾選項 + iTunes 曲目清洗 + 計分公式)、`node test_history_toggle.js`
+- 回歸測試:`node tests/test_game.js` (干擾選項 + iTunes 曲目清洗 + 計分公式)、`node tests/test_history_toggle.js`
   最後兩項 (遊戲中不寫入 + 關頁後恢復)。
 
 ### Furigana editing (web frontend)
@@ -357,6 +368,6 @@ Lines like `作詞：米津玄師` and copyright boilerplate are prefixed with `
 - **`isCopyrightClaim()`** — 版權聲明獨立計分 (命中 ≥3 個「未經/許可/授權/不得…」),因為那種行又長又沒冒號,兩條規則都接不住。
 - **`isSongNameLine()` — 歌名行 (整行就是歌名)。判準是「前面每一行都已經是製作人員列」,不是行號、也不是時間戳。** 兩個都實測過都錯:ヨルシカ「あぶく」第 4 行 (t=23.6s) 是唱出來的歌名,前面三行是真歌詞;反過來 muque「TIME」的歌名行在 t=11.6s,但前後都是製作人員列,是真標頭。還要求前面**至少有一行**製作人員列 —— 第 1 行就是歌名時無從判斷是標頭還是開口唱歌名 (WurtS「分かってないよ」第 1、2 行都是歌名),寧可漏標。這條規則需要歌名,所以 `autoMarkTitleLines(lrcText, songTitle)` 有第二個參數,**五個呼叫點都要傳**;沒傳就整條跳過。
 
-`CREDIT_KEYWORDS` 與 `LABEL_ONLY_KEYWORDS` **刻意分成兩張表**:單字的 `詞`/`曲`/`鼓`/`唱` 只能在標籤位置比對 (中文歌常見 `词：周杰伦`),放進 `isCreditPlain` 會把「この曲が終わる前に」這種正文整批誤殺。回歸測試 `node test_title_lines.js`,案例全部取自真實快取。
+`CREDIT_KEYWORDS` 與 `LABEL_ONLY_KEYWORDS` **刻意分成兩張表**:單字的 `詞`/`曲`/`鼓`/`唱` 只能在標籤位置比對 (中文歌常見 `词：周杰伦`),放進 `isCreditPlain` 會把「この曲が終わる前に」這種正文整批誤殺。回歸測試 `node tests/test_title_lines.js`,案例全部取自真實快取。
 
 `config.py` holds the DB path for standalone Python use; `settings.json` (repo root) holds UI settings served via `/api/settings`.

@@ -41,6 +41,7 @@
       "electron.js",
       "server.js",
       "s2t.js",
+      "lyric-quality.js",
       "browser-query.js",
       "title-lines.js",
       "translations.js",
