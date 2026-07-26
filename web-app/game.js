@@ -2,13 +2,8 @@
 // 獨立成一個檔案的理由跟 s2t.js / title-lines.js 一樣 —— 測試 (test_game.js) require 得到,
 // 不必為了驗兩個純函式而啟動一份 server。SQL 只負責撈 rows,排序與取捨規則全在這裡。
 
-// 歌曲身分:(artist, title),比對時剝掉第一個括號起的尾綴。
-// 剝括號是為了讓「春泥棒 (Live)」不會變成「春泥棒」以外的另一個選項 —— 兩個選項長得幾乎
-// 一樣但只有一個算對,那不是難度,是刁難。跟 listening_history 的 base_title 同一個概念。
-function songKey(row) {
-  const base = String(row.title || '').replace(/[(（\[【].*$/, '');
-  return (String(row.artist || '') + '|' + base).replace(/\s+/g, '').toLowerCase();
-}
+// 歌曲身分的鍵在 public/js/song-key.js —— 前端「全曲目」玩法要用同一份 (見那個檔的說明)
+const { songKey } = require('./public/js/song-key');
 
 // 依序從各個池子取,取滿 3 個就停 (呼叫端決定順序:貼進來的播放清單 → 同歌手 → 常聽 → 全庫隨機)。
 // `answer` 可以是一首歌,也可以是一組要排除的寫法 —— iTunes 還原前後的歌名都要排掉,

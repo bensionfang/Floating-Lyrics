@@ -185,6 +185,9 @@ GitHub repo 也已改名 `bensionfang/Kanaric`,`server.js` 的 `GITHUB_REPO` 跟
 藏答案、判分。局面狀態全在前端 (`public/js/game.js`),server 只補選項/提示並記每題結果 (`game_history`)。
 挑選規則 (`pickDistractors`:指定歌手的曲目 → cache 同歌手 → 常聽 → 全庫隨機) 與 iTunes 曲目清洗
 (`filterArtistTracks`) 都在 `web-app/game.js`,獨立成檔的理由同 `s2t.js`:測試 require 得到而不必起 server。
+歌曲身分的鍵 `songKey` 另外放 **`web-app/public/js/song-key.js`** —— 前端「全曲目」玩法要用同一份
+(放 public/js 是為了瀏覽器 `<script>` 載得到,server 與測試照樣 require,同 `scroll-zone.js` 的先例)。
+**兩邊各寫一份就是靜默失效**:覆蓋率永遠差幾首,沒有錯誤訊息。
 
 - **題庫來源只有一種:指定一位歌手,而且是必填** (`POST /api/game/artist` → 前端把 tracks 當 `pool` 送回,
   沒載入之前「開始」是 disabled)。四個選項全同一位歌手,才不能靠「歌手不對」刷掉。
@@ -192,7 +195,25 @@ GitHub repo 也已改名 `bensionfang/Kanaric`,`server.js` 的 `GITHUB_REPO` 跟
     artist entity 的 `artistName` 即使在 JP storefront 也是羅馬字 (`Yorushika`),只有曲目列帶日文原名
     (`ヨルシカ`)。歌手名取曲目列的眾數再過 `canonicalArtist`。曲目用 `filterArtistTracks()` 清洗:
     砍掉 `カラオケ/karaoke/instrumental` (那些是翻唱,歌名一樣但不是本人)、`trackId` 與正規化歌名兩層去重。
-    實測 ヨルシカ 201 筆 → 114 首。
+    實測 ヨルシカ 201 筆 → 114 首。歌手卡的照片是**搜尋首選那首歌的專輯封面** (`artworkUrl100` 換成
+    400x400) —— iTunes 給不了歌手像。
+  - **`lookup` 抓不到連動曲,要再打一次 `search` 補**:artistId 的曲目列只有「這位歌手掛主名」的歌,
+    別人主掛的聯名曲 (`Chevon & ヨルシカ`) 不在裡面,但別人做的「全曲目播放清單」都會收 ——
+    少了它們,那些歌不算進覆蓋率,而且**答案的歌手欄會寫著別人的名字,四選一一眼看破**。
+    補的那批**只認 `artistName` 含這位歌手,不比 `trackName`**:翻唱版的歌名常寫著原唱
+    (`春泥棒 (ヨルシカ)`),比歌名會把整批翻唱收進來。完全掛在別人名下、聯名寫法也沒出現的客串曲
+    仍然抓不到 —— 那條沒有安全的判準,不要為了它放寬成比歌名。
+    補進來的標 **`extra: true`,只當干擾選項,不算進「全曲目」的分母** (`mainTracks()`):
+    search 撈到的沒有 lookup 乾淨,拿它當「必須考完的清單」只會讓覆蓋率永遠差幾首。
+    題目本來就只看播放清單實際播到的歌,曲目池的角色是干擾項來源 —— `count` 因此也只算本人的。
+  - **選項刻意不顯示歌手名**:歌手是必填的,四個選項本來就同一位,寫出來沒有資訊價值,
+    反而在答案是連動曲時把答案標出來 (它的 `artist` 是聯名或別人的寫法)。
+  - **一次載入 = 2 次 iTunes 請求 (search + lookup),所以要有 `gameArtistCache`** (server.js,記憶體
+    Map,TTL 6 小時)。iTunes Search API 沒有 key 也沒有配額,但有「約 20 次/分鐘/IP」的節流 (超過回 403),
+    而歌名還原 (`getResolvedMetadata`) 打的是同一支 API。前端的「最近三位」chip 點下去就是重跑這支端點,
+    沒有這層快取就是反覆打。失敗不進快取。
+  - 「最近三位」存在**前端 localStorage** (`kanaric.game.artists`,只存歌手名與封面),點了重跑載入 ——
+    曲目清單不存,免得過期而使用者看不出來 (有快取擋著,重跑不花 iTunes 額度)。
   - **`pickDistractors` 的第一個參數要連 iTunes 還原前的原名一起排除** (`original_title`/`original_artist`):
     播放器給的是 Spotify 原字串 (`Haru Dorobou`),播放狀態早被還原成日文原名 (`春泥棒`) —— 只排除還原後的
     名字,答案就會以另一個寫法混進干擾項,四選一變成兩個都對。
@@ -202,19 +223,44 @@ GitHub repo 也已改名 `bensionfang/Kanaric`,`server.js` 的 `GITHUB_REPO` 跟
   - Spotify **不可能**由 app 指定播哪一首 (要 OAuth + Premium + Connect API),所以歌手只決定選項,
     題目照舊是「隨機播到什麼就考什麼」—— 使用者要自己在播放器裡放那位歌手的歌。
 
+- **「全曲目」玩法 (`mode === 'full'`) 只能做到「記錄 + 跳過」,不能保證跑得完。** app 指定不了播哪一首
+  (見上一條),所以它做的是:考過的歌記進 `S.asked`、重複播到的自動送 `next` 不佔一題、
+  HUD 顯示 `42 / 114 首`、結算列出還沒考到的。
+  **覆蓋率的鍵是 `titleKey` 而不是 `songKey`** (兩個都在 `song-key.js`):連動曲在曲目池裡的歌手
+  已收斂成正規名,播放器給的卻是聯名寫法 (`Chevon & ヨルシカ`),比歌手就永遠算沒考過。
+  曲目池只有一位歌手,光比歌名不會誤判;`titleKey` 一樣吃掉 `(Live)`/`feat.` 尾綴。
+  server 合併連動曲時的去重也用它 (歌手待會會被統一改寫,那時比歌手比不出東西)。
+  **比對的是 iTunes 曲目清單而不是使用者的播放清單**,兩邊本來就對不齊 (清單缺歌、單曲版與專輯版),
+  所以 100% 常常到不了 —— 因此「還沒考到的歌」一定要列出來,而且隨時能按結束收攤,不可以設計成
+  「跑不完就沒有成績」。連續跳過超過 `FULL_SKIP_LIMIT` (25) 就吐司提示並結束,不然清單沒涵蓋全曲目時
+  會無止境地按下一首。**出過就算考過 (答錯也算)** —— 不然答錯的歌會一直回來,永遠跑不完。
 - **開局會把靈動島整個收起來** (`syncIslandForGame`,走 `global.closeIsland/openIsland`),結束/關頁再開回來。
   **只有「是我們收起來的」才自動開回來** —— 本來就沒開島的人,結束時不該多一個視窗跑出來。
   純 node 模式沒有那幾支 global,直接跳過。島上的遮字仍然留著:遊戲中手動開島、或用瀏覽器開 `/island` 除錯時還是要遮。
-- **答案在三個地方會自己洩出去,少遮一個就白做**:靈動島 (置頂視窗,寫著歌名)、播放列的歌名與封面
-  (`syncPlayerBar` 每秒把歌名寫回 DOM,所以用 `body.game-masked` 讓 CSS 遮,不是用 JS 清)、
-  歌詞本身 (出題時畫面上什麼都不顯示)。
+- **答案在三個地方會自己洩出去,少遮一個就白做**:靈動島 (置頂視窗,寫著歌名)、播放列的歌名與封面、
+  歌詞本身 (出題時畫面上什麼都不顯示)。播放列**整條連同側欄一起 `display:none`** (`body.game-masked`,
+  CSS 不是 JS —— `syncPlayerBar` 每秒把歌名寫回 DOM,靠 JS 清是清不完的),grid 的列與欄要一起收掉,
+  不然會留下 90px 空行與側欄寬的空白。收掉的理由不只洩答案:播放列的上一首/下一首/進度條會把出題流程
+  弄壞 (遊戲自己在切歌),側欄則等於中途把遊戲頁關掉。**離開只有「結束」一條路。**
   **提示功能 (給一句歌詞、扣分) 做過又拿掉了 —— 使用者不要**,連帶刪掉 `/api/game/hint` 與
   `pickHintLines`。要翻舊實作看 git 歷史,不要重新提案。
 - **一局結束 (含中途按「結束」) 會送 `pause`**:不停的話播放器自己接著跑下一首,使用者還在看成績、
   背景卻在放沒人聽的歌。
-- 計分是**時間分**:5 秒內滿分 10,之後每 5 秒 −1,下限 3 (冷門歌本來就要聽久一點,扣到 0 只會讓人放棄)。
-  碼表旁邊直接寫「現在答對 +N」—— 時間扣分不寫出來就是看不見的規則。
+- 計分公式在 **`web-app/public/js/game-score.js`** (`scoreFor(elapsedMs, streak)`,獨立成檔的理由同
+  `scroll-zone.js`:`test_game.js` require 得到,瀏覽器則當一般 script 載入 —— 記得 game.ejs 要先載它)。
+  **三個加項相加,沒有任何扣分項**:基本 1 + 速度 `5 × 2^(−t/10)` + 連勝 (第 2 題起每題 +1,上限 +5,
+  答錯歸零)。舊版是「滿分 10 往下扣」,碼表旁邊掛一個一直變小的數字 —— 使用者要的是加法,答得慢只是
+  拿不到加成。速度分刻意是**連續曲線而不是分段門檻** (做過又換掉,不要提案改回去):門檻會讓 4.9 秒與
+  5.1 秒差一整分、5 秒到 9 秒卻完全一樣。半衰期一句話講得完 (每 10 秒剩一半) 且永遠 > 0。
+  **分數因此有小數**,`scoreFor` 與累加兩處都要 `round1`,不然會長出 17.400000000000002;顯示用
+  `fmtPts` (整數不印 .0)。碼表只往上跑,**顯示到小數點後一位** (100ms 一跳),快答的差別才看得出來。
+  加分的組成要寫在揭曉區,不然連勝與速度加成等於看不見。
   `game_history.hints` 這欄留著但永遠是 0 (提示功能已移除),不為了它做 migration。
+- **左欄 = 大碼表 + 連勝 + 播放進度條 + 本局戰績列表** (`#game-log`,一題一列:題號/✔✘/秒數/歌名/得分)。
+  進度條的資料來自 WebSocket 的 `position`/`duration`,**廣播是換狀態才來、不是每 0.1 秒**,所以要自己
+  內插 (`track.at` + 暫停時不前進);沒有時長 (瀏覽器來源) 整條收起來。歌名藏著但「多長、播到哪」不算洩答案。
+  `.game-listening` 底下的圖示樣式**要指名 `.game-disc`** —— 寫成 `.game-listening i` 會連連勝的火焰
+  一起變成 44px 灰色還在轉。
 - 起始位置 (`startMode`) 走既有的 `/api/seek`:`intro` 位置 >3 秒才跳回 0,`random` 落在 10%~80% 之間。
   **沒有時長 (瀏覽器來源 `currentDuration()` 回 null) 就不 seek**,亂跳只會跑到歌尾。
 - **開局時 `S.key` 要設成「開局當下正在播的那首」而不是空字串** —— `next` 生效前監控還在推那一首,
@@ -227,7 +273,15 @@ GitHub repo 也已改名 `bensionfang/Kanaric`,`server.js` 的 `GITHUB_REPO` 跟
   遊戲中不記錄的閘門只寫在 `global.logListen` 裡,跟 `track_history` 同一個位置,不要在呼叫端再判斷一次。
 - `game_history` 有自己的 `CLEAR_TARGETS` key (`game`),不跟 `history` 合併清 —— 猜歌成績與聆聽紀錄是兩件事。
   備份自動涵蓋 (`VACUUM INTO` 是整庫快照)。
-- 回歸測試:`node test_game.js` (純邏輯)、`node test_history_toggle.js` 最後兩項 (遊戲中不寫入 + 關頁後恢復)。
+- **這一頁三個畫面都不該出現頁面捲軸** (使用者明確要求)。要加東西就得先騰出空間,規則:
+  開始畫面靠文案濃縮 + 「輸入區與歌手卡互斥」(載入成功就把輸入框、最近三位、提示收起來);
+  出題畫面靠 `#game-play` 的 `height: calc(100vh - 130px)` 框住,戰績列表 `.game-log` 才會自己捲
+  (**不框住的話 `overflow-y: auto` 完全沒作用** —— grid 列高是 auto,40 題就撐出 1300px);
+  結算畫面靠 `.game-wrong` 的 `max-height` + `overflow-y: auto` (兩份清單都可能幾十筆)。
+  `#game-setup`/`#game-over` 用 `justify-content: safe center` —— 普通的 center 在內容比容器高時
+  會往上溢出蓋到頁首,而且捲不到。
+- 回歸測試:`node test_game.js` (干擾選項 + iTunes 曲目清洗 + 計分公式)、`node test_history_toggle.js`
+  最後兩項 (遊戲中不寫入 + 關頁後恢復)。
 
 ### Furigana editing (web frontend)
 

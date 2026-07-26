@@ -574,6 +574,7 @@ button.menu-action i {
     padding: 0;
     border-radius: 24px;
     display: flex;
+    flex-wrap: wrap;   /* 猜歌的玩法有四個,一排塞不下就換行 (不換行會撐破右欄) */
     gap: 8px;
 }
 
@@ -2161,13 +2162,26 @@ span[data-tip] {
     min-height: calc(100vh - 260px);
 }
 
-/* 結算畫面單欄置中;開始畫面是「左說明 / 右選玩法」兩欄 */
+/* 結算畫面單欄置中;開始畫面是「左說明 / 右選玩法」兩欄。
+   **一定要用 `safe center`**:內容比容器高時,普通的 center 會往上下**兩邊**溢出,
+   上面那半就疊到頁首的「猜歌」標題上 (而且捲不到)。safe 在放不下時退回 flex-start。 */
 #game-over {
     align-items: center;
-    justify-content: center;
+    justify-content: safe center;
     text-align: center;
 }
-#game-setup { justify-content: center; }
+#game-setup { justify-content: safe center; }
+
+/* 出題畫面要**框住高度**,戰績列表才會自己捲 —— 不框的話 .game-log 的 overflow 沒有作用
+   (grid 列高是 auto,列表有幾筆就長多高),40 題就把整頁撐出 1300px 的捲動。
+   遊戲中播放列是收起來的,所以扣掉的只有頁首與 padding。 */
+#game-play {
+    height: calc(100vh - 130px);
+    min-height: 0;
+    overflow: hidden;
+}
+#game-play .game-body { flex: 1; min-height: 0; }
+#game-play .game-left, #game-play .game-right { min-height: 0; }
 
 .game-setup-grid {
     display: grid;
@@ -2177,11 +2191,11 @@ span[data-tip] {
 }
 
 .game-guide-title {
-    font-size: 15px;
+    font-size: 17px;
     font-weight: 600;
     color: var(--text-primary);
-    margin-bottom: 20px;
-    padding-bottom: 12px;
+    margin-bottom: 14px;
+    padding-bottom: 10px;
     border-bottom: 1px solid var(--panel-border);
 }
 
@@ -2208,30 +2222,30 @@ span[data-tip] {
     align-items: center;
     justify-content: center;
 }
-.game-steps li b { font-size: 15px; color: var(--text-primary); }
-.game-steps li span { font-size: 13px; color: var(--text-secondary); line-height: 1.8; }
+.game-steps li b { font-size: 15.5px; color: var(--text-primary); }
+.game-steps li span { font-size: 13.5px; color: var(--text-secondary); line-height: 1.8; }
 
-.game-guide-block { margin-top: 26px; }
+.game-guide-block { margin-top: 20px; }
 .game-guide-block h3 {
-    font-size: 11px;
-    font-weight: 500;
-    color: var(--text-dim);
-    text-transform: uppercase;
-    letter-spacing: 1px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    letter-spacing: 0.5px;
     margin-bottom: 10px;
 }
-.game-guide-block p { font-size: 13px; color: var(--text-secondary); line-height: 1.9; }
+.game-guide-block p { font-size: 13.5px; color: var(--text-secondary); line-height: 1.9; }
 .game-guide-block i { color: var(--text-dim); width: 16px; }
 .game-guide-block b, .game-steps b { color: var(--text-primary); }
 
 .game-guide-foot { margin-top: 26px; max-width: none; }
 
 /* 右欄:選玩法 */
-.game-choose { display: flex; flex-direction: column; gap: 28px; }
+.game-choose { display: flex; flex-direction: column; gap: 12px; }
 .game-choose .game-btn-primary { align-self: center; }
-.game-setup-hint { font-size: 12px; color: var(--text-dim); line-height: 1.9; }
+.game-setup-hint { font-size: 13px; color: var(--text-dim); line-height: 1.9; }
 
-/* 歌手輸入 */
+/* 歌手輸入。wrapper 自己要排版 —— 它隔開了 .game-setup-row 的 gap,不設子元素就黏在一起 */
+#game-artist-pick { display: flex; flex-direction: column; gap: 10px; }
 .game-artist-input { display: flex; gap: 8px; }
 .game-artist-input input {
     flex: 1;
@@ -2254,7 +2268,55 @@ span[data-tip] {
     padding: 0 6px;
     text-decoration: underline;
 }
-.game-setup-ready { text-align: center; margin-top: -18px; }
+/* 載入成功的歌手卡:字大 + 封面照,一眼看得出這局考誰 */
+.game-artist-card {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 14px;
+    border-radius: 14px;
+    background: var(--panel-hover);
+    border: 1px solid var(--accent-main);
+}
+.game-artist-card img {
+    width: 52px;
+    height: 52px;
+    border-radius: 10px;
+    object-fit: cover;
+    flex-shrink: 0;
+}
+.game-artist-meta { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
+.game-artist-title {
+    font-size: 24px;
+    font-weight: 600;
+    color: var(--text-primary);
+    line-height: 1.25;
+    word-break: break-word;
+}
+.game-artist-sub { font-size: 12px; color: var(--text-dim); }
+
+/* 最近載入過的三位 */
+.game-artist-recent { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.game-artist-recent-label { font-size: 11px; color: var(--text-dim); letter-spacing: 1px; }
+.game-artist-chip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--panel-hover);
+    border: 1px solid transparent;
+    border-radius: 20px;
+    padding: 5px 12px 5px 5px;
+    color: var(--text-secondary);
+    font-size: 13px;
+    cursor: pointer;
+    transition: var(--transition-smooth);
+}
+.game-artist-chip:hover { border-color: var(--accent-main); color: var(--text-primary); }
+.game-artist-chip img { width: 26px; height: 26px; border-radius: 50%; object-fit: cover; }
+.game-artist-chip i { width: 26px; text-align: center; color: var(--text-dim); }
+
+/* 開始鈕與這行提示之間要留空 —— .game-choose 的 gap 只有 16px,貼太近像按鈕的一部分 */
+.game-setup-ready { text-align: center; margin-top: 6px; }
 
 .game-note {
     font-size: 13px;
@@ -2297,12 +2359,12 @@ span[data-tip] {
 .game-btn-ghost:disabled { opacity: 0.35; cursor: default; }
 
 /* 開始畫面的兩排選擇 (局長 / 從哪裡開始播) */
-.game-setup-row { display: flex; flex-direction: column; gap: 10px; }
+.game-setup-row { display: flex; flex-direction: column; gap: 8px; }
 .game-setup-label {
-    font-size: 11px;
-    color: var(--text-dim);
-    text-transform: uppercase;
-    letter-spacing: 1px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    letter-spacing: 0.5px;
 }
 
 /* 計分板 */
@@ -2319,8 +2381,6 @@ span[data-tip] {
 #game-score { color: var(--accent-main); font-weight: 600; font-size: 18px; }
 #game-lives { letter-spacing: 3px; color: #e0245e; }
 #game-timer { font-variant-numeric: tabular-nums; display: flex; align-items: center; gap: 10px; }
-/* 時間扣分是看不見的規則,所以把「現在答對能拿幾分」直接寫在碼表旁邊 */
-.game-worth { color: var(--accent-main); font-weight: 600; }
 
 /* 左右兩欄:左邊是「在聽什麼」,右邊是作答 */
 .game-body {
@@ -2333,9 +2393,9 @@ span[data-tip] {
 .game-left, .game-right { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
 .game-right { justify-content: center; }
 
-/* 出題區:預設什麼都不給,提示句一句一句往下長 */
+/* 出題區:碼表 + 連勝 + 進度條。歌名什麼的一律不給,揭曉時才換成答案 */
 .game-stage {
-    flex: 1;
+    flex: 0 0 auto;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -2355,13 +2415,64 @@ span[data-tip] {
     font-size: 18px;
     color: var(--text-dim);
 }
-.game-listening i {
-    font-size: 64px;
+/* 選擇器要指名唱片 —— 用 `.game-listening i` 的話連連勝的火焰也會變成 44px 灰色還在轉 */
+.game-listening .game-disc {
+    font-size: 44px;
     color: var(--panel-hover);
     animation: game-spin 6s linear infinite;
 }
 @keyframes game-spin { to { transform: rotate(360deg); } }
 .game-stage.revealed .game-listening { display: none; }
+
+/* 碼表放大當左欄主角:小數點後一位,而且只往上跑 (計分沒有扣分項) */
+.game-bigtimer {
+    font-size: 46px;
+    font-weight: 600;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.1;
+}
+/* 連勝的橘色標記:出題畫面 (.game-bigstreak) 與結算那行 (.game-result-streak) 共用一組顏色 */
+.game-bigstreak, .game-result-streak {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: #ff9f1c;
+    font-weight: 600;
+}
+.game-bigstreak { font-size: 15px; }
+
+/* 播放進度:歌名藏著,但長度與播到哪不算洩答案 */
+.game-track { align-self: stretch; display: flex; flex-direction: column; gap: 6px; }
+.game-track-bar { height: 4px; border-radius: 2px; background: var(--panel-hover); overflow: hidden; }
+.game-track-fill { height: 100%; width: 0; background: var(--accent-main); border-radius: 2px; }
+.game-track-time {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+}
+
+/* 本局戰績:一題一列。答完 3 秒就換下一題,沒有這份紀錄來不及回想剛剛錯在哪 */
+.game-log { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+.game-log-row {
+    display: grid;
+    grid-template-columns: 22px 16px 52px minmax(0, 1fr) 32px;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.03);
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+.game-log-row.ok i { color: var(--accent-main); }
+.game-log-row.no i { color: #e0245e; }
+.game-log-n { color: var(--text-dim); font-size: 11px; }
+.game-log-sec { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.game-log-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); }
+.game-log-pt { text-align: right; color: var(--accent-main); font-weight: 600; }
 
 .game-hint-line {
     font-size: 19px;
@@ -2421,12 +2532,27 @@ span[data-tip] {
 .game-reveal-mark { font-size: 16px; font-weight: 600; display: flex; align-items: center; gap: 8px; justify-content: center; }
 .game-reveal-mark.ok { color: var(--accent-main); }
 .game-reveal-mark.no { color: #e0245e; }
+/* 加分的組成寫出來 —— 只給總分的話,連勝與速度加成等於看不見 */
+.game-reveal-breakdown { font-size: 12px; color: var(--text-dim); }
 .game-reveal-song { font-size: 22px; color: var(--text-primary); }
 .game-reveal-song span { display: block; font-size: 14px; color: var(--text-dim); margin-top: 6px; }
 
 /* 結算 */
 #game-result-score { font-size: 56px; font-weight: 600; color: var(--accent-main); }
-.game-wrong { width: 100%; max-width: 720px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; text-align: left; }
+/* 結算的兩顆按鈕等大 —— 「重選模式」跟「再玩一局」是同一層級的下一步 */
+#game-over .game-btn-ghost { padding: 14px 40px; font-size: 15px; border-radius: 24px; }
+/* 清單自己捲,不要讓整頁捲 —— 無限模式答錯的、全曲目沒考到的都可能幾十筆 */
+.game-wrong {
+    width: 100%;
+    max-width: 720px;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    text-align: left;
+    max-height: 158px;
+    overflow-y: auto;
+    align-content: start;
+}
 .game-wrong h3 { grid-column: 1 / -1; font-size: 13px; color: var(--text-dim); font-weight: 500; }
 .game-wrong-row {
     background: var(--panel-hover);
@@ -2445,14 +2571,17 @@ span[data-tip] {
     .game-panel { min-height: 0; }
 }
 
-/* 猜歌進行中:播放列與封面直接寫著答案,用 class 蓋掉 ——
-   syncPlayerBar 每秒都會把歌名寫回 DOM,靠 JS 清空是清不完的,所以用 CSS 遮 */
-body.game-masked .player-info { display: none; }
-body.game-masked .player-left::after {
-    content: '猜歌中';
-    color: var(--text-dim);
-    font-size: 13px;
-    margin-left: 12px;
-    white-space: nowrap;
+/* 猜歌進行中:側欄與播放列整個收起來。
+   播放列除了寫著答案 (syncPlayerBar 每秒把歌名寫回 DOM,靠 JS 清是清不完的),
+   上面的上一首/下一首/進度條也會把出題流程弄壞 —— 遊戲自己在切歌,使用者再切一次
+   就對不上題目。側欄同理:中途換頁等於把遊戲頁關掉。要離開只有「結束」一條路。
+   grid 的列/欄要一起收掉,不然會留下 90px 的空行與側欄寬的空白。 */
+body.game-masked .sidebar,
+body.game-masked .player-bar { display: none; }
+body.game-masked .app-container {
+    grid-template-areas: "main";
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr;
+    padding-left: 0;
 }
-body.game-masked #album-cover { filter: blur(16px) saturate(0.4); }
+body.game-masked .main-content { border-radius: 8px; }

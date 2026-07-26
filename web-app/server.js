@@ -21,6 +21,7 @@ const { cleanBrowserQuery, isMusicAppSource } = require('./browser-query');   //
 const { autoMarkTitleLines } = require('./title-lines');   // 製作人員/版權列標記 #TITLE#
 const { mergeTranslations } = require('./translations');   // 中文譯文合併 #TRANS# (注音之後才做)
 const { pickDistractors, filterArtistTracks } = require('./game');   // 猜歌遊戲:選項與提示句的挑選規則
+const { titleKey } = require('./public/js/song-key');                // 曲目池去重 (前後端共用那份)
 require('dotenv').config();
 
 const app = express();
@@ -1901,9 +1902,21 @@ app.post('/api/game/options', express.json(), async (req, res) => {
 // **country=JP 不能改成別的 storefront** —— tw/us 會把日文歌手與歌名換成羅馬字/英譯
 // (`ヨルシカ / 晴る` → `Yorushika / Sunny`),整份干擾項就變成使用者不認得的名字。
 // 這也是 getResolvedMetadata 用 JP 的同一個理由。
+//
+// **一次載入 = 2 次 iTunes 請求 (search + lookup)**,而 iTunes Search API 沒有 key、
+// 也沒有配額,只有「約 20 次/分鐘/IP」的節流 (超過回 403)。同一個 process 裡歌名還原
+// (getResolvedMetadata) 也在打同一支 API,所以這裡放一層記憶體快取 —— 前端的「最近三位」
+// chip 點下去就是重跑這支,不快取的話反覆點就是反覆打。曲目清單幾天不變,TTL 給 6 小時。
+const gameArtistCache = new Map();
+const GAME_ARTIST_TTL = 6 * 60 * 60 * 1000;
+
 app.post('/api/game/artist', express.json(), async (req, res) => {
   const name = String((req.body && req.body.name) || '').trim();
   if (!name) return res.status(400).json({ error: 'bad_name' });
+
+  const cacheKey = name.toLowerCase();
+  const hit0 = gameArtistCache.get(cacheKey);
+  if (hit0 && Date.now() - hit0.at < GAME_ARTIST_TTL) return res.json(hit0.body);
 
   const itunes = async (path) => {
     const r = await fetch(`https://itunes.apple.com/${path}`, { signal: AbortSignal.timeout(15000) });
@@ -1918,7 +1931,13 @@ app.post('/api/game/artist', express.json(), async (req, res) => {
     const hit = (found.results || [])[0];
     if (!hit || !hit.artistId) return res.json({ error: 'no_artist' });
 
-    const songs = await itunes(`lookup?id=${hit.artistId}&entity=song&limit=200&country=JP`);
+    // **lookup 抓不到連動曲** —— artistId 的曲目列只有「這位歌手掛主名」的歌,別人主掛的
+    // 聯名曲 (`Chevon & ヨルシカ`) 不在裡面,但別人做的「全曲目播放清單」都會收。少了它們,
+    // 那些歌不算進覆蓋率,而且答案的歌手欄會寫著別人的名字。所以再打一次 search 補回來。
+    const [songs, more] = await Promise.all([
+      itunes(`lookup?id=${hit.artistId}&entity=song&limit=200&country=JP`),
+      itunes(`search?term=${encodeURIComponent(name)}&entity=song&limit=200&country=JP`).catch(() => ({})),
+    ]);
     // lookup 的第一筆是歌手本身而不是歌曲,filterArtistTracks 會因為沒有 trackName 自己跳過
     const tracks = filterArtistTracks(songs.results);
     if (!tracks.length) return res.json({ error: 'no_tracks' });
@@ -1929,7 +1948,35 @@ app.post('/api/game/artist', express.json(), async (req, res) => {
     for (const t of tracks) tally.set(t.artist, (tally.get(t.artist) || 0) + 1);
     const common = [...tally.entries()].sort((a, b) => b[1] - a[1])[0][0];
     const artist = canonicalArtist(common);
-    res.json({ artist, count: tracks.length, tracks: tracks.map((t) => ({ ...t, artist })) });
+
+    // search 回來的東西什麼都有,**只收 artistName 含這位歌手的**。刻意不比對 trackName ——
+    // 翻唱版的歌名常常寫著原唱 (`春泥棒 (ヨルシカ)`),比歌名會把整批翻唱收進來。
+    // 代價是「完全掛在別人名下、聯名寫法也沒出現」的客串曲仍然抓不到,那條沒有安全的判準。
+    const norm = (x) => String(x || '').replace(/[\s　]+/g, '').toLowerCase();
+    const want = [norm(common), norm(artist), norm(name)].filter(Boolean);
+    const collabs = filterArtistTracks((more.results || []).filter((r) => {
+      const a = norm(r && r.artistName);
+      return a && want.some((w) => a.includes(w)) && !want.includes(a);   // 純本人的已經在 lookup 裡
+    }));
+    // 合併去重 (filterArtistTracks 只在各自那批內去重)。**比歌名不比歌手** ——
+    // 待會所有曲目的歌手都會被改寫成正規名,聯名寫法在這裡比不出東西。
+    // 補進來的標 `extra: true`:**只當干擾選項,不算進「全曲目」的分母** —— search 撈到的
+    // 東西沒有 lookup 那麼乾淨 (客串、合輯、別人的翻唱漏網),拿它當必須考完的清單只會讓
+    // 覆蓋率永遠差幾首。題目本來就只看使用者播放清單裡實際播到的歌。
+    const seen = new Set(tracks.map(titleKey));
+    const own = tracks.length;
+    for (const c of collabs) {
+      const k = titleKey(c);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      tracks.push({ ...c, extra: true });
+    }
+    // 照片:iTunes 沒有歌手像,拿搜尋首選那首歌的專輯封面當代表 (100x100 換成 400x400)
+    const image = String(hit.artworkUrl100 || '').replace('100x100', '400x400');
+    // count 只算本人的曲目 (連動曲是干擾項,不是「要考完的清單」)
+    const body = { artist, image, count: own, tracks: tracks.map((t) => ({ ...t, artist })) };
+    gameArtistCache.set(cacheKey, { at: Date.now(), body });   // 失敗不進快取,下次照樣重試
+    res.json(body);
   } catch (e) {
     res.status(502).json({ error: 'fetch_failed', message: e.message });
   }

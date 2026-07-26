@@ -3,6 +3,8 @@
 // 不會有錯誤訊息,所以要釘住。
 const assert = require('assert');
 const { pickDistractors, filterArtistTracks } = require('./web-app/game');
+const { scoreFor, round1 } = require('./web-app/public/js/game-score');
+const { songKey, titleKey } = require('./web-app/public/js/song-key');
 
 let pass = 0, fail = 0;
 function check(name, fn) {
@@ -151,6 +153,100 @@ check('lookup 第一筆是歌手本身 (沒有 trackName),要跳過', () => {
 check('空輸入不會炸', () => {
   assert.deepStrictEqual(filterArtistTracks(null), []);
   assert.deepStrictEqual(filterArtistTracks([]), []);
+});
+
+// --- 計分公式 (基本 + 速度 + 連勝,沒有扣分項) ---
+
+check('速度分是半衰期曲線:每 10 秒剩一半', () => {
+  assert.strictEqual(scoreFor(0, 1).speed, 5, 't=0 拿滿');
+  assert.strictEqual(scoreFor(10000, 1).speed, 2.5);
+  assert.strictEqual(scoreFor(20000, 1).speed, 1.3, '5 → 2.5 → 1.25,取一位是 1.3');
+  assert.strictEqual(scoreFor(30000, 1).speed, 0.6);
+});
+
+check('速度分吃實際秒數,差一秒就有差 (不是門檻)', () => {
+  // 門檻制的老問題:4.9 秒與 5.1 秒差一整分,5 秒到 9 秒卻完全一樣
+  assert.strictEqual(scoreFor(4900, 1).speed, 3.6);
+  assert.strictEqual(scoreFor(5100, 1).speed, 3.5);
+  assert.strictEqual(scoreFor(9000, 1).speed, 2.7, '同一段裡也要有差別');
+  assert.ok(scoreFor(3000, 1).speed > scoreFor(3100, 1).speed, '晚 0.1 秒就該少一點');
+});
+
+check('慢答不歸零也不倒扣 (只有加分沒有扣分)', () => {
+  assert.ok(scoreFor(60000, 1).speed > 0, '一分鐘還是拿得到一點');
+  assert.ok(scoreFor(600000, 1).speed >= 0, '十分鐘也不會變負的');
+});
+
+check('分數只取到小數點後一位 (浮點誤差不能外流)', () => {
+  const t = scoreFor(7000, 3).total;
+  assert.strictEqual(t, round1(t));
+  assert.strictEqual(String(t).split('.')[1] === undefined || String(t).split('.')[1].length, 1);
+});
+
+check('第一題答對沒有連勝加成,第二題起每題多 1 分', () => {
+  assert.strictEqual(scoreFor(30000, 1).streak, 0);
+  assert.strictEqual(scoreFor(30000, 2).streak, 1);
+  assert.strictEqual(scoreFor(30000, 4).streak, 3);
+});
+
+check('連勝加成有上限,不會一題抵前面十題', () => {
+  assert.strictEqual(scoreFor(30000, 20).streak, 5);
+});
+
+check('總分 = 三項相加', () => {
+  assert.strictEqual(scoreFor(0, 1).total, 6, '秒殺第一題 = 1 + 5 + 0');
+  assert.strictEqual(scoreFor(3000, 5).total, 9.1, '3 秒 + 5 連勝 = 1 + 4.1 + 4');
+  assert.ok(scoreFor(120000, 1).total >= 1, '慢慢想至少拿得到基本分');
+  assert.strictEqual(scoreFor(-5, 1).total, 6, '時鐘倒退也不該變成負分');
+});
+
+// --- 全曲目玩法:「這首考過了沒」的比對 ---
+// 前端 (public/js/game.js) 拿 songKey 當已考過的鍵,server 拿同一份挑干擾選項。
+// 兩邊算出來的鍵一有出入就是靜默失效:覆蓋率永遠差幾首,而且不會有錯誤訊息
+
+check('版本不同算同一首 (Live / feat. / 全形括號都要收斂)', () => {
+  const k = songKey(song('ヨルシカ', '春泥棒'));
+  for (const t of ['春泥棒 (Live)', '春泥棒（Live）', '春泥棒 [Remastered]', '春泥棒【MV】', '春 泥棒']) {
+    assert.strictEqual(songKey(song('ヨルシカ', t)), k, t);
+  }
+});
+
+check('不同歌手的同名歌不算考過', () => {
+  assert.notStrictEqual(songKey(song('ヨルシカ', '初恋')), songKey(song('宇多田ヒカル', '初恋')));
+});
+
+check('剩餘曲目 = 曲目池扣掉考過的 (結算列的就是這份)', () => {
+  const pool = [song('ヨルシカ', '春泥棒'), song('ヨルシカ', '晴る'), song('ヨルシカ', '花に亡霊')];
+  const asked = new Set([titleKey(song('ヨルシカ', '春泥棒 (Live)'))]);   // 播到的是 Live 版
+  const left = pool.filter((t) => !asked.has(titleKey(t)));
+  assert.deepStrictEqual(left.map((t) => t.title), ['晴る', '花に亡霊']);
+});
+
+check('連動曲只當干擾選項,不算進全曲目的分母', () => {
+  // server 給補進來的連動曲標 extra:題目一律來自播放清單實際播到的歌,
+  // 這批只是讓四個選項湊得出來,算進分母會讓覆蓋率永遠差幾首
+  const pool = [song('ヨルシカ', '春泥棒'), song('ヨルシカ', '晴る'),
+                { ...song('ヨルシカ', '斜陽'), extra: true }];
+  const main = pool.filter((t) => !t.extra);
+  assert.deepStrictEqual(main.map((t) => t.title), ['春泥棒', '晴る']);
+  // 但干擾項照樣挑得到它
+  const got = pickDistractors(song('ヨルシカ', '花に亡霊'), pool, [song('ヨルシカ', '藍二乗')], []);
+  assert.ok(got.some((r) => r.title === '斜陽'), '連動曲該能當干擾項');
+});
+
+check('連動曲:歌手是聯名寫法,所以覆蓋率只能比歌名', () => {
+  // iTunes 的曲目池已收斂成正規名 (ヨルシカ),播放器給的卻是聯名寫法
+  const pooled = song('ヨルシカ', '斜陽');
+  const played = song('Chevon & ヨルシカ', '斜陽');
+  assert.notStrictEqual(songKey(played), songKey(pooled), 'songKey 對不上,這正是不能用它的理由');
+  assert.strictEqual(titleKey(played), titleKey(pooled));
+});
+
+check('titleKey 也要吃掉 feat. 與括號尾綴', () => {
+  const k = titleKey(song('ヨルシカ', '花に亡霊'));
+  for (const t of ['花に亡霊 feat. someone', '花に亡霊 (Movie ver.)', '花に亡霊　']) {
+    assert.strictEqual(titleKey(song('誰か', t)), k, t);
+  }
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);
