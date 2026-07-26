@@ -41,6 +41,18 @@ _COMMON_READING = {
 _KINSHIP_READING = {'兄': 'にい', '姉': 'ねえ', '父': 'とう', '母': 'かあ'}
 _HONORIFIC = {'さん', 'ちゃん', 'さま'}
 
+# unidic 把「名詞 + 君」黏成一個罕見詞條,害兩個字**同時**標錯:
+#   新しい道君と進むだけ → 道君 ドウクン   (正解 みち + きみ)
+#   光の中君を愛すよ     → 中君 ナカノキミ (正解 なか + きみ)
+# 詞性完全分不出來 —— 道君/中君 與 諸君/暴君/主君/若君 全都是「名詞 普通名詞 一般」——
+# 所以只能列表,**不可以寫成「名詞尾巴是君就拆」的通則**,那會把 諸君(しょくん) 拆成 諸+君。
+# 羅馬字來源也跟著錯 (實測網易/酷狗給 doukun、chuukun),所以這層要套在 apply_hint 之後。
+# 實測 429 首日文歌只黏出這兩個詞,增長率低,手動加即可。
+_SPLIT_WORD = {
+    '道君': (('道', 'みち'), ('君', 'きみ')),
+    '中君': (('中', 'なか'), ('君', 'きみ')),
+}
+
 def kata2hira(text):
     if not text: return ""
     return "".join(chr(ord(c) - 0x60) if 0x30a1 <= ord(c) <= 0x30f6 else c for c in text)
@@ -206,6 +218,17 @@ def build_ruby_html(text, artist, title, hints=(), kata_ruby=False):
     # hints 元素為 (整行假名, 是否為 LLM 層);只有 LLM 層要留下修改標記
     for hint, mark in hints:
         apply_hint(words, hint, mark)
+
+    # 黏成一個詞條的「X君」拆回兩個詞,兩個字才各自標對 (見 _SPLIT_WORD)。
+    # 要在 apply_hint 之後:羅馬字 hint 是整行對齊的,先拆會讓它把錯讀音貼回來。
+    expanded = []
+    for w in words:
+        parts = None if w.get('is_space') else _SPLIT_WORD.get(w['orig'])
+        if parts:
+            expanded.extend({'orig': o, 'hira': h, 'is_space': False} for o, h in parts)
+        else:
+            expanded.append(w)
+    words = expanded
 
     # 連羅馬字來源也一起錯的字,用預設表壓過去 (見 _COMMON_READING)
     # 這層蓋掉 LLM 的值時標記要一起收回,不然會把預設表的讀音掛名給 AI

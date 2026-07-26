@@ -76,3 +76,19 @@ assert process_lrc('x', 'y', '[00:01.00]#TITLE#作詞 : n-buna\n[00:02.00]君の
 assert '<rt>うた</rt>' in build_ruby_html(XSS + 'と歌う', 'x', 'y')
 
 print('OK')
+
+# 8. unidic 把「名詞 + 君」黏成罕見詞條時,兩個字會同時標錯 (道君 ドウクン、中君 ナカノキミ)。
+#    羅馬字來源也跟著錯,所以拆詞要在 apply_hint 之後才生效。
+mq = build_ruby_html('新しい道君と進むだけ', 'muque', 'bestie',
+                     [('あたらしいどうくんとすすむだけ', False)])
+assert "data-orig='道' data-hira='みち'" in mq, mq
+assert "data-orig='君' data-hira='きみ'" in mq, mq
+ak = build_ruby_html('光の中君を愛すよ', 'AKASAKI', '夏実',
+                     [('ひかりのちゅうくんをあいすよ', False)])
+assert "data-orig='中' data-hira='なか'" in ak, ak
+assert "data-orig='君' data-hira='きみ'" in ak, ak
+# 通則會誤殺的真詞:詞性跟 道君/中君 完全一樣,所以 _SPLIT_WORD 只能是列表不能是規則
+assert '<rt>しょくん</rt>' in build_ruby_html('諸君、聞いてくれ', 'x', 'y')
+assert '<rt>ぼうくん</rt>' in build_ruby_html('暴君のように', 'x', 'y')
+
+print('OK')
