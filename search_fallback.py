@@ -169,10 +169,15 @@ def main():
                         jp_title = results[0].get("trackName", title)
                         jp_artist = results[0].get("artistName", artist)
                         if (jp_title != title or jp_artist != artist) and (_has_kana(jp_title) or _has_kana(jp_artist)):
+                            # 逐家問而不是把整串丟給 syncedlyrics,理由同上面主迴圈:
+                            # 來源標示要說得出是哪一家給的 (iTunes_Fallback(NetEase))。
+                            # 請求數不變 —— syncedlyrics 拿到 providers 串也是照順序一家家試。
                             query = f"{jp_title} {jp_artist}"
-                            lyric = syncedlyrics.search(query, providers=providers)
-                            if lyric:
-                                source = "iTunes_Fallback"
+                            for p in providers:
+                                lyric = fetch_single_provider(query, p)
+                                if lyric:
+                                    source = f"iTunes_Fallback({p})"
+                                    break
             except:
                 pass
             
