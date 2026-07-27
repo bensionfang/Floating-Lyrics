@@ -110,3 +110,19 @@ assert "data-hira='よ'" in build_ruby_html('良くない', 'x', 'y')
 assert '<rt>なかよ</rt>' in build_ruby_html('仲良くしよう', 'x', 'y')
 
 print('OK')
+
+# 9. hint 比預測「多字」時不可以硬切:その他 的 fugashi 預測是 そのた,LLM 給 そのほか,
+#    舊版會把 他 標成單一個「か」(長度相同、是假名、沒有送り仮名可比,三道關卡都攔不住)。
+#    破綻在左邊的 その 這時對到「そのほ」—— 對不上自己就代表這一帶對歪了,整個跳過。
+words = [{'orig': 'その', 'hira': 'その'}, {'orig': '他', 'hira': 'た'},
+         {'orig': 'の', 'hira': 'の'}, {'orig': '日々', 'hira': 'ひび'}]
+apply_hint(words, 'そのほかのひび')
+assert hira_of(words, '他') == 'た', hira_of(words, '他')      # 不是 か
+assert hira_of(words, '日々') == 'ひび'
+# 對得上的鄰居不受影響:同一行結構、hint 長度一致時照樣要能修正
+words = [{'orig': 'その', 'hira': 'その'}, {'orig': '他', 'hira': 'ほか'},
+         {'orig': 'の', 'hira': 'の'}, {'orig': '君', 'hira': 'くん'}]
+apply_hint(words, 'そのほかのきみ')
+assert hira_of(words, '君') == 'きみ', hira_of(words, '君')
+
+print('OK')

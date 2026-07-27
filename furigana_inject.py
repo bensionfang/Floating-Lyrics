@@ -115,11 +115,38 @@ def apply_hint(words, hint, mark=False):
         return len(hint)
 
     pos = 0
+    spans = []
     for w in words:
-        start, end = pos, pos + len(w['hira'])
-        pos = end
+        spans.append((pos, pos + len(w['hira'])))
+        pos += len(w['hira'])
+
+    def aligned(i):
+        """
+        純假名的 token 對到的 hint 片段應該**原樣等於它自己** —— 不等於就代表這一帶對歪了。
+
+        這是唯一測得出「hint 比預測多字」的訊號:切片是按長度切的,長度相同就通過不了其他
+        檢查。實例 `その他`:fugashi 給 その(その) + 他(た),hint 是 そのほか,`他` 切到的是
+        1 個字的「か」(長度一樣、是假名、沒有送り仮名可比),三道現有的關卡全部放行,結果
+        標成 他=か。而它左邊的 その 這時對到的是「そのほ」,對不上自己 —— 那才是破綻。
+        (相鄰的是空白 token 時視同通過;真正的假名鄰居隔著空白的情況實測沒遇過。)
+        """
+        if i < 0 or i >= len(words):
+            return True
+        w = words[i]
+        if w.get('is_space') or re.search(r'[一-龯々]', w['orig']):
+            return True
+        s, e = spans[i]
+        hs, he = map_index(s), map_index(e)
+        if hs < 0 or he > len(hint) or hs > he:
+            return False
+        return hint[hs:he].translate(_KANA_EQ) == w['hira'].translate(_KANA_EQ)
+
+    for i, w in enumerate(words):
+        start, end = spans[i]
         if w.get('is_space') or not re.search(r'[一-龯々]', w['orig']):
             continue
+        if not aligned(i - 1) or not aligned(i + 1):
+            continue   # 左右的假名鄰居對不上自己 = 這一帶的對齊不可信,寧可留 fugashi 的讀音
 
         h_start, h_end = map_index(start), map_index(end)
         if h_start < 0 or h_end > len(hint) or h_start >= h_end:
