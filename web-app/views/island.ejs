@@ -80,6 +80,7 @@ function computeSongMaxW() {
   let w = 0;
   for (const it of lyrics) if (it.html) w = Math.max(w, measurePillW(it.html, '', el.l1));
   for (const t in translations) w = Math.max(w, measurePillW(translations[t], '', el.l1));
+  for (const t in romajis) w = Math.max(w, measurePillW(romajis[t], '', el.l1));
   songMaxW = w;
 }
 
@@ -206,6 +207,7 @@ let islandLines = 2, lastLine1 = null, idleTimer = null, wasPlaying = null, wasH
 let islandLine2 = 'next';
 // 時間戳 -> 譯文。譯文行不進 lyrics[],否則會被當成獨立一句輪播過去
 let translations = {};
+let romajis = {};
 
 let _lastDisplaySettings = null;
 function applySettings(s) {
@@ -225,7 +227,7 @@ function applySettings(s) {
 
   document.documentElement.classList.toggle('hide-furigana', s.show_furigana === false);
   islandLines = Number(s.island_lines) === 1 ? 1 : 2;
-  islandLine2 = s.island_line2 === 'translation' ? 'translation' : 'next';
+  islandLine2 = (s.island_line2 === 'translation' || s.island_line2 === 'romaji') ? s.island_line2 : 'next';
   // 行數只在「換行時」才會被套用 (frame() 判到 line1 沒變就提早 return),
   // 所以這裡要自己收掉第二行,並清掉 lastLine1 讓下一幀重畫 (1 → 2 行時把內容補回來)
   if (islandLines === 1) el.l2.classList.add('hidden');
@@ -350,6 +352,7 @@ function setLyrics(text) {
 function parseLrc(text) {
   const out = [];
   translations = {};
+  romajis = {};
   for (const line of text.split('\n')) {
     const m = line.match(/^((?:\[\d+:\d+(?:\.\d+)?\])+)(.*)$/);
     if (!m) continue;
@@ -360,32 +363,39 @@ function parseLrc(text) {
       const t = parseInt(mm) * 60 + parseFloat(ss);
       // 譯文與原句共用時間戳,收進對照表而不是當成獨立一句
       if (html.startsWith('#TRANS#')) translations[t] = html.substring(7);
+      // 羅馬拼音同樣共用時間戳,收進對照表 (第二行選它時才畫)。**一定要吃掉** ——
+      // 當成獨立一句的話,島上每句歌詞後面都會跟著一行羅馬字閃過去。
+      else if (html.startsWith('#ROMAJI#')) romajis[t] = html.substring(8);
       else out.push({ t, html });
     }
   }
   return out.sort((a, b) => a.t - b.t);
 }
 
-// 空行 (間奏) 落在活躍位置時,先看下一句,沒有再往回找最後一句有字的
 function pickLines(i) {
-  let line1 = lyrics[i].html;
-  let line2 = '';
-  // 第二行選「本句翻譯」時優先用譯文;這首歌沒有譯文就照舊退回「下一句歌詞」,
-  // 不然切了設定卻整片空白,看起來像壞掉
-  if (islandLine2 === 'translation' && line1) {
-    const t = translations[lyrics[i].t];
-    if (t) return [line1, t];
+  // 先決定「第一行實際是哪一句」:活躍位置落在空行 (間奏) 時先看後面,沒有再往回找。
+  // **這一步一定要在挑第二行之前** —— 舊版是先用 lyrics[i] 去查譯文/羅馬字,間奏時 line1
+  // 是空的所以整段跳過,接著才把下一句提上來當 line1,第二行就只剩「再下一句」。
+  // 症狀:每次經過音符符號,那一句的第二行就從羅馬拼音/翻譯變成下一句歌詞。
+  let idx = i;
+  if (!lyrics[i].html) {
+    idx = -1;
+    for (let k = i + 1; k < lyrics.length; k++) if (lyrics[k].html) { idx = k; break; }
+    if (idx < 0) for (let k = i - 1; k >= 0; k--) if (lyrics[k].html) { idx = k; break; }
+    if (idx < 0) return ['', ''];
   }
-  if (!line1) {
-    if (i + 1 < lyrics.length) {
-      line1 = lyrics[i + 1].html;
-      if (i + 2 < lyrics.length && lyrics[i + 2].html) line2 = lyrics[i + 2].html;
-    } else {
-      for (let k = i - 1; k >= 0; k--) if (lyrics[k].html) { line1 = lyrics[k].html; break; }
-    }
-  } else if (i + 1 < lyrics.length) {
-    if (lyrics[i + 1].html) line2 = lyrics[i + 1].html;
-    else if (i + 2 < lyrics.length && lyrics[i + 2].html) line2 = lyrics[i + 2].html;
+  const line1 = lyrics[idx].html;
+
+  // 第二行選「本句翻譯」或「本句羅馬拼音」時優先用它;這首歌沒有的話照舊退回
+  // 「下一句歌詞」,不然切了設定卻整片空白,看起來像壞掉
+  if (islandLine2 !== 'next') {
+    const alt = (islandLine2 === 'romaji' ? romajis : translations)[lyrics[idx].t];
+    if (alt) return [line1, alt];
+  }
+  // 「下一句歌詞」最多往後看兩句 (中間夾一個空行還算數),再遠的就跟現在這句沒關係了
+  let line2 = '';
+  for (let k = idx + 1; k <= idx + 2 && k < lyrics.length; k++) {
+    if (lyrics[k].html) { line2 = lyrics[k].html; break; }
   }
   return [line1, line2];
 }

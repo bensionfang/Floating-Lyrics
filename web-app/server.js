@@ -21,6 +21,7 @@ const { hasInlineRuby } = require('./lyric-quality');       // 內嵌注音的�
 const { cleanBrowserQuery, isMusicAppSource } = require('./browser-query');   // 瀏覽器來源的影片標題去噪
 const { autoMarkTitleLines } = require('./title-lines');   // 製作人員/版權列標記 #TITLE#
 const { mergeTranslations } = require('./translations');   // 中文譯文合併 #TRANS# (注音之後才做)
+const { mergeRomaji } = require('./romaji');               // 羅馬拼音合併 #ROMAJI# (讀音直接取自注音結果)
 const { pickDistractors, filterArtistTracks } = require('./game');   // 猜歌遊戲:選項與提示句的挑選規則
 const { titleKey } = require('./public/js/song-key');                // 曲目池去重 (前後端共用那份)
 require('dotenv').config();
@@ -610,7 +611,7 @@ global.updateSettings = function (patch) {
   }
   // 這幾個都是「產出內容」而非純樣式,改了要重新推播,不然要等換歌才看得到。
   // 片假名 ruby 在注音時就決定;譯文在注音之後才併進去;島的第二行來源決定要不要帶譯文。
-  const REBROADCAST_KEYS = ['katakana_ruby', 'show_translation', 'island_line2'];
+  const REBROADCAST_KEYS = ['katakana_ruby', 'show_translation', 'show_romaji', 'island_line2'];
   if (REBROADCAST_KEYS.some((k) => k in patch) && currentMediaState.title) {
     rebroadcastLyrics(currentMediaState.artist, currentMediaState.title);
   }
@@ -644,6 +645,16 @@ const LLM_PROVIDERS = [
   { name: 'OpenAI',     base: 'https://api.openai.com/v1',     prefer: 'gpt-4o-mini',             match: k => k.startsWith('sk-') },
 ];
 
+// Anthropic 的 /v1/models 不吃 Bearer,要 x-api-key + anthropic-version —— 用 Bearer 一律 401,
+// 而兩個呼叫端都把失敗吞掉,症狀是「模型清單永遠空白、貼了 sk-ant- 也偵測不出供應商」。
+function llmAuthHeaders(baseUrl, key) {
+  if (!key) return {};
+  if (/(^|\/\/)api\.anthropic\.com/.test(baseUrl)) {
+    return { 'x-api-key': key, 'anthropic-version': '2023-06-01' };
+  }
+  return { Authorization: `Bearer ${key}` };
+}
+
 // 前綴認不出來就**不猜**:BYOK 的前提是 key 只會去使用者指定的地方。舊版認不出時會拿
 // 整份清單依序試,等於把自架端點 / 公司 gateway 的 key 送給 Anthropic、OpenRouter、
 // Groq、Gemini、OpenAI 各一次。認不出來回 null,讓使用者自己填 Base URL 就好。
@@ -652,7 +663,7 @@ async function detectLlmProvider(key) {
   if (!matched.length) return null;
   for (const p of matched) {
     try {
-      const headers = { Authorization: `Bearer ${key}` };
+      const headers = llmAuthHeaders(p.base, key);
       const auth = await fetch(p.auth || (p.base + '/models'), { headers, signal: AbortSignal.timeout(6000) });
       if (!auth.ok) continue;
       // key 驗過了,再抓模型清單挑 model (抓不到就用 prefer)
@@ -669,6 +680,24 @@ async function detectLlmProvider(key) {
   return null;
 }
 
+// /models 會把整個帳號看得到的東西都倒出來 (embedding、影像、語音、審核…),那些選了只會在
+// /chat/completions 回錯。這張表是「一定不是對話模型」的關鍵字,寧可漏擋也不要擋掉真的能用的。
+const NON_CHAT_MODEL = /embed|imagen|veo|aqa|tts|whisper|dall-?e|moderation|rerank|bison|gecko|davinci|babbage|-vision|image-gen/i;
+
+// 供應商的 /models **不標「已淘汰」**,所以沒辦法真的濾掉舊模型 (Gemini 會一路回到 1.0)。
+// 能做的是排序:同一系列擺在一起、系列內新版在前,舊的自然沉到底。
+//   family = 第一個數字之前那段 (gemini-2.5-flash → gemini、claude-haiku-4-5 → claude-haiku)
+//   version = 第一串數字,`4-5` 這種連字號寫法算 4.5
+// **跨系列比數字沒有意義** (gemma-3 不比 gemini-2.5 新),所以系列先照字母分群再比版本。
+// `(?!b)` 是為了別把參數量當版本:gemma-3-4b-it 的版本是 3,不是 3.4。
+function modelFamily(id) {
+  return id.split(/\d/)[0].replace(/[-_.\s]+$/, '');
+}
+function modelVersion(id) {
+  const m = id.match(/(\d+(?:[.-]\d+(?!b))?)/i);
+  return m ? parseFloat(m[1].replace('-', '.')) : 0;
+}
+
 // Model 欄的 datalist 建議清單:用現設 Base URL + 已存 key 打 /models (key 不出 server)。
 // 沒 key 也試 (Ollama 不用 key);失敗回空陣列,前端 datalist 空著、輸入框照常手打。
 app.get('/api/llm-models', async (req, res) => {
@@ -676,10 +705,17 @@ app.get('/api/llm-models', async (req, res) => {
     let cur = {};
     try { cur = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')); } catch (e) {}
     if (!cur.llm_base_url) return res.json({ models: [] });
-    const headers = llmApiKey ? { Authorization: `Bearer ${llmApiKey}` } : {};
+    const headers = llmAuthHeaders(cur.llm_base_url, llmApiKey);
     const r = await fetch(cur.llm_base_url.replace(/\/$/, '') + '/models', { headers, signal: AbortSignal.timeout(6000) });
     const data = r.ok ? await r.json() : null;
-    const models = (data && Array.isArray(data.data)) ? data.data.map(m => m.id) : [];
+    // Gemini 的 id 帶 models/ 前綴 (models/gemini-2.5-flash),照抄進設定會存成不能直接用的名字。
+    // 只剝這一個字面前綴 —— OpenRouter 的斜線是有意義的 (deepseek/deepseek-chat)。
+    const raw = (data && Array.isArray(data.data)) ? data.data.map(m => String(m.id).replace(/^models\//, '')) : [];
+    const models = raw
+      .filter(id => !NON_CHAT_MODEL.test(id))
+      .sort((a, b) => modelFamily(a).localeCompare(modelFamily(b))
+        || modelVersion(b) - modelVersion(a)
+        || a.localeCompare(b));
     res.json({ models, error: r.ok ? undefined : `HTTP ${r.status}` });
   } catch (e) {
     res.json({ models: [], error: e.message });
@@ -815,9 +851,18 @@ function ensureTranslations(artist, title) {
     .then(() => rebroadcastLyrics(artist, title));
 }
 
+/**
+ * 譯文/羅馬字要不要併進廣播。**島的第二行選了它也算要** —— 那兩行是同一份廣播內容,
+ * 只看歌詞區的開關的話,島設成「本句翻譯」卻關著「顯示中文翻譯」時島上永遠是空的。
+ */
+function wantsExtraLine(kind) {
+  const s = readSettings();
+  return s[kind === 'romaji' ? 'show_romaji' : 'show_translation'] === true || s.island_line2 === kind;
+}
+
 /** 注音完的 HTML 併上譯文。關閉設定時逐字原樣回傳,開啟但查無資料時觸發背景補抓。 */
 function applyTranslations(artist, title, html) {
-  if (readSettings().show_translation !== true) return Promise.resolve(html);
+  if (!wantsExtraLine('translation')) return Promise.resolve(html);
   return new Promise((resolve) => {
     db.get('SELECT data FROM lyrics_translations WHERE artist = ? AND title = ?', [artist, title], (err, row) => {
       // 建表是非同步的,全新 DB 上這支 SELECT 可能先到 —— 有 callback 就不會炸成未捕捉例外
@@ -837,7 +882,9 @@ function applyTranslations(artist, title, html) {
 // meta (選填) 是 out-param:force 重跑時 Python 回報的 LLM 失敗原因放 meta.llmError
 function injectFurigana(artist, title, lyrics, forceLlm = false, meta = null) {
   return injectFuriganaRaw(artist, title, lyrics, forceLlm, meta)
-    .then((html) => applyTranslations(artist, title, html));
+    .then((html) => applyTranslations(artist, title, html))
+    // 羅馬字要在譯文之後 —— 兩者都插在歌詞行後面,後插的會排在前面,順序才是 歌詞/羅馬字/譯文
+    .then((html) => (wantsExtraLine('romaji') ? mergeRomaji(html) : html));
 }
 
 // 譯文刻意不進 furiganaCache:切換「顯示翻譯」就不必重跑 python,快取也不用多一個比對維度
@@ -1086,6 +1133,12 @@ app.post('/api/llm-furigana/run', (req, res) => {
 
   db.get('SELECT lyrics FROM cache WHERE title = ? AND artist = ?', [title, artist], async (err, row) => {
     if (err || !row || !row.lyrics) return res.status(404).json({ error: '這首歌沒有快取歌詞' });
+    // 沒假名 = 中文歌 (或同名中文歌被抓錯進快取)。furigana_inject.process_lrc 對這種歌整份原樣退回、
+    // 根本不呼叫 LLM,而它「沒錯誤」的回覆會讓魔杖亮燈說「校正完成,無需修正」—— 使用者看不出
+    // 自己在對一份不是日文的歌詞按魔杖。判準與 process_lrc 的假名分界同一條。
+    if (!/[぀-ヿ]/.test(row.lyrics)) {
+      return res.json({ success: false, error: '這首歌沒有日文假名，不需要讀音校正' });
+    }
     row.lyrics = toTraditional(row.lyrics);
     const meta = {};
     const injected = await injectFurigana(artist, title, row.lyrics, true, meta);
@@ -1093,9 +1146,13 @@ app.post('/api/llm-furigana/run', (req, res) => {
       global.broadcast({ type: 'lyrics_updated', title, artist, lyrics: injected });
     }
     if (meta.llmError) {
-      // 原始錯誤 (含 URL 的 requests 例外字串) 太吵,收斂成人話;細節 Python 已印在 stderr
+      // 原始錯誤 (含 URL 的 requests 例外字串) 太吵,收斂成人話;細節 Python 已印在 stderr。
+      // **但供應商自己回的訊息比我們猜的準** (「這個模型不再開放給新使用者」vs 我們的
+      // 「Base URL 或 Model 有誤」),llm_furigana 有撈到就直接用它。
       const e = meta.llmError;
-      const friendly = /401|403/.test(e) ? 'API Key 無效或與供應商不符'
+      const upstream = (e.match(/^HTTP \d+: (.+)$/s) || [])[1];
+      const friendly = upstream ? upstream.trim().slice(0, 200)
+        : /401|403/.test(e) ? 'API Key 無效或與供應商不符'
         : /404/.test(e) ? 'Base URL 或 Model 有誤'
         : /timed?\s?out|connection|max retries/i.test(e) ? '無法連線至端點，請檢查 Base URL'
         : /[一-鿿]/.test(e) ? e   // Python 端給的中文訊息本來就簡短,直接用

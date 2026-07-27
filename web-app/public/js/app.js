@@ -470,6 +470,12 @@ function parseLrcLyrics(lrcText) {
             if (prev) prev.translation = text.substring(7);
             return;
         }
+        // 羅馬拼音行 (server 端 mergeRomaji 插的),同樣掛到上一句而不自成一行
+        if (text.startsWith('#ROMAJI#')) {
+            const prev = parsedLyrics[parsedLyrics.length - 1];
+            if (prev) prev.romaji = text.substring(8);
+            return;
+        }
         
         timeReg.lastIndex = 0;
         let lineHasTag = false;
@@ -523,8 +529,8 @@ function parseLrcLyrics(lrcText) {
                     prev.translation += ' / ' + current.text;
                 }
             } else {
-                // translation 要帶過來 —— #TRANS# 行是在上面掛到物件上的,寫死 null 會把它洗掉
-                mergedLyrics.push({ time: current.time, text: current.text, translation: current.translation || null });
+                // translation/romaji 要帶過來 —— 那兩行是在上面掛到物件上的,寫死 null 會把它洗掉
+                mergedLyrics.push({ time: current.time, text: current.text, translation: current.translation || null, romaji: current.romaji || null });
             }
         }
         parsedLyrics = mergedLyrics;
@@ -558,6 +564,10 @@ function renderLyrics() {
     
     let html = parsedLyrics.map((lyric, index) => {
         let content = `<span>${lyric.text}</span>`;
+        // 羅馬字排在歌詞與譯文之間:它是同一句的讀法,比譯文更貼著原句
+        if (lyric.romaji) {
+            content += `<div class="lyrics-romaji"><span>${lyric.romaji}</span></div>`;
+        }
         if (lyric.translation) {
             // 內層再包一顆 span:段落循環的綠底只上在 span 上,好貼著文字而不是整行滿寬。
             // 直接給這顆 div 上底色會變方塊,而 width:fit-content 又會讓歌詞對齊 (text-align) 失效

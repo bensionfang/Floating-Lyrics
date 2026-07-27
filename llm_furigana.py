@@ -132,7 +132,23 @@ def fetch_llm_hints(artist, title, lrc_text):
             },
             timeout=30,
         )
-        resp.raise_for_status()
+        # 不用 raise_for_status():它的例外字串只有狀態碼,**回應內容整份丟掉** —— 而供應商
+        # 的錯誤原因就寫在裡面 (Gemini 對退場的模型回「no longer available to new users」,
+        # 光看 404 只會以為是 Base URL 打錯)。錯誤 body 撈出來往上帶,使用者才看得懂。
+        # Gemini 的錯誤 body 是**包在陣列裡**的 [{"error": {...}}],所以要拆一層。
+        if resp.status_code >= 400:
+            detail = ''
+            try:
+                data = resp.json()
+                if isinstance(data, list) and data:
+                    data = data[0]
+                if isinstance(data, dict):
+                    detail = (data.get('error') or {}).get('message') or ''
+            except ValueError:
+                pass
+            if not detail:
+                detail = (resp.text or '').strip()[:200]
+            raise RuntimeError(f"HTTP {resp.status_code}: {detail}"[:400])
         content = resp.json()['choices'][0]['message']['content']
     except Exception as e:
         LAST_ERROR = str(e)

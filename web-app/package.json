@@ -45,6 +45,7 @@
       "browser-query.js",
       "title-lines.js",
       "translations.js",
+      "romaji.js",
       "game.js",
       "island.js",
       "island-position.js",

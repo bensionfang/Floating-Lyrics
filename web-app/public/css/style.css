@@ -420,8 +420,46 @@ button.menu-action {
     cursor: text;
 }
 
-/* 模式/供應商下拉與下面文字欄同寬,左緣對齊 */
-#llm-mode, #llm-preset {
+/* 自己畫的下拉清單 (select-menu.js)。原生 select 的彈窗是瀏覽器畫的,選項 hover 的藍底
+   在 Chromium 130 沒有任何 CSS 改得到,所以整個彈窗自己來,hover 才會是專案的綠色。 */
+.sel-pop {
+    position: fixed;
+    z-index: 10600;   /* 設定選單之上 */
+    max-height: 280px;
+    overflow-y: auto;
+    padding: 4px;
+    background: var(--panel-bg);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+.sel-pop-item {
+    padding: 6px 10px;
+    border-radius: 4px;
+    font-size: 13px;
+    color: var(--text-primary);
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.sel-pop-item.is-sel { color: var(--accent-main); }
+
+.sel-pop-item:hover,
+.sel-pop-item.is-sel:hover {
+    background: var(--accent-main);
+    color: #000;   /* 綠底配黑字,跟播放列的綠色按鈕同一套 */
+}
+
+/* 歌詞編輯器的歌曲清單是 <select size="10">,畫在頁面裡而不是彈窗 —— 這種的
+   option 樣式吃得到,不必走 .sel-pop 那套 */
+.editor-select option:checked {
+    background: var(--accent-main);
+    color: #000;
+}
+
+/* 模式/供應商/模型下拉與文字欄同寬,左緣對齊 */
+#llm-mode, #llm-preset, #llm-model {
     width: 210px;
     max-width: none;
 }
@@ -796,6 +834,15 @@ button.menu-action i {
     margin-top: 4px;
 }
 
+/* 羅馬拼音:字體、字重、反白時機都跟歌詞本身一樣 (不用 Poppins、不斜體),
+   只是小一號當次要行 —— 它是同一句的讀法,不該長得像另一種東西 */
+.lyrics-romaji {
+    font-size: 0.7em;
+    font-weight: 400;   /* 歌詞本身是粗體,羅馬字跟著粗會搶掉主行的份量 */
+    color: var(--lyrics-inactive, rgba(255, 255, 255, 0.4));
+    margin-top: 2px;
+}
+
 .lyrics-line.active {
     color: #ffffff;
 }
@@ -809,7 +856,8 @@ button.menu-action i {
 /* 譯文收在內層 span 上而不是那顆 div:div 是 block,可點範圍會拉滿整行寬度,
    點到右邊空白處也會跳轉。pointer-events 是可繼承屬性,所以 div 從 .lyrics-line 拿到 none */
 .lyrics-line > span,
-.lyrics-line .lyrics-translation > span {
+.lyrics-line .lyrics-translation > span,
+.lyrics-line .lyrics-romaji > span {
     pointer-events: auto;
     cursor: pointer;
 }
@@ -836,18 +884,21 @@ button.menu-action i {
 /* rt 與譯文都自己設了 color,不寫這兩條的話 hover 只會傳下去底線 (text-decoration 會
    繼承、color 不會),變成「有底線但沒變白」的半套 hover */
 .lyrics-line:not(.active):hover rt,
-.lyrics-line:not(.active):hover .lyrics-translation {
+.lyrics-line:not(.active):hover .lyrics-translation,
+.lyrics-line:not(.active):hover .lyrics-romaji {
     color: #ffffff;
 }
 
-.lyrics-line.active .lyrics-translation {
+.lyrics-line.active .lyrics-translation,
+.lyrics-line.active .lyrics-romaji {
     color: #ffffff;
 }
 
 /* 假名編輯模式:整行的 hover 反白關掉,只有游標指到的漢字亮起來 */
 body.ruby-edit-mode .lyrics-line:not(.active):hover,
 body.ruby-edit-mode .lyrics-line:not(.active):hover rt,
-body.ruby-edit-mode .lyrics-line:not(.active):hover .lyrics-translation {
+body.ruby-edit-mode .lyrics-line:not(.active):hover .lyrics-translation,
+body.ruby-edit-mode .lyrics-line:not(.active):hover .lyrics-romaji {
     color: var(--lyrics-inactive, rgba(255, 255, 255, 0.5));
     text-decoration: none;
     cursor: default;
@@ -898,10 +949,12 @@ body.loop-mode .lyrics-line:hover > span,
     -webkit-box-decoration-break: clone;
 }
 
-/* 譯文那行也要一起上底色,不然選起來的段落只有日文有綠底。它沒有 rt 要讓位,
+/* 譯文與羅馬字那兩行也要一起上底色,不然選起來的段落只有日文有綠底。它們沒有 rt 要讓位,
    所以上下 padding 對稱,不沿用上面那組 */
 body.loop-mode .lyrics-line:hover .lyrics-translation > span,
-.lyrics-line.loop-range .lyrics-translation > span {
+body.loop-mode .lyrics-line:hover .lyrics-romaji > span,
+.lyrics-line.loop-range .lyrics-translation > span,
+.lyrics-line.loop-range .lyrics-romaji > span {
     border-radius: 6px;
     padding: 0.15em 10px;
     box-decoration-break: clone;
@@ -909,12 +962,14 @@ body.loop-mode .lyrics-line:hover .lyrics-translation > span,
 }
 
 body.loop-mode .lyrics-line:hover > span,
-body.loop-mode .lyrics-line:hover .lyrics-translation > span {
+body.loop-mode .lyrics-line:hover .lyrics-translation > span,
+body.loop-mode .lyrics-line:hover .lyrics-romaji > span {
     background: rgba(29, 185, 84, 0.18);
 }
 
 .lyrics-line.loop-range > span,
-.lyrics-line.loop-range .lyrics-translation > span {
+.lyrics-line.loop-range .lyrics-translation > span,
+.lyrics-line.loop-range .lyrics-romaji > span {
     background: rgba(29, 185, 84, 0.10);
 }
 

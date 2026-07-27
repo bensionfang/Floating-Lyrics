@@ -53,7 +53,7 @@ gh release create v1.1.0 \
 tag 沒帶 `v` 或漏推,純 node 模式的更新提醒也抓不到新版。安裝檔未簽章,`gh release create` 會直接
 公開發布,屬於「發布公開內容」的動作,不要自動執行,要使用者自己按。
 - 靈動島 = Electron 的一個視窗 (`web-app/island.js`),由 `npm run app` 一起帶起,沒有獨立進程也沒有 build 步驟。
-- 沒有 test runner 或 linter。零星的獨立測試檔直接用直譯器跑:`node tests/test_origin_guard.js` (同源守門)、`node tests/test_s2t.js` (簡轉繁)、`node tests/test_lyric_quality.js` (內嵌注音的歌詞守門)、`node tests/test_search_query.js` (繁轉簡 + 瀏覽器標題去噪)、`node tests/test_title_lines.js` (製作人員/版權列標記)、`node tests/test_translations.js` (中文譯文合併)、`node tests/test_itunes_resolving.js` (iTunes 原名還原的時序)、`node tests/test_history_toggle.js` (聆聽紀錄開關 + 清除白名單)、`node tests/test_backup_restore.js` (備份/還原 + 還原前的驗證守門)、`node tests/test_scroll_zone.js` (歌詞自動捲動的三段判定)、`node tests/test_game.js` (猜歌的干擾選項挑選)、`node tests/test_island_position.js` (靈動島的多螢幕位置記憶)、`python tests/test_pick_session.py`、`python tests/test_furigana_hint.py` (Python 的要用 `venv/Scripts/python.exe`,系統 python 沒裝 fugashi)。
+- 沒有 test runner 或 linter。零星的獨立測試檔直接用直譯器跑:`node tests/test_origin_guard.js` (同源守門)、`node tests/test_s2t.js` (簡轉繁)、`node tests/test_lyric_quality.js` (內嵌注音的歌詞守門)、`node tests/test_search_query.js` (繁轉簡 + 瀏覽器標題去噪)、`node tests/test_title_lines.js` (製作人員/版權列標記)、`node tests/test_translations.js` (中文譯文合併)、`node tests/test_romaji.js` (羅馬拼音)、`node tests/test_itunes_resolving.js` (iTunes 原名還原的時序)、`node tests/test_history_toggle.js` (聆聽紀錄開關 + 清除白名單)、`node tests/test_backup_restore.js` (備份/還原 + 還原前的驗證守門)、`node tests/test_scroll_zone.js` (歌詞自動捲動的三段判定)、`node tests/test_game.js` (猜歌的干擾選項挑選)、`node tests/test_island_position.js` (靈動島的多螢幕位置記憶)、`node tests/test_llm_wand.js` (魔杖對非日文歌詞的守門)、`python tests/test_pick_session.py`、`python tests/test_furigana_hint.py` (Python 的要用 `venv/Scripts/python.exe`,系統 python 沒裝 fugashi)。
 - `ROADMAP.md` (repo 根,**本機檔案,不進版控**) 記著 v1.0.0 之後的規劃與**明確不做的事**。動到「未來要做什麼」的討論先看它,免得重新提案已經否決過的方向 (雲端同步、換 tokenizer、離線辭典、Steam 式強制更新)。clone 下來沒有這個檔屬正常。
   主軸是**歌詞體驗**,不是學日文 —— 翻譯/查詞這類功能要進來,得先過「它讓歌詞更好讀嗎」這一關。
 
@@ -88,6 +88,15 @@ One Node.js backend, multiple thin clients, with Python scripts as helpers spawn
     - 譯文只在抓歌詞時搭便車存下來,所以改版前的舊快取一首都沒有。`ensureTranslations()` 會在開了設定卻查無資料時背景補抓一次。**`translationJobs` 成功失敗都留著鍵** —— 抓失敗時 pytools 不會寫負快取,鍵一刪就變成「補抓 → rebroadcast → 還是沒有 → 再補抓」的無窮迴圈。
     - 三家的譯文位置:網易 `tlyric` (自帶時間戳)、酷狗 krc `language` 軌 `type=1` (行序對齊)、QQ `contentts`。**QQ 那條是明文 LRC 而非加密 QRC**,所以走 `_qq_plain_track()` 不走 `_qq_track()`;而且那支端點不回 charset,`requests` 會猜成 ISO-8859-1 把譯文變亂碼,`r.encoding = "utf-8"` 不能拿掉 (主歌詞軌是 hex ASCII 所以看不出問題)。
     - 回歸測試 `node tests/test_translations.js`。
+  - **羅馬拼音 (`web-app/romaji.js`) 的讀音直接取自注音結果,不另外去要。** 注音後每個漢字詞都帶著 `<ruby>漢字<rt>かな</rt></ruby>`,整行的假名已經在畫面上了,假名→羅馬字是確定性轉換。反過來 (羅馬字→假名) 才有損失 (づ/ず、ぢ/じ 分不出來,助詞 は/へ/を 寫成 wa/e/o 就回不去) —— 那正是 `cn_music` 的羅馬字提示要層層修正的原因,**不要為了羅馬字再打一次 LLM,那是把方向做反**。插入方式與 `#TRANS#` 完全一致,併在 `mergeTranslations` 之後,所以順序是 歌詞 / 羅馬字 / 譯文。設定 `show_romaji` (預設關) 在 server 端決定要不要併,所以它也在 `REBROADCAST_KEYS` 裡。
+    - **詞的邊界靠 ruby 的 `data-hs`**:那是「這顆 ruby 佔整詞讀音的第幾個字」,`0` = 詞頭。**不能每個 ruby 邊界都斷** —— 送り仮名會把一個詞拆成好幾顆 ruby (噛み締め = 噛 + み + 締 + め,第二顆 `data-hs='2'`),每顆都斷會變成 `ka mi shi me`。
+    - 夾在 ruby 之間、**整段正好是常見單字助詞**的才前後斷開 (の は が を に へ と で も や か ね よ),其餘黏著:全斷會裂開「聞こえる」,全不斷就是一長串沒空格的字母。助詞前的標點要先剝掉再判斷 (`も、` 很常見),片假名詞後面直接黏著助詞的 (`ドアを`) 另外拆一次 —— **只拆片假名**,平假名這樣拆會把 `ばか` 拆成 `ba ka`。
+    - 已知取捨:助詞黏在送り仮名後面時 (`乾きの` 這種一整段 `きの`) 不會斷開,出來是 `kawakino`。要根治得讓 python 端輸出詞界,那要動 `build_ruby_html` 的核心迴圈,不值得。
+    - **輸出要重新逃逸**:來源是已逃逸的歌詞,而比對讀音時會先解回實體字串,不逃逸等於把 `&lt;img&gt;` 還原成真標籤。
+    - 靈動島**必須吃掉 `#ROMAJI#` 行** (`island.ejs` 的 `parseLrc`),不然每句歌詞後面會跟著一行羅馬字閃過去。收進 `romajis` 對照表後,島的「第二行顯示」多一個選項「本句羅馬拼音」(與「本句翻譯」共用 `pickLines` 那條路,沒有資料就退回「下一句歌詞」)。**`pickLines` 要先決定「第一行實際是哪一句」再挑第二行** —— 活躍位置落在空行 (間奏) 時第一行會提後面那句上來,先查譯文/羅馬字的話那次查的是空行的時間戳、查不到,第二行就掉回「下一句歌詞」:症狀是每經過一次音符符號,那句的第二行就換成下一句歌詞。
+    - **要不要併進廣播由 `wantsExtraLine()` 決定:歌詞區的開關 **或** 島的第二行選了它。** 兩者是同一份廣播內容,只看歌詞區開關的話,島設成「本句翻譯/羅馬拼音」卻關著對應開關時,島上永遠是空的。
+    - 樣式跟著歌詞本體走 (同字體、不斜體,只小一號):唱到那句一起反白、段落循環的綠底一起上、hover 一起變白 —— **`.lyrics-romaji` 要跟 `.lyrics-translation` 出現在同一組選擇器裡**,漏掉哪一組就是那個狀態下只有日文變、羅馬字不變。
+    - 回歸測試 `node tests/test_romaji.js`。
   - **瀏覽器 (YouTube) 來源的三道處理都以 `web-app/browser-query.js` 的 `isMusicAppSource()` 為閘門** (`MUSIC_APPS` 是 `media_monitor.py` 那份的手動鏡射;未知來源保守當音樂 app)。
     - 歌名去噪 `cleanBrowserQuery()`:含噪音關鍵字的整塊括號、`「」`/`『』`/`【】` 內文優先當歌名、無括號的尾綴噪音 (Official Music Video / MV / 中文字幕…)、尾段確實等於歌手時的 `歌名／歌手`、開頭確實等於歌手時的 `歌手 - 歌名` (YouTube 最常見的形狀,不剝的話快取鍵是「ヨルシカ - 春泥棒」,跟 Spotify 聽的「春泥棒」分裂成兩筆)、歌手的 `- Topic`/`VEVO` 尾綴。全部剝光時退回原始標題。`歌名／歌手` 與 `歌手 - 歌名` 用同一條判準 (正規化後互相包含),對不上就原樣留著 —— 所以歌名本身帶連字號的 (`怪獣の花唄 - replica -`) 不受影響。
     - **套用點是 `handleMediaUpdate` 的第一步 (去噪 → iTunes 還原 → `canonicalArtist` 別名收斂)**,不是只洗搜尋字串:每張表的鍵都是 (artist, title),不進場洗的話「Chevon-シェボン / ダンス・デカダンス／Chevon 【Lyric Video】」會跟 Spotify 聽的同一首在 cache 與排行榜分裂成兩筆 (`base_title` 只剝圓括號,`【】` 不在範圍)。原字串留在 `original_title`/`original_artist`。音樂 app 來源一個字都不動 —— `(Live)`/`(feat. …)` 是真的版本資訊。

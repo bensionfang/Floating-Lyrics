@@ -309,25 +309,69 @@
             const p = LLM_PRESETS[name] || ['', ''];   // 自訂 = 清空,讓使用者從頭填
 
             document.getElementById('llm-base-url').value = p[0];
-            document.getElementById('llm-model').value = p[1];
+            setLlmModel(p[1]);
             await saveSettingsToServer('llm_base_url', p[0]);
             saveSettingsToServer('llm_model', p[1]);
             loadLlmModels(true);
         }
-        // Model 欄的建議清單:跟 server 要目前端點的 /models (key 留在 server)。失敗就空著;
+        // Model 是 <select> 而不是 datalist 的輸入框:供應商動輒回幾十個模型,datalist 的彈窗
+        // 高度不能控 (長清單看不到最下面)、而且**在它開著的時候換 <option> 會讓彈窗直接關掉**,
+        // 抓清單與展開必然打架。select 的彈窗自己會捲、能打字跳字母,長清單本來就是它的守備範圍。
+        // 代價是要自己補「自訂名稱」那條路 (Ollama 的本機 tag、供應商還沒列進 /models 的新模型)。
+        const LLM_CUSTOM = '__custom__';
+
+        // 現在生效的模型:select 選不到 (清單還沒抓、或供應商根本沒列) 就自己補一個 option,
+        // 否則 select.value = x 對不存在的值會靜默變成空白,看起來像設定不見了。
+        function setLlmModel(v) {
+            const sel = document.getElementById('llm-model');
+            if (!sel) return;
+            if (v && ![...sel.options].some(o => o.value === v)) {
+                sel.insertBefore(new Option(v, v), sel.firstChild);
+            }
+            sel.value = v || '';
+            const row = document.getElementById('llm-model-custom-row');
+            if (row) row.style.display = 'none';
+        }
+        function currentLlmModel() {
+            const sel = document.getElementById('llm-model');
+            return sel && sel.value !== LLM_CUSTOM ? sel.value : '';
+        }
+        function onLlmModelChange(sel) {
+            const row = document.getElementById('llm-model-custom-row');
+            if (sel.value === LLM_CUSTOM) {
+                // 「自訂」只是展開輸入框,還沒有值可以存 —— 這時不要寫 settings,不然會存進 __custom__
+                if (row) row.style.display = '';
+                const el = document.getElementById('llm-model-custom');
+                if (el) { el.value = ''; el.focus(); }
+                return;
+            }
+            if (row) row.style.display = 'none';
+            saveSettingsToServer('llm_model', sel.value);
+        }
+        function saveLlmCustomModel(el) {
+            const v = el.value.trim();
+            if (!v) return;
+            setLlmModel(v);                     // 補進清單並選起來,下次打開就看得到
+            saveSettingsToServer('llm_model', v);
+        }
+
+        // Model 清單:跟 server 要目前端點的 /models (key 留在 server)。失敗就維持原狀;
         // 換供應商時失敗會 toast (401 幾乎都是 key 跟端點對不上),打開選單時安靜。
         function loadLlmModels(toastOnError) {
-            fetch('/api/llm-models')
+            return fetch('/api/llm-models')
                 .then(r => r.json())
                 .then(d => {
-                    const dl = document.getElementById('llm-model-list');
-                    if (!dl) return;
-                    dl.innerHTML = '';
-                    (d.models || []).forEach(id => {
-                        const o = document.createElement('option');
-                        o.value = id;
-                        dl.appendChild(o);
-                    });
+                    const sel = document.getElementById('llm-model');
+                    if (!sel) return;
+                    const models = d.models || [];
+                    // 抓失敗 (端點暫時掛掉、key 剛換到一半) 就留著上一份清單 —— 清空等於把使用者
+                    // 剛剛還選得到的模型洗掉,而每次展開設定都會重抓,那會變成「開一次就空了」
+                    if (d.error && !models.length) return;
+                    const cur = currentLlmModel();
+                    sel.innerHTML = '';
+                    models.forEach(id => sel.appendChild(new Option(id, id)));
+                    sel.appendChild(new Option('自訂名稱…', LLM_CUSTOM));
+                    setLlmModel(cur);
                     if (toastOnError && d.error) hkToast(`模型清單抓取失敗 (${d.error})，檢查 API Key 是否屬於這家供應商`);
                 })
                 .catch(() => {});
@@ -355,14 +399,15 @@
                 if (d.detected) {
                     const b = document.getElementById('llm-base-url');
                     if (b) b.value = d.detected.base_url;
-                    const m = document.getElementById('llm-model');
-                    if (m) m.value = d.detected.model;
+                    setLlmModel(d.detected.model);
                     hkToast(`已偵測 ${d.detected.name}，自動填入端點與模型`);
                     syncLlmPresetSelect();
                 } else {
                     hkToast(d.set ? 'API Key 已儲存' : 'API Key 已清除');
                 }
                 refreshLlmKeyStatus();
+                // 清單是「用這把 key 打 /models」抓的,換 key 就重抓;清掉 key 只留現用的那個
+                if (d.set) loadLlmModels(false); else setLlmModel(currentLlmModel());
             })
             .catch(() => hkToast('API Key 儲存失敗'));
         }
@@ -972,6 +1017,8 @@
                 if (krEl) krEl.checked = data.katakana_ruby === true;
                 const trEl = document.getElementById('setting-translation');
                 if (trEl) trEl.checked = data.show_translation === true;
+                const roEl = document.getElementById('setting-romaji');
+                if (roEl) roEl.checked = data.show_romaji === true;
                 if (data.auto_lyrics_options !== undefined) {
                     const alEl = document.getElementById('setting-auto-lyrics-options');
                     if (alEl) alEl.checked = data.auto_lyrics_options;
@@ -1001,8 +1048,7 @@
                 if (llmMode) llmMode.value = data.llm_furigana || 'off';
                 const llmBase = document.getElementById('llm-base-url');
                 if (llmBase && data.llm_base_url) llmBase.value = data.llm_base_url;
-                const llmModel = document.getElementById('llm-model');
-                if (llmModel && data.llm_model) llmModel.value = data.llm_model;
+                if (data.llm_model) setLlmModel(data.llm_model);
                 syncLlmPresetSelect();
 
                 if (data.font_size !== undefined) {

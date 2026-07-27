@@ -14,11 +14,13 @@
     <!-- FontAwesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Style -->
-    <link rel="stylesheet" href="/css/style.css?v=99">
+    <link rel="stylesheet" href="/css/style.css?v=102">
     <!-- Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <!-- 各頁共用:吐司 + 備選歌詞 + 重新載入歌詞 -->
     <script src="/js/lyrics-tools.js?v=11" defer></script>
+    <!-- 設定選單的下拉:自己畫彈出清單 (原生 select 的 hover 底色改不了,見該檔說明) -->
+    <script src="/js/select-menu.js?v=2" defer></script>
     <script>
         (function() {
             const fs = localStorage.getItem('fontsize');
@@ -51,6 +53,13 @@
                         <span class="menu-label">顯示中文翻譯</span>
                         <label class="toggle-switch">
                             <input type="checkbox" id="setting-translation" onchange="updateLyricsContentSetting('show_translation', this.checked)">
+                            <span class="slider round"></span>
+                        </label>
+                    </div>
+                    <div class="menu-row">
+                        <span class="menu-label">顯示羅馬拼音</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="setting-romaji" onchange="updateLyricsContentSetting('show_romaji', this.checked)">
                             <span class="slider round"></span>
                         </label>
                     </div>
@@ -133,6 +142,7 @@
                             <select id="setting-island-line2" class="menu-select" onchange="saveSettingsToServer('island_line2', this.value)">
                                 <option value="next" selected>下一句歌詞</option>
                                 <option value="translation">本句翻譯</option>
+                                <option value="romaji">本句羅馬拼音</option>
                             </select>
                         </div>
                         <div class="hk-row">
@@ -185,12 +195,15 @@
                         </div>
                         <div class="hk-row">
                             <span class="hk-label">Base URL</span>
-                            <input type="text" id="llm-base-url" class="hk-input llm-input" onchange="saveSettingsToServer('llm_base_url', this.value.trim()); syncLlmPresetSelect()">
+                            <input type="text" id="llm-base-url" class="hk-input llm-input" onchange="saveSettingsToServer('llm_base_url', this.value.trim()).then(() => loadLlmModels(true)); syncLlmPresetSelect()">
                         </div>
                         <div class="hk-row">
                             <span class="hk-label">Model</span>
-                            <input type="text" id="llm-model" class="hk-input llm-input" list="llm-model-list" onchange="saveSettingsToServer('llm_model', this.value.trim())">
-                            <datalist id="llm-model-list"></datalist>
+                            <select id="llm-model" class="menu-select" onchange="onLlmModelChange(this)"></select>
+                        </div>
+                        <div class="hk-row" id="llm-model-custom-row" style="display: none;">
+                            <span class="hk-label">自訂名稱</span>
+                            <input type="text" id="llm-model-custom" class="hk-input llm-input" placeholder="模型名稱" onchange="saveLlmCustomModel(this)">
                         </div>
                         <div class="hk-footer">
                             <span>啟用後會將歌名與歌詞送至你設定的 LLM 服務</span>
