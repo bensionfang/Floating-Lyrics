@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Kanaric">
+<meta name="theme-color" content="#121212">
+<title>Kanaric Mobile</title>
+<style>
+  /* 版面刻意不用桌面版的 public/css/style.css —— 那份是為桌面 grid 寫的 */
+  :root {
+    --bg: #121212; --panel: #181818; --border: rgba(255,255,255,.1);
+    --text: #fff; --dim: #b3b3b3; --accent: #1DB954;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC", sans-serif;
+    padding: max(24px, env(safe-area-inset-top)) 20px max(24px, env(safe-area-inset-bottom));
+    -webkit-text-size-adjust: 100%;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--dim); font-size: 13px; margin: 0 0 24px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px; margin-bottom: 16px;
+  }
+  label { display: block; font-size: 13px; color: var(--dim); margin-bottom: 6px; }
+  input {
+    width: 100%; padding: 12px; font-size: 16px;   /* 16px 以下 iOS Safari 會自動放大 */
+    background: #000; color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+  }
+  button {
+    width: 100%; padding: 14px; margin-top: 12px; font-size: 16px; font-weight: 600;
+    background: var(--accent); color: #000; border: 0; border-radius: 999px;
+    cursor: pointer; -webkit-appearance: none;
+  }
+  button:disabled { opacity: .5; }
+  button.ghost { background: transparent; color: var(--dim); border: 1px solid var(--border); }
+  .hidden { display: none !important; }
+  .track-title { font-size: 24px; font-weight: 700; margin: 0 0 4px; }
+  .track-artist { color: var(--dim); margin: 0 0 20px; }
+  .row { display: flex; justify-content: space-between; padding: 8px 0; border-top: 1px solid var(--border); font-size: 14px; }
+  .row span:first-child { color: var(--dim); }
+  .mono { font-variant-numeric: tabular-nums; }
+  .msg { font-size: 13px; color: var(--dim); margin-top: 12px; word-break: break-word; }
+  .msg.err { color: #ff6b6b; }
+  code { background: #000; padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<h1>Kanaric Mobile</h1>
+<p class="sub">Phase 1 — Spotify 授權與播放狀態</p>
+
+<!-- 未登入:設定 Client ID 並授權 -->
+<div id="setup" class="card hidden">
+  <label for="client-id">Spotify Client ID</label>
+  <input id="client-id" type="text" autocomplete="off" autocapitalize="off"
+         autocorrect="off" spellcheck="false" placeholder="Dashboard 上那串 32 碼">
+  <button id="login-btn">連接 Spotify</button>
+  <p class="msg">
+    Redirect URI 要在 Spotify Dashboard 註冊為 <code id="redirect-hint"></code>。
+    Client ID 是公開值，只存在這台裝置的瀏覽器裡。
+  </p>
+</div>
+
+<!-- 已登入:播放狀態 -->
+<div id="player" class="card hidden">
+  <p class="track-title" id="track-title">—</p>
+  <p class="track-artist" id="track-artist">—</p>
+  <div class="row"><span>progress_ms</span><span class="mono" id="progress-ms">—</span></div>
+  <div class="row"><span>位置</span><span class="mono" id="progress-fmt">—</span></div>
+  <div class="row"><span>is_playing</span><span class="mono" id="is-playing">—</span></div>
+  <div class="row"><span>track id</span><span class="mono" id="track-id">—</span></div>
+  <div class="row"><span>standalone</span><span class="mono" id="standalone">—</span></div>
+  <button id="refresh-btn">重新讀取</button>
+  <button id="logout-btn" class="ghost">登出</button>
+</div>
+
+<p id="status" class="msg"></p>
+
+<script src="pkce.js"></script>
+<script>
+(() => {
+  'use strict';
+
+  const AUTH_URL  = 'https://accounts.spotify.com/authorize';
+  const TOKEN_URL = 'https://accounts.spotify.com/api/token';
+  const SCOPE     = 'user-read-playback-state';   // Phase 1 只讀播放狀態,不要多要
+
+  const LS_CLIENT  = 'kanaric.mobile.clientId';
+  const LS_REFRESH = 'kanaric.mobile.refreshToken';
+  const SS_VERIFIER = 'kanaric.mobile.verifier';
+  const SS_STATE    = 'kanaric.mobile.state';
+
+  // redirect_uri 由現在的網址推出來,同一份程式碼在 127.0.0.1 與 Tailscale 網域都正確
+  // (兩個都要在 Dashboard 註冊)。直接開 index.html 時 pathname 會多一段,要剝掉 ——
+  // 沒剝的話送出去的 redirect_uri 與註冊的那條對不上,Spotify 回 INVALID_CLIENT。
+  const REDIRECT_URI = location.origin + location.pathname.replace(/index\.html$/, '');
+
+  const $ = (id) => document.getElementById(id);
+  const setStatus = (text, isError = false) => {
+    $('status').textContent = text || '';
+    $('status').classList.toggle('err', !!isError);
+  };
+
+  // access_token 只放記憶體 (重整就重拿,refresh_token 才進 localStorage)
+  let accessToken = null;
+  let expiresAt = 0;
+
+  const clientId = () => localStorage.getItem(LS_CLIENT) || '';
+
+  // --- OAuth ---------------------------------------------------------------
+
+  async function login() {
+    const id = $('client-id').value.trim();
+    if (!id) return setStatus('請先填入 Client ID', true);
+    localStorage.setItem(LS_CLIENT, id);
+
+    const verifier = randomVerifier();
+    const state = randomVerifier(43);
+    sessionStorage.setItem(SS_VERIFIER, verifier);
+    sessionStorage.setItem(SS_STATE, state);
+
+    const params = new URLSearchParams({
+      client_id: id,
+      response_type: 'code',
+      redirect_uri: REDIRECT_URI,
+      scope: SCOPE,
+      state,
+      code_challenge_method: 'S256',
+      code_challenge: await challengeFor(verifier),
+    });
+    location.href = `${AUTH_URL}?${params}`;
+  }
+
+  async function postToken(body) {
+    const resp = await fetch(TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(body),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.error_description || data.error || `token 端點回 ${resp.status}`);
+    accessToken = data.access_token;
+    expiresAt = Date.now() + (data.expires_in || 3600) * 1000;
+    // 更新時 Spotify 不一定會回新的 refresh_token,沒回就沿用舊的
+    if (data.refresh_token) localStorage.setItem(LS_REFRESH, data.refresh_token);
+    return data;
+  }
+
+  // 從授權頁導回來:? 裡帶 code 或 error
+  async function handleRedirect() {
+    const q = new URLSearchParams(location.search);
+    const code = q.get('code');
+    const error = q.get('error');
+    if (!code && !error) return false;
+
+    // code 只能用一次,先把 query string 清掉,否則重整會拿用過的 code 再換一次而失敗
+    history.replaceState(null, '', REDIRECT_URI);
+
+    if (error) { setStatus(`授權被拒:${error}`, true); return false; }
+
+    const expected = sessionStorage.getItem(SS_STATE);
+    const verifier = sessionStorage.getItem(SS_VERIFIER);
+    sessionStorage.removeItem(SS_STATE);
+    sessionStorage.removeItem(SS_VERIFIER);
+    if (!expected || q.get('state') !== expected) { setStatus('state 不符,授權中止', true); return false; }
+    if (!verifier) { setStatus('找不到 code_verifier,請重新授權', true); return false; }
+
+    await postToken({
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: REDIRECT_URI,
+      client_id: clientId(),
+      code_verifier: verifier,
+    });
+    return true;
+  }
+
+  /** 統一的 token 出口:到期前 60 秒就先換新的 (規格 §3.1)。拿不到就回 null,由呼叫端退回登入畫面 */
+  async function getToken() {
+    if (accessToken && Date.now() < expiresAt - 60000) return accessToken;
+    const refresh = localStorage.getItem(LS_REFRESH);
+    if (!refresh || !clientId()) return null;
+    try {
+      await postToken({ grant_type: 'refresh_token', refresh_token: refresh, client_id: clientId() });
+      return accessToken;
+    } catch (e) {
+      // iOS 的 ITP 可能清掉儲存,或授權被撤銷 —— 不要卡死,回到登入畫面重來
+      localStorage.removeItem(LS_REFRESH);
+      accessToken = null;
+      setStatus(`需要重新授權:${e.message}`, true);
+      return null;
+    }
+  }
+
+  function logout() {
+    localStorage.removeItem(LS_REFRESH);
+    accessToken = null;
+    expiresAt = 0;
+    showSetup();
+    setStatus('已登出');
+  }
+
+  // --- 播放狀態 -------------------------------------------------------------
+
+  // Phase 1 只讀一次,輪詢與插值是 Phase 2 的事
+  async function loadPlayback() {
+    const token = await getToken();
+    if (!token) return showSetup();
+
+    setStatus('讀取中…');
+    $('refresh-btn').disabled = true;
+    try {
+      const resp = await fetch('https://api.spotify.com/v1/me/player', {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: 'no-store',
+      });
+      if (resp.status === 204) {   // 沒有任何裝置在播 —— 是正常狀態,不是錯誤
+        render(null);
+        return setStatus('目前沒有播放中的裝置');
+      }
+      if (resp.status === 401) { accessToken = null; return setStatus('token 失效,請再按一次', true); }
+      if (resp.status === 429) return setStatus('被 Spotify 限流,稍候再試', true);
+      if (!resp.ok) return setStatus(`Spotify 回 ${resp.status}`, true);
+      render(await resp.json());
+      setStatus(`更新於 ${new Date().toLocaleTimeString()}`);
+    } catch (e) {
+      setStatus(`讀取失敗:${e.message}`, true);
+    } finally {
+      $('refresh-btn').disabled = false;
+    }
+  }
+
+  // app.js:913 的 formatTime,毫秒版
+  const formatTime = (ms) => {
+    const total = Math.floor(ms / 1000);
+    return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+  };
+
+  function render(data) {
+    const item = data && data.item;
+    $('track-title').textContent = item ? item.name : '—';
+    $('track-artist').textContent = item ? (item.artists || []).map(a => a.name).join(', ') : '—';
+    $('progress-ms').textContent = data && data.progress_ms != null ? data.progress_ms : '—';
+    $('progress-fmt').textContent = data && data.progress_ms != null
+      ? `${formatTime(data.progress_ms)} / ${item ? formatTime(item.duration_ms) : '?'}` : '—';
+    $('is-playing').textContent = data ? String(!!data.is_playing) : '—';
+    $('track-id').textContent = item ? item.id : '—';
+  }
+
+  // --- 畫面切換 -------------------------------------------------------------
+
+  function showSetup() {
+    $('setup').classList.remove('hidden');
+    $('player').classList.add('hidden');
+    $('client-id').value = clientId();
+  }
+
+  function showPlayer() {
+    $('setup').classList.add('hidden');
+    $('player').classList.remove('hidden');
+    // 本階段的驗收重點 (規格 §6.1):從主畫面啟動、授權導回後是不是還在 standalone
+    const standalone = navigator.standalone === true
+      || matchMedia('(display-mode: standalone)').matches;
+    $('standalone').textContent = standalone ? 'true' : 'false';
+  }
+
+  // --- 進場 -----------------------------------------------------------------
+
+  (async () => {
+    $('redirect-hint').textContent = REDIRECT_URI;
+    $('login-btn').addEventListener('click', () => login().catch(e => setStatus(e.message, true)));
+    $('refresh-btn').addEventListener('click', loadPlayback);
+    $('logout-btn').addEventListener('click', logout);
+
+    try {
+      if (await handleRedirect()) {
+        showPlayer();
+        return loadPlayback();
+      }
+    } catch (e) {
+      setStatus(`換 token 失敗:${e.message}`, true);
+      return showSetup();
+    }
+
+    if (localStorage.getItem(LS_REFRESH) && clientId()) {
+      showPlayer();
+      loadPlayback();
+    } else {
+      showSetup();
+    }
+  })();
+})();
+</script>
+</body>
+</html>

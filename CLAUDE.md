@@ -53,7 +53,7 @@ gh release create v1.1.0 \
 tag 沒帶 `v` 或漏推,純 node 模式的更新提醒也抓不到新版。安裝檔未簽章,`gh release create` 會直接
 公開發布,屬於「發布公開內容」的動作,不要自動執行,要使用者自己按。
 - 靈動島 = Electron 的一個視窗 (`web-app/island.js`),由 `npm run app` 一起帶起,沒有獨立進程也沒有 build 步驟。
-- 沒有 test runner 或 linter。零星的獨立測試檔直接用直譯器跑:`node tests/test_origin_guard.js` (同源守門)、`node tests/test_s2t.js` (簡轉繁)、`node tests/test_lyric_quality.js` (內嵌注音的歌詞守門)、`node tests/test_search_query.js` (繁轉簡 + 瀏覽器標題去噪)、`node tests/test_title_lines.js` (製作人員/版權列標記)、`node tests/test_translations.js` (中文譯文合併)、`node tests/test_romaji.js` (羅馬拼音)、`node tests/test_itunes_resolving.js` (iTunes 原名還原的時序)、`node tests/test_history_toggle.js` (聆聽紀錄開關 + 清除白名單)、`node tests/test_backup_restore.js` (備份/還原 + 還原前的驗證守門)、`node tests/test_scroll_zone.js` (歌詞自動捲動的三段判定)、`node tests/test_game.js` (猜歌的干擾選項挑選)、`node tests/test_island_position.js` (靈動島的多螢幕位置記憶)、`node tests/test_llm_wand.js` (魔杖對非日文歌詞的守門)、`python tests/test_pick_session.py`、`python tests/test_furigana_hint.py` (Python 的要用 `venv/Scripts/python.exe`,系統 python 沒裝 fugashi)。
+- 沒有 test runner 或 linter。零星的獨立測試檔直接用直譯器跑:`node tests/test_origin_guard.js` (同源守門)、`node tests/test_s2t.js` (簡轉繁)、`node tests/test_lyric_quality.js` (內嵌注音的歌詞守門)、`node tests/test_search_query.js` (繁轉簡 + 瀏覽器標題去噪)、`node tests/test_title_lines.js` (製作人員/版權列標記)、`node tests/test_translations.js` (中文譯文合併)、`node tests/test_romaji.js` (羅馬拼音)、`node tests/test_itunes_resolving.js` (iTunes 原名還原的時序)、`node tests/test_history_toggle.js` (聆聽紀錄開關 + 清除白名單)、`node tests/test_backup_restore.js` (備份/還原 + 還原前的驗證守門)、`node tests/test_scroll_zone.js` (歌詞自動捲動的三段判定)、`node tests/test_game.js` (猜歌的干擾選項挑選)、`node tests/test_island_position.js` (靈動島的多螢幕位置記憶)、`node tests/test_llm_wand.js` (魔杖對非日文歌詞的守門)、`node tests/test_pkce.js` (行動版的 OAuth PKCE)、`python tests/test_pick_session.py`、`python tests/test_furigana_hint.py` (Python 的要用 `venv/Scripts/python.exe`,系統 python 沒裝 fugashi)。
 - `ROADMAP.md` (repo 根,**本機檔案,不進版控**) 記著 v1.0.0 之後的規劃與**明確不做的事**。動到「未來要做什麼」的討論先看它,免得重新提案已經否決過的方向 (雲端同步、換 tokenizer、離線辭典、Steam 式強制更新)。clone 下來沒有這個檔屬正常。
   主軸是**歌詞體驗**,不是學日文 —— 翻譯/查詞這類功能要進來,得先過「它讓歌詞更好讀嗎」這一關。
 
@@ -381,3 +381,31 @@ Lines like `作詞：米津玄師` and copyright boilerplate are prefixed with `
 `CREDIT_KEYWORDS` 與 `LABEL_ONLY_KEYWORDS` **刻意分成兩張表**:單字的 `詞`/`曲`/`鼓`/`唱` 只能在標籤位置比對 (中文歌常見 `词：周杰伦`),放進 `isCreditPlain` 會把「この曲が終わる前に」這種正文整批誤殺。回歸測試 `node tests/test_title_lines.js`,案例全部取自真實快取。
 
 `config.py` holds the DB path for standalone Python use; `settings.json` (repo root) holds UI settings served via `/api/settings`.
+
+## 行動版（進行中）
+
+iOS PWA 版規格在 `docs/mobile/PWA-SPEC.md`。動到 `web-app/public/mobile/` 或
+`/api/lyrics` 端點之前，先讀那份規格，特別是「明確不做」那一節。
+
+Phase 1（靜態頁 + Spotify OAuth PKCE）已完成:`web-app/public/mobile/index.html` +
+`pkce.js`（純函式獨立成檔的理由同 `public/js/scroll-zone.js`,測試 require 得到)。
+
+**規格 §6.1 那條最高風險已實測過關 (2026-07-28)**:iPhone 從主畫面圖示啟動、跑完整個
+授權導回後仍在 standalone (`navigator.standalone === true`,沒有掉回 Safari)。整個 PWA
+方案成立,不必再重測 —— 頁面上那列 `standalone` 就是為這條驗收留的。
+
+- **這一頁不經過 Kanaric 的 API,只打 `accounts.spotify.com` 與 `api.spotify.com`。**
+  所以同源守門一行都不用改:`express.static` 已經在服務 `public/`,頁面自己的 `<script src>`
+  是 same-origin,而從授權頁導回來是「跨站頂層導覽 GET + `Sec-Fetch-Dest: document`」,
+  正好命中守門既有的例外。
+- **`redirect_uri` 由 `location.origin + location.pathname` 推出來**,同一份程式碼在
+  `http://127.0.0.1:5720/mobile/`(loopback 是 Spotify 唯一不強制 HTTPS 的形式,而且**必須是
+  IP 不能寫 localhost**)與 `https://<機器>.<tailnet>.ts.net/mobile/` 都正確 —— 兩條都要在
+  Spotify Dashboard 註冊。結尾的 `index.html` 一定要剝掉,對不上就是 INVALID_CLIENT。
+- Client ID 存 localStorage(公開值);`refresh_token` 存 localStorage、`access_token` 只在記憶體。
+  **不可以引入 client secret**,PKCE 就是為了不需要它。
+- **Phase 3 接 `/api/lyrics` 時守門才要動**:`ALLOWED_ORIGINS` 寫死 localhost/127.0.0.1,
+  從 Tailscale 網域打過來的 `Origin` 會 403。屆時**不要**改成「Origin 等於請求的 Host 就放行」
+  —— 攻擊者把網域的 A record 指到 127.0.0.1 就能讓兩者相符(DNS rebinding),守門形同虛設。
+  要加就加一個明確的 `mobile_origin` 設定值,與 WebSocket 的 `verifyClient` 共用同一個判斷。
+  規格 §4.1 寫的「加 CORS header」同樣是錯的方向(見上面同源守門那節)。
