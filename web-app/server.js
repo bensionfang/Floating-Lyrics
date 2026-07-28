@@ -54,9 +54,20 @@ const ALLOWED_ORIGINS = new Set([
   `http://localhost:${PORT}`,
   `http://127.0.0.1:${PORT}`,
 ]);
+
+// 行動版 (Tailscale Serve 的 https://<機器>.<tailnet>.ts.net) 是唯一的外部來源,由設定
+// mobile_origin 明確指定。**不可以改成「Origin 等於請求的 Host 就放行」** —— 攻擊者把自己
+// 網域的 A record 指到 127.0.0.1 就能讓兩者相符 (DNS rebinding),整道守門形同虛設。
+// 空字串 = 沒設定 = 一個外部來源都不放行。
+let mobileOrigin = '';
+// 使用者多半整條網址貼進來,URL.origin 正好只留 scheme://host[:port] (尾斜線、路徑都會消失)
+const normOrigin = (v) => { try { return v ? new URL(v).origin : ''; } catch (e) { return ''; } };
+// middleware 與 WebSocket 的 verifyClient 共用同一個判斷,不要各寫一份
+const isAllowedOrigin = (o) => ALLOWED_ORIGINS.has(o) || (!!mobileOrigin && o === mobileOrigin);
+
 app.use((req, res, next) => {
   const origin = req.get('Origin');
-  if (origin && !ALLOWED_ORIGINS.has(origin)) {
+  if (origin && !isAllowedOrigin(origin)) {
     return res.status(403).json({ error: 'Cross-origin requests are not allowed' });
   }
   const site = req.get('Sec-Fetch-Site');
@@ -360,6 +371,28 @@ function writeListen(state) {
   );
 }
 
+// media_state 廣播的節流。media_monitor 每 0.1 秒就推一次,而 currentMediaState 是淺層
+// 合併的 —— 一旦收到封面就一直留在裡面,不處理的話等於每秒把幾十 KB 的 base64 PNG 廣播
+// 十次。本機看不出來,**行動版走 Tailscale + 行動網路就是每小時幾十 MB**。
+//   - 只有 position 在動時降到 1 秒一次:島、猜歌、行動版都自己內插,不靠廣播密度。
+//   - position 以外的欄位一變 (換歌、暫停、封面補到) 立刻送,暫停圖示不能延遲一秒。
+// 新連上的客戶端拿的是 'init',那份仍然是完整狀態,不受這裡影響。
+let lastBroadcastRest = null, lastBroadcastThumb = null, lastBroadcastAt = 0;
+function broadcastMediaState() {
+  if (!global.broadcast) return;
+  const { position, thumbnail, ...rest } = currentMediaState;
+  const restJson = JSON.stringify(rest);
+  if (restJson === lastBroadcastRest && thumbnail === lastBroadcastThumb
+      && Date.now() - lastBroadcastAt < 1000) return;
+  const payload = { ...currentMediaState };
+  // 沒變就整個不送。島與行動版都判斷 `thumbnail !== undefined` 才動封面,漏送不會清掉畫面
+  if (thumbnail === lastBroadcastThumb) delete payload.thumbnail;
+  lastBroadcastRest = restJson;
+  lastBroadcastThumb = thumbnail;
+  lastBroadcastAt = Date.now();
+  global.broadcast({ type: 'media_state', state: payload });
+}
+
 global.handleMediaUpdate = function(rawState) {
   try {
     // iTunes 跨區還原攔截器。查詢是非同步的 (handleMediaUpdate 不能等),所以換歌後的
@@ -420,10 +453,8 @@ global.handleMediaUpdate = function(rawState) {
     const state = rawState;
     currentMediaState = { ...currentMediaState, ...state };
     
-    if (global.broadcast) {
-      global.broadcast({ type: 'media_state', state: currentMediaState });
-    }
-    
+    broadcastMediaState();
+
     if (state.is_playing && state.title && state.artist) {
       const songId = `${state.title}-${state.artist}`;
       
@@ -583,6 +614,10 @@ function readSettings() {
   return {};
 }
 
+// 同源守門要用的行動版來源。**初始化只能寫在這裡** —— SETTINGS_FILE 是上面那個 const,
+// 在檔案上半部 (守門那段) 呼叫 readSettings() 會撞到 TDZ。
+mobileOrigin = normOrigin(readSettings().mobile_origin);
+
 app.get('/api/settings', (req, res) => {
   try {
     if (fs.existsSync(SETTINGS_FILE)) {
@@ -606,6 +641,8 @@ global.updateSettings = function (patch) {
   }
   const newSettings = { ...currentSettings, ...patch };
   fs.writeFileSync(SETTINGS_FILE, JSON.stringify(newSettings, null, 4), 'utf8');
+  // 改了立刻生效,不必重開 server (守門是每個請求現查這個變數)
+  if ('mobile_origin' in patch) mobileOrigin = normOrigin(newSettings.mobile_origin);
   if (global.broadcast) {
     global.broadcast({ type: 'settings_updated', settings: newSettings });
   }
@@ -1434,6 +1471,45 @@ app.get('/api/lyrics/fetch', async (req, res) => {
 // Not found, fetch
     return performFetch();
   });
+});
+
+// 行動版 (PWA) 專用的無狀態查詢。刻意不共用 /api/lyrics/fetch,差別有兩個:
+//  1. **不廣播** —— 手機在播的歌不該把桌面/靈動島上正在顯示的歌詞換掉。
+//  2. 自己做歌名還原 (canonicalArtist + iTunes),手機這條路沒有 handleMediaUpdate ——
+//     Spotify 給的是 Haru Dorobou / 魚韻,不還原就跟桌面的 cache 鍵分裂、日文歌也查不到。
+// 回的 lyrics 是桌面版同一份「帶 <ruby> 的 LRC 字串」,不是規格 §4.1 寫的 tokens 陣列:
+// 注音 HTML 已經產好了,前端 innerHTML 畫得出來,不必為此給 furigana_inject.py 加輸出模式。
+app.get('/api/lyrics', async (req, res) => {
+  const { title, artist, duration_ms } = req.query;
+  if (!title || !artist) return res.status(400).json({ error: 'title and artist are required' });
+
+  try {
+    const seconds = Number(duration_ms) > 0 ? Number(duration_ms) / 1000 : null;
+    const resolved = await getResolvedMetadata(title, canonicalArtist(artist), seconds);
+    // 還原出來的日文原名本身也可能是別名的來源,再收斂一次才跟桌面同一個鍵
+    const a = canonicalArtist(resolved.artist);
+    const t = resolved.title;
+    const meta = { title: t, artist: a };
+
+    if (await getNoLyrics(a, t)) return res.json({ ...meta, lyrics: '', source: 'no_lyrics' });
+
+    const row = await new Promise((resolve) =>
+      db.get('SELECT lyrics FROM cache WHERE title = ? AND artist = ?', [t, a], (e, r) => resolve(r)));
+
+    let lyric = row && row.lyrics ? toTraditional(row.lyrics) : '';
+    let source = 'cache';
+    if (!lyric) {
+      const found = await searchBestLyric(t, a);
+      if (!found.lyric) return res.json({ ...meta, lyrics: '', source: 'not_found' });
+      db.run('INSERT OR REPLACE INTO cache (artist, title, lyrics) VALUES (?, ?, ?)', [a, t, found.lyric]);
+      lyric = found.lyric;
+      source = found.source;
+    }
+    res.json({ ...meta, lyrics: await injectFurigana(a, t, lyric), source });
+  } catch (e) {
+    console.error('行動版查歌詞失敗:', e.message);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // 備選歌詞的搜尋放在 server 端當背景工作,網頁換頁 (JS 被殺掉) 也不會中斷。
@@ -2393,7 +2469,7 @@ const server = http.createServer(app);
 // 不帶 Origin,照常放行。
 const wss = new WebSocketServer({
   server,
-  verifyClient: ({ origin }) => !origin || ALLOWED_ORIGINS.has(origin),
+  verifyClient: ({ origin }) => !origin || isAllowedOrigin(origin),
 });
 
 wss.on('connection', (ws) => {

@@ -7,6 +7,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Kanaric">
 <meta name="theme-color" content="#121212">
+<link rel="manifest" href="manifest.json">
 <title>Kanaric Mobile</title>
 <style>
   /* 版面刻意不用桌面版的 public/css/style.css —— 那份是為桌面 grid 寫的 */
@@ -43,18 +44,35 @@
   .hidden { display: none !important; }
   .track-title { font-size: 24px; font-weight: 700; margin: 0 0 4px; }
   .track-artist { color: var(--dim); margin: 0 0 20px; }
+  /* 進度條由 rAF 每幀寫 width,所以刻意不加 CSS transition —— 兩邊會互相打架而變黏 */
+  .bar { height: 4px; background: rgba(255,255,255,.2); border-radius: 2px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; width: 0; background: var(--accent); }
+  .times { display: flex; justify-content: space-between; margin: 6px 0 16px;
+           font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
   .row { display: flex; justify-content: space-between; padding: 8px 0; border-top: 1px solid var(--border); font-size: 14px; }
   .row span:first-child { color: var(--dim); }
   .mono { font-variant-numeric: tabular-nums; }
   .msg { font-size: 13px; color: var(--dim); margin-top: 12px; word-break: break-word; }
   .msg.err { color: #ff6b6b; }
   code { background: #000; padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+  /* 歌詞:自己一個捲動容器,置中靠寫 scrollTop (不動整頁,免得與 body 捲動打架) */
+  /* position 不可以拿掉:置中是靠 el.offsetTop 算的,沒有它 offsetParent 會變成 <body>,
+     量到的是「離整頁頂端」的距離 (多算了上面那兩張卡),當前行就被推到畫面上方外 */
+  .lyrics { position: relative; height: 55vh; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .lyrics p {
+    margin: 0; padding: 10px 0; font-size: 19px; line-height: 1.9;
+    color: var(--dim); opacity: .55; transition: opacity .2s, color .2s;
+  }
+  .lyrics p.on { color: var(--text); opacity: 1; font-weight: 600; }
+  /* ruby 在 iOS Safari 預設會把行高撐開,自己壓一下讀音大小 */
+  .lyrics rt { font-size: .5em; color: var(--dim); font-weight: 400; }
+  .lyrics p.on rt { color: var(--text); }
 </style>
 </head>
 <body>
 
 <h1>Kanaric Mobile</h1>
-<p class="sub">Phase 1 — Spotify 授權與播放狀態</p>
+<p class="sub">Phase 5 — PWA</p>
 
 <!-- 未登入:設定 Client ID 並授權 -->
 <div id="setup" class="card hidden">
@@ -72,18 +90,26 @@
 <div id="player" class="card hidden">
   <p class="track-title" id="track-title">—</p>
   <p class="track-artist" id="track-artist">—</p>
+  <div class="bar"><i id="bar-fill"></i></div>
+  <div class="times"><span id="pos-fmt">0:00</span><span id="dur-fmt">0:00</span></div>
   <div class="row"><span>progress_ms</span><span class="mono" id="progress-ms">—</span></div>
-  <div class="row"><span>位置</span><span class="mono" id="progress-fmt">—</span></div>
   <div class="row"><span>is_playing</span><span class="mono" id="is-playing">—</span></div>
   <div class="row"><span>track id</span><span class="mono" id="track-id">—</span></div>
+  <div class="row"><span>模式</span><span class="mono" id="mode">獨立 (Spotify)</span></div>
   <div class="row"><span>standalone</span><span class="mono" id="standalone">—</span></div>
-  <button id="refresh-btn">重新讀取</button>
+  <div class="row"><span>歌詞來源</span><span class="mono" id="lyrics-source">—</span></div>
   <button id="logout-btn" class="ghost">登出</button>
+</div>
+
+<div id="lyrics-card" class="card hidden">
+  <div id="lyrics" class="lyrics"></div>
 </div>
 
 <p id="status" class="msg"></p>
 
 <script src="pkce.js"></script>
+<script src="playback.js"></script>
+<script src="lyrics.js"></script>
 <script>
 (() => {
   'use strict';
@@ -203,38 +229,246 @@
     localStorage.removeItem(LS_REFRESH);
     accessToken = null;
     expiresAt = 0;
+    // 鏡像模式不靠 Spotify,登出不該把畫面收掉 (收了廣播還在更新一個看不見的播放列)
+    if (mirror) return setStatus('已登出 Spotify,鏡像模式繼續顯示');
     showSetup();
     setStatus('已登出');
   }
 
   // --- 播放狀態 -------------------------------------------------------------
 
-  // Phase 1 只讀一次,輪詢與插值是 Phase 2 的事
-  async function loadPlayback() {
-    const token = await getToken();
-    if (!token) return showSetup();
+  let track = null;      // playback.js 的快照,插值的基準
+  let pollTimer = null;
 
-    setStatus('讀取中…');
-    $('refresh-btn').disabled = true;
+  /** 打一次 /me/player 並更新快照。回傳「下次輪詢要等多久」,回 null 表示照常 (pollDelay) */
+  async function poll() {
+    const token = await getToken();
+    if (!token) { showSetup(); return Infinity; }   // 沒 token 就停手,等使用者重新授權
+
     try {
       const resp = await fetch('https://api.spotify.com/v1/me/player', {
         headers: { Authorization: `Bearer ${token}` },
         cache: 'no-store',
       });
       if (resp.status === 204) {   // 沒有任何裝置在播 —— 是正常狀態,不是錯誤
-        render(null);
-        return setStatus('目前沒有播放中的裝置');
+        setTrack(null);
+        setStatus('目前沒有播放中的裝置');
+        return null;
       }
-      if (resp.status === 401) { accessToken = null; return setStatus('token 失效,請再按一次', true); }
-      if (resp.status === 429) return setStatus('被 Spotify 限流,稍候再試', true);
-      if (!resp.ok) return setStatus(`Spotify 回 ${resp.status}`, true);
-      render(await resp.json());
+      // 401 只要把記憶體的 token 丟掉,下一輪 getToken() 會自己拿 refresh_token 換新的
+      if (resp.status === 401) { accessToken = null; setStatus('token 失效,更新中…'); return 1000; }
+      if (resp.status === 429) {
+        // Spotify 會用 Retry-After (秒) 告訴你要等多久,照著等才不會一直被擋
+        const wait = (Number(resp.headers.get('Retry-After')) || 30) * 1000;
+        setStatus(`被 Spotify 限流,${Math.round(wait / 1000)} 秒後再試`, true);
+        return wait;
+      }
+      if (!resp.ok) { setStatus(`Spotify 回 ${resp.status}`, true); return null; }
+      setTrack(snapshot(await resp.json(), performance.now()));
       setStatus(`更新於 ${new Date().toLocaleTimeString()}`);
+      return null;
     } catch (e) {
-      setStatus(`讀取失敗:${e.message}`, true);
-    } finally {
-      $('refresh-btn').disabled = false;
+      setStatus(`讀取失敗:${e.message}`, true);   // 家裡機器離線/飛航模式,下一輪再試
+      return null;
     }
+  }
+
+  function setTrack(next) {
+    // 換歌以 item.id 為準 (規格 §3.4) —— 同名歌太多,比歌名會誤判
+    if ((next && next.id) !== (track && track.id)) loadLyrics(next);
+    track = next;
+    render(next);
+  }
+
+  // --- 歌詞 -----------------------------------------------------------------
+
+  let lines = [];
+  let activeLine = -1;
+  let lyricsFor = null;    // 目前這份歌詞是哪個 track id 的 (慢回應蓋掉新歌的守門)
+
+  /**
+   * 換歌時打一次 Kanaric server。頁面本來就是這台 server 服務的,所以用相對路徑 =
+   * 同源請求,守門那邊什麼都不用動 (設定裡的 mobile_origin 填 Tailscale 網域即可)。
+   */
+  async function loadLyrics(t) {
+    lines = [];
+    activeLine = -1;
+    lyricsFor = t && t.id;
+    $('lyrics').innerHTML = '';
+    $('lyrics-card').classList.toggle('hidden', !t);
+    $('lyrics-source').textContent = t ? '查詢中…' : '—';
+    if (!t) return;
+
+    // 快取命中就整個不打 server (規格 §4.3),連 Tailscale 離線時也還有歌詞
+    const hit = readCache(localStorage, t.id);
+    if (hit) return showLyrics(hit);
+
+    try {
+      const q = new URLSearchParams({ title: t.title, artist: t.artist, duration_ms: t.durationMs });
+      const resp = await fetch(`/api/lyrics?${q}`, { cache: 'no-store' });
+      const data = await resp.json();
+      if (lyricsFor !== t.id) return;    // 這期間已經換歌了,舊回應丟掉
+      if (!resp.ok) throw new Error(data.error || `server 回 ${resp.status}`);
+
+      showLyrics(data);
+      // 只快取真的有歌詞的:「找不到歌詞」存下去等於永遠不再重試
+      if (lines.length) return writeCache(localStorage, t.id, data);
+    } catch (e) {
+      if (lyricsFor !== t.id) return;
+      $('lyrics-source').textContent = `讀取失敗:${e.message}`;
+    }
+    // server 連不上 (電腦關機) 或它也沒有 —— 退到 lrclib,至少歌詞不會整個消失
+    await loadFromLrclib(t);
+  }
+
+  /**
+   * 備援 (規格 §4.2):前端直接打 lrclib 的公開 API。它有給 CORS header,所以瀏覽器打得到 ——
+   * 中國平台那三家都沒有,而且 QQ/酷狗還要解密,手機端沒有路。
+   */
+  async function loadFromLrclib(t) {
+    try {
+      const q = new URLSearchParams({
+        track_name: t.title,
+        artist_name: t.artist.split(',')[0].trim(),   // lrclib 只吃單一歌手
+        duration: Math.round(t.durationMs / 1000),
+      });
+      const resp = await fetch(`https://lrclib.net/api/get?${q}`, { cache: 'no-store' });
+      if (lyricsFor !== t.id) return;
+      if (!resp.ok) throw new Error(`lrclib 回 ${resp.status}`);
+      const data = await resp.json();
+      if (!data.syncedLyrics) throw new Error('lrclib 只有無時間軸的版本');
+      // 這份沒經過 furigana_inject.py,沒有人幫它逃逸,自己來 (innerHTML 畫的)
+      showLyrics({ source: 'lrclib(無注音)', lyrics: escapeHtml(data.syncedLyrics) });
+      // 刻意不進快取:電腦開回來時要能換成有注音的那份
+    } catch (e) {
+      if (lyricsFor !== t.id) return;
+      $('lyrics-source').textContent = `找不到歌詞:${e.message}`;
+    }
+  }
+
+  function showLyrics(data) {
+    lines = parseLrc(data.lyrics);
+    $('lyrics-source').textContent = lines.length ? data.source : '找不到歌詞';
+    // 歌詞是 furigana_inject.py 逃逸過的 <ruby> HTML,可以直接 innerHTML
+    $('lyrics').innerHTML = lines.map((l) => `<p>${l.html || '♪'}</p>`).join('');
+  }
+
+  /** 高亮 + 置中。只在換行時動,不然每幀寫 scrollTop 會把手動捲動整個吃掉 */
+  function syncLyrics(posMs) {
+    const i = activeIndex(lines, posMs);
+    if (i === activeLine) return;
+    const pane = $('lyrics');
+    const prev = pane.children[activeLine];
+    if (prev) prev.classList.remove('on');
+    activeLine = i;
+    const el = pane.children[i];
+    if (!el) return;
+    el.classList.add('on');
+    pane.scrollTo({ top: el.offsetTop - pane.clientHeight / 2 + el.offsetHeight / 2, behavior: 'smooth' });
+  }
+
+  /** 排下一次輪詢。分頁隱藏時不排 —— Safari 背景會凍結 timer,醒來也是靠 visibilitychange */
+  function schedule(overrideMs) {
+    clearTimeout(pollTimer);
+    if (mirror || document.hidden) return;   // 鏡像模式下播放狀態由電腦版推過來,不打 Spotify
+    const wait = overrideMs != null ? overrideMs : pollDelay(track);
+    if (wait === Infinity) return;
+    pollTimer = setTimeout(tick, wait);
+  }
+
+  async function tick() {
+    schedule(await poll());
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    // 回到前景立刻校正一次:背景期間 timer 被凍結,插值早就漂掉了 (驗收標準 6)
+    if (document.hidden) return clearTimeout(pollTimer);
+    if ($('player').classList.contains('hidden')) return;
+    keepAwake();   // 分頁一隱藏 lock 就被系統釋放,回前景一定要重拿 (規格 §5.3 點名的坑)
+    if (!mirror) tick();   // 鏡像模式的校正靠廣播自己來,WebSocket 斷了 onclose 會退回獨立模式
+  });
+
+  // --- 鏡像模式 -------------------------------------------------------------
+
+  /**
+   * 電腦版開著而且連得到時,直接吃它的 WebSocket 廣播 —— **跟靈動島同一個角色**,
+   * 純顯示端。省掉 OAuth / 輪詢 / 429 限流 / 歌名還原的競態,而且譯文、羅馬字、
+   * 你手改過的讀音全部跟桌面一致 (獨立模式那條要自己再查一次)。
+   *
+   * 連不上就退回獨立模式 (Spotify + lrclib):出門在外電腦本來就是斷網的,兩個模式互補。
+   */
+  let mirror = false;
+
+  function connectMirror() {
+    let ws;
+    try {
+      // 頁面走 https (Tailscale) 時一定要 wss,ws 會被瀏覽器當成混合內容擋掉
+      ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}`);
+    } catch (e) {
+      return setTimeout(connectMirror, 15000);
+    }
+
+    ws.onopen = () => {
+      mirror = true;
+      clearTimeout(pollTimer);
+      $('mode').textContent = '鏡像 (跟著電腦版)';
+      showPlayer();
+      setStatus('鏡像模式:顯示電腦版正在播的歌');
+    };
+    ws.onmessage = (ev) => {
+      let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
+      if (msg.type === 'init' || msg.type === 'media_state') onMirrorState(msg.state || {});
+    };
+    ws.onclose = () => {
+      const wasMirror = mirror;
+      mirror = false;
+      $('mode').textContent = '獨立 (Spotify)';
+      setTimeout(connectMirror, 15000);   // 電腦可能只是暫時關掉,別放棄重連
+      if (wasMirror) { setTrack(null); startIndependent(); }
+    };
+    ws.onerror = () => ws.close();
+  }
+
+  /** 廣播的狀態 → 跟 Spotify 那條完全同形的快照,下游 (render/frame/loadLyrics) 一行都不用改 */
+  function onMirrorState(m) {
+    // resolving = 歌名還沒定案 (iTunes 日文原名還原中)。跟桌面與島同一條規則:
+    // 不等它就會用兩個不同的鍵各抓一次歌詞,第二次多半撞到限流變成「找不到歌詞」
+    if (m.resolving) return;
+    setTrack(m.title ? {
+      id: `${m.artist || ''}|||${m.title}`,   // 這條路沒有 Spotify track id,用歌手+歌名當鍵
+      title: m.title,
+      artist: m.artist || '',
+      durationMs: (m.duration || 0) * 1000,   // 廣播的單位是秒,快照用毫秒
+      progressMs: (m.position || 0) * 1000,
+      isPlaying: !!m.is_playing,
+      at: performance.now(),
+    } : null);
+  }
+
+  // --- 螢幕恆亮 -------------------------------------------------------------
+
+  let wakeLock = null;
+
+  async function keepAwake() {
+    if (!('wakeLock' in navigator) || document.hidden || wakeLock) return;
+    try {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => { wakeLock = null; });
+    } catch (e) {
+      wakeLock = null;   // 低電量模式會直接拒絕 —— 是正常情況,不用吵使用者
+    }
+  }
+
+  // 進度條:rAF 每幀用 performance.now() 插值。分頁隱藏時瀏覽器自己會停掉 rAF,不必自己管
+  function frame() {
+    if (track) {
+      const pos = positionAt(track, performance.now());
+      $('bar-fill').style.width = track.durationMs ? `${(pos / track.durationMs) * 100}%` : '0';
+      $('pos-fmt').textContent = formatTime(pos);
+      $('progress-ms').textContent = Math.round(pos);
+      syncLyrics(pos);
+    }
+    requestAnimationFrame(frame);
   }
 
   // app.js:913 的 formatTime,毫秒版
@@ -243,28 +477,37 @@
     return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
   };
 
-  function render(data) {
-    const item = data && data.item;
-    $('track-title').textContent = item ? item.name : '—';
-    $('track-artist').textContent = item ? (item.artists || []).map(a => a.name).join(', ') : '—';
-    $('progress-ms').textContent = data && data.progress_ms != null ? data.progress_ms : '—';
-    $('progress-fmt').textContent = data && data.progress_ms != null
-      ? `${formatTime(data.progress_ms)} / ${item ? formatTime(item.duration_ms) : '?'}` : '—';
-    $('is-playing').textContent = data ? String(!!data.is_playing) : '—';
-    $('track-id').textContent = item ? item.id : '—';
+  /** 每次輪詢回來時寫的欄位 (播放位置不在這裡,由 frame() 每幀插值寫) */
+  function render(t) {
+    $('track-title').textContent = t ? t.title : '—';
+    $('track-artist').textContent = t ? t.artist : '—';
+    $('dur-fmt').textContent = formatTime(t ? t.durationMs : 0);
+    $('is-playing').textContent = t ? String(t.isPlaying) : '—';
+    $('track-id').textContent = t ? t.id : '—';
+    if (!t) { $('bar-fill').style.width = '0'; $('pos-fmt').textContent = '0:00'; $('progress-ms').textContent = '—'; }
   }
 
   // --- 畫面切換 -------------------------------------------------------------
 
   function showSetup() {
+    clearTimeout(pollTimer);
     $('setup').classList.remove('hidden');
     $('player').classList.add('hidden');
+    $('lyrics-card').classList.add('hidden');
     $('client-id').value = clientId();
+  }
+
+  /** 獨立模式 (Spotify + lrclib) 的進場。鏡像模式接管中就不做 —— 那條不需要 Spotify */
+  function startIndependent() {
+    if (mirror) return;
+    if (localStorage.getItem(LS_REFRESH) && clientId()) { showPlayer(); tick(); }
+    else showSetup();
   }
 
   function showPlayer() {
     $('setup').classList.add('hidden');
     $('player').classList.remove('hidden');
+    keepAwake();
     // 本階段的驗收重點 (規格 §6.1):從主畫面啟動、授權導回後是不是還在 standalone
     const standalone = navigator.standalone === true
       || matchMedia('(display-mode: standalone)').matches;
@@ -276,25 +519,25 @@
   (async () => {
     $('redirect-hint').textContent = REDIRECT_URI;
     $('login-btn').addEventListener('click', () => login().catch(e => setStatus(e.message, true)));
-    $('refresh-btn').addEventListener('click', loadPlayback);
     $('logout-btn').addEventListener('click', logout);
+    requestAnimationFrame(frame);
+    // SW 要 secure context:Tailscale 的 HTTPS 與 127.0.0.1 都算,直接開檔案不算 (失敗就算了)
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+    connectMirror();
 
     try {
       if (await handleRedirect()) {
         showPlayer();
-        return loadPlayback();
+        return tick();
       }
     } catch (e) {
       setStatus(`換 token 失敗:${e.message}`, true);
       return showSetup();
     }
 
-    if (localStorage.getItem(LS_REFRESH) && clientId()) {
-      showPlayer();
-      loadPlayback();
-    } else {
-      showSetup();
-    }
+    // 先給鏡像一點時間握手 —— 它一開起來就不必打 Spotify 了。2 秒內沒連上就先跑獨立模式,
+    // 之後 WebSocket 真的連上仍然會接管 (onopen 會停掉輪詢)
+    setTimeout(startIndependent, 2000);
   })();
 })();
 </script>

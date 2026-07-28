@@ -103,12 +103,36 @@ async function run() {
     check(r.status === 403, `跨站 POST 清除資料庫 (${label})`, `${r.status} (expected 403)`);
   }
 
+  // 行動版 (Tailscale) 是唯一的外部來源,由設定 mobile_origin 明確指定。
+  // 沒設定時一個外部來源都不放行;設定了也只放行那一個,不是「Origin 等於 Host 就放行」
+  // (那樣攻擊者把自己網域指到 127.0.0.1 就能繞過 —— DNS rebinding)。
+  const MOBILE = 'https://mobile.example';
+  const setMobileOrigin = (v) => fetch(BASE + '/api/settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },   // 無 Origin = 非瀏覽器客戶端,放行
+    body: JSON.stringify({ mobile_origin: v }),
+  });
+
+  const beforeSet = await fetch(BASE + '/api/settings', { headers: { Origin: MOBILE } });
+  check(beforeSet.status === 403, '沒設定 mobile_origin 時外部來源被擋', `${beforeSet.status} (expected 403)`);
+
+  // 使用者多半整條網址貼進來,要正規化成 scheme://host 才對得上瀏覽器送的 Origin
+  await setMobileOrigin(`${MOBILE}/mobile/`);
+  const afterSet = await fetch(BASE + '/api/settings', {
+    headers: { Origin: MOBILE, 'Sec-Fetch-Site': 'same-origin' },
+  });
+  check(afterSet.status === 200, '設定後行動版來源放行 (帶路徑也要正規化)', `${afterSet.status} (expected 200)`);
+
+  const otherOrigin = await fetch(BASE + '/api/settings', { headers: { Origin: 'https://evil.example' } });
+  check(otherOrigin.status === 403, '設定 mobile_origin 後其他外部來源仍被擋', `${otherOrigin.status} (expected 403)`);
+
   // WebSocket 的 upgrade 不經過 express middleware,要另外擋 (否則惡意網頁能收播放狀態廣播)
   const WebSocket = require('../web-app/node_modules/ws');
   for (const [label, origin, wantOpen] of [
     ['靈動島 (無 Origin)', undefined, true],
     ['後台自己 (同源)', BASE, true],
     ['惡意網站', 'https://evil.example', false],
+    ['行動版 (mobile_origin)', MOBILE, true],
   ]) {
     const opened = await new Promise((resolve) => {
       const ws = new WebSocket(BASE.replace('http', 'ws'), origin ? { origin } : {});
@@ -117,6 +141,11 @@ async function run() {
     });
     check(opened === wantOpen, `WebSocket ${label}`, opened ? '連上' : '被拒');
   }
+
+  // 清空要能即時關掉,不必重開 server (守門是每個請求現查那個變數)
+  await setMobileOrigin('');
+  const afterClear = await fetch(BASE + '/api/settings', { headers: { Origin: MOBILE } });
+  check(afterClear.status === 403, '清掉 mobile_origin 後立刻失效', `${afterClear.status} (expected 403)`);
 
   return failed;
 }

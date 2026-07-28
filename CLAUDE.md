@@ -53,7 +53,7 @@ gh release create v1.1.0 \
 tag 沒帶 `v` 或漏推,純 node 模式的更新提醒也抓不到新版。安裝檔未簽章,`gh release create` 會直接
 公開發布,屬於「發布公開內容」的動作,不要自動執行,要使用者自己按。
 - 靈動島 = Electron 的一個視窗 (`web-app/island.js`),由 `npm run app` 一起帶起,沒有獨立進程也沒有 build 步驟。
-- 沒有 test runner 或 linter。零星的獨立測試檔直接用直譯器跑:`node tests/test_origin_guard.js` (同源守門)、`node tests/test_s2t.js` (簡轉繁)、`node tests/test_lyric_quality.js` (內嵌注音的歌詞守門)、`node tests/test_search_query.js` (繁轉簡 + 瀏覽器標題去噪)、`node tests/test_title_lines.js` (製作人員/版權列標記)、`node tests/test_translations.js` (中文譯文合併)、`node tests/test_romaji.js` (羅馬拼音)、`node tests/test_itunes_resolving.js` (iTunes 原名還原的時序)、`node tests/test_history_toggle.js` (聆聽紀錄開關 + 清除白名單)、`node tests/test_backup_restore.js` (備份/還原 + 還原前的驗證守門)、`node tests/test_scroll_zone.js` (歌詞自動捲動的三段判定)、`node tests/test_game.js` (猜歌的干擾選項挑選)、`node tests/test_island_position.js` (靈動島的多螢幕位置記憶)、`node tests/test_llm_wand.js` (魔杖對非日文歌詞的守門)、`node tests/test_pkce.js` (行動版的 OAuth PKCE)、`python tests/test_pick_session.py`、`python tests/test_furigana_hint.py` (Python 的要用 `venv/Scripts/python.exe`,系統 python 沒裝 fugashi)。
+- 沒有 test runner 或 linter。零星的獨立測試檔直接用直譯器跑:`node tests/test_origin_guard.js` (同源守門)、`node tests/test_s2t.js` (簡轉繁)、`node tests/test_lyric_quality.js` (內嵌注音的歌詞守門)、`node tests/test_search_query.js` (繁轉簡 + 瀏覽器標題去噪)、`node tests/test_title_lines.js` (製作人員/版權列標記)、`node tests/test_translations.js` (中文譯文合併)、`node tests/test_romaji.js` (羅馬拼音)、`node tests/test_itunes_resolving.js` (iTunes 原名還原的時序)、`node tests/test_history_toggle.js` (聆聽紀錄開關 + 清除白名單)、`node tests/test_backup_restore.js` (備份/還原 + 還原前的驗證守門)、`node tests/test_scroll_zone.js` (歌詞自動捲動的三段判定)、`node tests/test_game.js` (猜歌的干擾選項挑選)、`node tests/test_island_position.js` (靈動島的多螢幕位置記憶)、`node tests/test_llm_wand.js` (魔杖對非日文歌詞的守門)、`node tests/test_pkce.js` (行動版的 OAuth PKCE)、`node tests/test_mobile_playback.js` (行動版的播放位置插值)、`node tests/test_mobile_lyrics.js` (行動版的 LRC 解析)、`python tests/test_pick_session.py`、`python tests/test_furigana_hint.py` (Python 的要用 `venv/Scripts/python.exe`,系統 python 沒裝 fugashi)。
 - `ROADMAP.md` (repo 根,**本機檔案,不進版控**) 記著 v1.0.0 之後的規劃與**明確不做的事**。動到「未來要做什麼」的討論先看它,免得重新提案已經否決過的方向 (雲端同步、換 tokenizer、離線辭典、Steam 式強制更新)。clone 下來沒有這個檔屬正常。
   主軸是**歌詞體驗**,不是學日文 —— 翻譯/查詞這類功能要進來,得先過「它讓歌詞更好讀嗎」這一關。
 
@@ -65,7 +65,8 @@ One Node.js backend, multiple thin clients, with Python scripts as helpers spawn
   - 同源守門是 server.js 的第一個 middleware,`cors()` 已經移除 (開 CORS 等於自己拆掉這道牆)。它同時看 `Origin` 與 `Sec-Fetch-Site`,兩層都必要:`Origin` 只有 fetch/XHR 會帶,`<script src>` 這類不帶,而 `Sec-Fetch-Site` 瀏覽器對所有請求都帶。兩個 header 都沒有 = 非瀏覽器客戶端 (curl、腳本),放行;靈動島現在是 Electron 視窗,兩個 header 都會帶,走的是同源那條。WebSocket 的 upgrade 不經過 express middleware,所以 `verifyClient` 要再擋一次。
   - **綁 127.0.0.1 擋不住跨站攻擊**,這是這道守門存在的理由:使用者開著 Kanaric 時瀏覽任一網頁,那個網頁就能打這裡的 API —— 跨站 POST `/api/settings` 把 `llm_base_url` 改成攻擊者的位址,再觸發 `/api/llm-models` 或 `/api/llm-furigana/run`,BYOK 的 API key 就送出去了。`<form>` POST 屬於 simple request,不觸發 preflight,所以光靠 CORS 設定擋不住。
   - **跨站的「頂層導覽」是例外,要放行** (`GET`/`HEAD` + `Sec-Fetch-Dest: document`):使用者從 README、聊天視窗點 `http://localhost:5720` 連結進來就是這種請求,擋掉只會讓人看到一行 JSON 錯誤。放行不開洞 —— 跨站 `<form>` POST 的 dest 也是 document,但方法是 POST,照樣擋住;`<img>`/`<script src>` 的 dest 是 image/script,iframe 內嵌是 iframe,都不是 document。**只認 dest 不要再比 mode**:mode 多擋不到東西,而且 undici 會把 fetch 的 `Sec-Fetch-Mode` 硬改成 `cors`,測試根本設不進去。
-  - 回歸測試:`node tests/test_origin_guard.js` (repo 根目錄,自己帶起一份 server)。動到這段 middleware、`ALLOWED_ORIGINS`、或 WebSocket 的 `verifyClient` 就跑它。
+  - **行動版 (Tailscale) 是唯一的外部來源,由設定 `mobile_origin` 明確指定**,判斷集中在 `isAllowedOrigin()`,middleware 與 `verifyClient` 共用。空值 = 一個外部來源都不放行。**不可以改成「Origin 等於請求的 Host 就放行」** —— 攻擊者把自己網域的 A record 指到 127.0.0.1 就能讓兩者相符 (DNS rebinding),整道守門形同虛設。存進來的值走 `new URL(v).origin` 正規化 (使用者多半整條網址貼進來),`updateSettings` 改到它就即時生效,不必重開 server。**初始化那行只能放在 `readSettings()` 定義之後** —— `SETTINGS_FILE` 是後面的 `const`,在守門那段呼叫會撞 TDZ。
+  - 回歸測試:`node tests/test_origin_guard.js` (repo 根目錄,自己帶起一份 server)。動到這段 middleware、`ALLOWED_ORIGINS`/`mobile_origin`、或 WebSocket 的 `verifyClient` 就跑它。
   - 簡轉繁 = `web-app/s2t.js` 的 `toTraditional()` (opencc-js `cn`→`tw`)。掛在**四個 `SELECT lyrics FROM cache` 的讀取點**,外加寫入前的兩個外部歌詞入口 (自動抓取、`/api/lyrics/custom` —— 它同時是「套用備選歌詞」的入口)。**讀取時轉是必要的**:只在寫入時轉的話,改版前就存在快取裡的歌詞永遠不會變繁體,使用者重載/重開都沒用。編輯器的 `/api/lyrics/update`、`/api/lyrics/save` 是使用者自己打的字,寫入時刻意不轉。
     - **日文歌詞本體絕不能過這個轉換** (日文漢字大量與簡體同形,`声`→`聲`、`学校`→`學校`),所以有假名就跳過 —— 跟 `furigana_inject.py` 是同一條假名分界規則。唯一的例外是已標 `#TITLE#` 的製作人員列:網易連日文歌都給簡體的 `作词 : …`,那幾列照轉。
     - 但**整行跳過會留下混進日文歌詞的簡體字** (網易的 `モザイクロール` 整份是簡體漢字打的:`爱/谁/终/伤`),所以其餘各行走 `fixStraySimplified()` **逐字**修:字在 **JIS X 0208** 裡 = 日文字,不動;不在裡面 = 不是日文字,才轉。判斷用 `TextDecoder('shift_jis')` 把整張 JIS 表倒出來當集合 (Node 的 TextDecoder 只能解碼,所以是反著建表),不必為此塞幾千字的常數進原始碼。
@@ -177,6 +178,14 @@ GitHub repo 也已改名 `bensionfang/Kanaric`,`server.js` 的 `GITHUB_REPO` 跟
 ### Data flow (the key sequence)
 
 1. `media_monitor.py` (or an edge agent) reports a track change → `handleMediaUpdate` → WebSocket broadcast to all clients.
+   - **廣播走 `broadcastMediaState()` 節流,不要改回直接 `global.broadcast`。** 監控每 0.1 秒推一次,
+     而 `currentMediaState` 是淺層合併的 —— 封面一旦收到就一直留在裡面,直接廣播等於每秒把幾十 KB 的
+     base64 PNG 送十次。實測(有歌在播):節流前 **5 秒 46 則 / 7870 KB**,節流後 **5 秒 5 則 / 1.5 KB**。
+     本機看不出來,**行動版走 Tailscale + 行動網路就是每分鐘 90 MB**。
+   - 規則兩條:**只有 `position` 在動時降到 1 秒一次**(島、猜歌、行動版都自己內插,不靠廣播密度);
+     **`position` 以外的欄位一變就立刻送**(暫停圖示、換歌不能延遲一秒)。
+   - **封面沒變就整個不送那個鍵**。三個消費端都判斷 `thumbnail !== undefined` 才動封面,漏送不會清掉畫面。
+     新連上的客戶端拿的是 `init`,那份仍然是完整狀態。
 2. Lyrics are lazy-loaded: the **web frontend** reacts to the broadcast by calling `GET /api/lyrics/fetch`; the server checks the SQLite cache, applies artist aliases, fetches externally on miss, runs furigana injection, then broadcasts the result — the C# island never fetches on its own.
    - **iTunes 查詢「失敗」與「查過了,確定不用還原」不能混為一談。** `getResolvedMetadata` 的失敗路徑寫的是 `{ ..., failedAt }`,`cachedResolution()` 會把過了 `ITUNES_RETRY_MS` (預設 60 秒) 的失敗當成沒查過。舊版失敗也寫成一般結果,一次 3 秒逾時就讓那首歌**整個 process 生命週期**都不再嘗試還原,期間抓的歌詞用未還原的名字寫進 `cache` 與 `listening_history`,永久分裂 (實測 TUYU / ツユ 底下各存了同樣四首歌,排行榜也跟著錯)。冷卻**不能設成 0** —— 媒體監控每 0.1 秒更新一次,不擋就是請求風暴,而且永遠不定案。回歸測試 `node tests/test_itunes_resolving.js` 有一組驗這個 (用 `ITUNES_RETRY_MS` 縮短等待)。
    - **iTunes JP 給的「歌手名」要另外把關,不能沿用「含假名就收」** —— 它會把西洋歌手音譯成純片假名 (`Coldplay` → `コールドプレイ`、`Juice WRLD` → `ジュース・ワールド`),而片假名也算假名,舊版因此會把整批西洋歌改名寫進 `cache` 的鍵與排行榜。判準在 `acceptsItunesArtist()`,三條依序:(1) 原歌手名帶 CJK = 被翻譯過,結果一定是還原 (`魚韻` → `サカナクション`,曲風是「ロック」也照收);(2) 結果帶平假名或漢字 (`なとり`、`藤井 風`) —— **音譯永遠是純片假名**,帶平假名漢字就不可能是音譯;(3) 純片假名 + 原名純 ASCII 才看 `primaryGenreName`,`J-Pop`/`アニメ` 才收 (`レトロリロン` ✅ / `コールドプレイ` ❌)。
@@ -387,8 +396,73 @@ Lines like `作詞：米津玄師` and copyright boilerplate are prefixed with `
 iOS PWA 版規格在 `docs/mobile/PWA-SPEC.md`。動到 `web-app/public/mobile/` 或
 `/api/lyrics` 端點之前，先讀那份規格，特別是「明確不做」那一節。
 
-Phase 1（靜態頁 + Spotify OAuth PKCE）已完成:`web-app/public/mobile/index.html` +
-`pkce.js`（純函式獨立成檔的理由同 `public/js/scroll-zone.js`,測試 require 得到)。
+Phase 1（靜態頁 + Spotify OAuth PKCE）、Phase 2（輪詢 + 本地插值 + 進度條）、
+Phase 3+4（同步歌詞 + 注音）、Phase 5（PWA 化）已完成:`web-app/public/mobile/index.html`
++ `pkce.js` + `playback.js` + `lyrics.js`（純函式獨立成檔的理由同 `public/js/scroll-zone.js`,
+測試 require 得到)+ `manifest.json` + `sw.js`。**五個階段都做完了,規格 §7 沒有第 6 階段。**
+
+- **插值的時間軸一律用 `performance.now()`,不可以用 `Date.now()`** —— 後者被系統校時影響會整段跳。
+  快照 (`snapshot()`) 記下量測當下的 `at`,`positionAt()` 就是「上次量到的位置 + 之後經過的時間」,
+  暫停中不前進、夾在歌曲長度內。每次輪詢回來就覆蓋快照,drift 自動歸零。
+- 輪詢間隔由 `pollDelay()` 決定 (播放 3 秒 / 暫停 15 秒),**沒有播放狀態時當暫停**,不要空轉打 API。
+  `document.hidden` 時不排下一次 (Safari 背景會凍結 timer),回前景靠 `visibilitychange` 立刻補打一次校正。
+- **進度條由 rAF 每幀寫 `width`,所以那個元素刻意不掛 CSS transition** —— 兩邊會互相打架而變黏。
+  rAF 在分頁隱藏時瀏覽器自己會停,不必自己管。
+- `poll()` 回傳「下次要等多久」的覆寫值:429 照 `Retry-After` 等、401 只清掉記憶體的 access token
+  讓下一輪自己用 refresh token 換 (不要退回登入畫面),其餘回 null 走預設間隔。
+- 回歸測試 `node tests/test_mobile_playback.js`。
+
+**歌詞走 `GET /api/lyrics`（server.js,行動版專用的無狀態查詢),刻意不共用 `/api/lyrics/fetch`**:
+- **不廣播**。`/api/lyrics/fetch` 每條路徑都 `global.broadcast({type:'lyrics_updated'})`,
+  手機在播的歌會把桌面與靈動島上顯示的歌詞換掉。
+- **自己做歌名還原** (`canonicalArtist` → `getResolvedMetadata` → 再 `canonicalArtist` 一次)。
+  手機這條路沒有 `handleMediaUpdate`,Spotify 給的是 `Haru Dorobou` / `魚韻`,不還原就跟桌面的
+  cache 鍵分裂,日文歌也查不到。因為是 `await` 的,沒有桌面那個 `state.resolving` 競態。
+- **回的是桌面版同一份「帶 `<ruby>` 的 LRC 字串」,不是規格 §4.1 寫的 `lines[]`/`tokens[]`**:
+  注音 HTML 已經產好且 `furigana_inject.py` 分詞前就逃逸過,前端 `innerHTML` 畫得出來 ——
+  規格第 3 點「給 furigana_inject.py 加 JSON token 輸出模式」因此不必做,Phase 3 與 Phase 4 一起完成。
+- 前端用**相對路徑**打它 = 同源請求(頁面本來就是這台 server 服務的),守門一行都不用改,
+  設定裡填好 `mobile_origin` 即可。
+- `lyrics.js` 的 `parseLrc` **吃掉 `#TITLE#`/`#TRANS#`/`#ROMAJI#` 三種行**:那三個在桌面各有開關,
+  而併不併進廣播內容取決於**桌面的設定**(見 `wantsExtraLine`),手機照單全收會莫名多出兩行。
+- 置中靠寫 `pane.scrollTop`(`scrollTo({behavior:'smooth'})`)而不是 `scrollIntoView` ——
+  後者會連整頁的祖先容器一起捲。**只在換行時動**,每幀寫等於吃掉使用者的手動捲動。
+- 回歸測試 `node tests/test_mobile_lyrics.js`。
+
+**PWA 化 (Phase 5)**:
+- **Service Worker (`sw.js`) 只快取 app shell 那六個檔,API 一律走網路** (規格 §5.2)。`fetch` 事件對
+  非 `/mobile/` 的路徑**直接 return 不 respondWith**,`/api/lyrics` 與 Spotify 的兩支 API 因此完全
+  不經過它。shell 走 cache-first + 背景更新,所以**改了 `index.html`/`*.js` 要把 `CACHE` 的版號往上加**,
+  不然舊 shell 會一直命中(`activate` 只清版號不同的)。背景那條 `fetch` 一定要 `.catch` ——
+  離線時沒接住就是每次載入一個未處理的 rejection。
+- **歌詞快取用 localStorage 不是規格 §4.3 寫的 IndexedDB**:一首幾 KB,不值得為它引入非同步 API。
+  整份存在**一個鍵底下的 map** (`kanaric.mobile.lyrics`,id → `/api/lyrics` 的回應),不是一首一個鍵 ——
+  淘汰最舊的直接靠物件的鍵順序,不必掃整個 localStorage。**「找不到歌詞」不進快取**,存下去等於永遠不再重試。
+- **Wake Lock 在 `visibilitychange` 回前景時要重拿** (規格 §5.3 點名的坑):分頁一隱藏系統就釋放了,
+  只在進場拿一次的話切回來螢幕照樣熄。低電量模式會直接拒絕請求,那是正常情況,不要當錯誤吐給使用者。
+- **`manifest.json` 目前沒有 `icons`** —— repo 還沒有 app 圖檔 (同「Icon 待辦」那節)。iOS 的 standalone
+  是靠 `apple-mobile-web-app-capable` meta 生效的,不缺 manifest 也能跑;有圖之後補 `icons` 與
+  `<link rel="apple-touch-icon">` (iOS 那條**只吃 PNG**)。
+- **lrclib 備援 (規格 §4.2)**:server 連不上 (電腦關機) 或它也沒有歌詞時,前端**直接**打
+  `https://lrclib.net/api/get`。能這樣打是因為 lrclib 有給 CORS header —— **中國平台那三家都沒有**,
+  而且 QQ 是 QRC (3DES)、酷狗是 krc (zlib + XOR),手機端沒有路,不要重新提案。
+  - 拿到的是**沒有注音的純 LRC**,而且**沒有經過 `furigana_inject.py`,沒有人幫它逃逸過** ——
+    畫面是 innerHTML 畫的,所以自己 `escapeHtml()` **整份 LRC 字串**再交給 `parseLrc` (時間戳是 ASCII,不受影響)。
+  - **刻意不寫進快取**:存下去的話電腦開回來也永遠換不成有注音的那份。
+  - `artist_name` 只送第一位歌手 (`snapshot()` 把 Spotify 的多位歌手 join 成一串,整串送過去查不到)。
+**鏡像模式(電腦版開著時)**:
+- 手機連上 server 的 WebSocket 就**不打 Spotify** —— 直接吃 `media_state` 廣播,**跟靈動島同一個角色**。
+  省掉 OAuth、輪詢、429 限流、歌名還原的競態,而且譯文/羅馬字/手改讀音全部跟桌面一致。
+- **`onMirrorState()` 把廣播轉成跟 `snapshot()` 完全同形的快照**(秒 → 毫秒、`id` 用 `歌手|||歌名`,
+  這條路沒有 Spotify track id),所以 `render` / `frame` / `loadLyrics` / 快取全部原封不動 —— 新增的只有連線那段。
+- **`m.resolving` 為 true 時整包丟掉**:跟桌面與島同一條規則,不等歌名定案就會用兩個鍵各抓一次歌詞。
+- 兩個模式**自動切換,沒有開關**:進場先連 WebSocket,2 秒沒連上就跑獨立模式(Spotify + lrclib);
+  之後連上仍會接管(`onopen` 停掉輪詢),斷線 `onclose` 退回獨立模式並每 15 秒重連。
+  `schedule()` 的第一行因此要擋 `mirror`,不然輪詢會在鏡像模式下復活。
+- **頁面走 https(Tailscale)時 WebSocket 一定要 `wss:`** —— `ws:` 會被當成混合內容擋掉。
+  守門那邊什麼都不用改,`verifyClient` 跟 middleware 共用 `isAllowedOrigin`,`mobile_origin` 已經涵蓋。
+- 限制:**只在電腦開著且連得到時有用**,跟獨立模式互補、不取代。
+- SW 需要 secure context:Tailscale 的 HTTPS 與 `127.0.0.1` 都算,`file://` 直接開不算 (註冊失敗就算了,不影響其他功能)。
 
 **規格 §6.1 那條最高風險已實測過關 (2026-07-28)**:iPhone 從主畫面圖示啟動、跑完整個
 授權導回後仍在 standalone (`navigator.standalone === true`,沒有掉回 Safari)。整個 PWA
@@ -404,8 +478,10 @@ Phase 1（靜態頁 + Spotify OAuth PKCE）已完成:`web-app/public/mobile/inde
   Spotify Dashboard 註冊。結尾的 `index.html` 一定要剝掉,對不上就是 INVALID_CLIENT。
 - Client ID 存 localStorage(公開值);`refresh_token` 存 localStorage、`access_token` 只在記憶體。
   **不可以引入 client secret**,PKCE 就是為了不需要它。
-- **Phase 3 接 `/api/lyrics` 時守門才要動**:`ALLOWED_ORIGINS` 寫死 localhost/127.0.0.1,
-  從 Tailscale 網域打過來的 `Origin` 會 403。屆時**不要**改成「Origin 等於請求的 Host 就放行」
-  —— 攻擊者把網域的 A record 指到 127.0.0.1 就能讓兩者相符(DNS rebinding),守門形同虛設。
-  要加就加一個明確的 `mobile_origin` 設定值,與 WebSocket 的 `verifyClient` 共用同一個判斷。
-  規格 §4.1 寫的「加 CORS header」同樣是錯的方向(見上面同源守門那節)。
+- **同源守門已經開好行動版的門了**(見上面同源守門那節的 `mobile_origin`),Phase 3 接
+  `/api/lyrics` 時不必再動守門,只要在設定裡填 Tailscale 網域。規格 §4.1 寫的「加 CORS header」
+  是錯的方向(開 CORS 等於自己拆掉那道牆)。
+- Tailscale 那端用 `tailscale serve --bg 5720`(**不是 `funnel`** —— funnel 會公開到整個網際網路)。
+  server 照舊綁 `127.0.0.1`,Serve 跑在同一台機器上走 loopback 進來,bind 一個字都不用改。
+  代價是 tailnet 上的任何裝置都能無 auth 打這台的 API(`curl` 不帶 `Origin`/`Sec-Fetch-*`,
+  守門照規則放行)—— 自己的裝置可接受,要分享節點給別人就得先做真正的 auth。
