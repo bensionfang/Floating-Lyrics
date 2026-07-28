@@ -159,6 +159,8 @@ def apply_hint(words, hint, mark=False):
             continue  # 只是羅馬字轉換的等價差異,不動
         if not _keeps_okurigana(w['orig'], candidate):
             continue  # 對齊歪掉了,見 _keeps_okurigana
+        if mark and len(candidate) != len(w['hira']):
+            continue  # LLM 層長度對不上原讀音 = 切歪被截斷,不採用 (羅馬字層不設此門檻)
 
         if mark:
             w['llm_prev'] = w['hira']  # LLM 蓋掉前的讀音,前端標記「AI 改了這個」用

@@ -101,7 +101,7 @@
             <h3><i class="fa-solid fa-compact-disc"></i> 核心歌手佔比</h3>
             <span class="header-desc">前五大最愛歌手的分佈比例</span>
         </div>
-        <div class="chart-container" style="height: 300px;">
+        <div class="chart-container" style="height: 340px;">
             <!-- 甜甜圈沒有座標軸,零資料時是「整塊空白」而不是「空的圖表」,看起來像壞掉。
                  折線/長條圖不用這個:它們至少會畫出軸線與 0 的基準,一看就知道是還沒有資料。 -->
             <div id="artistChart-empty" class="chart-empty" style="display: none;">
@@ -319,7 +319,10 @@
             options: {
                 responsive: true, maintainAspectRatio: false,
                 plugins: {
-                    legend: { position: 'right' }
+                    // 靠右的直式圖例是窄卡片裡長歌手名被裁的元凶 (容器 365px,「ずっと真夜中でいいのに。」
+                    // 只顯示到一半)——右側圖例本身沒有 CSS 可以截斷加省略號,Chart.js 就是硬裁。
+                    // 移到下方,圖例橫著排、不跟甜甜圈搶寬度,長名字才有地方顯示完整。
+                    legend: { position: 'bottom', labels: { boxWidth: 12, padding: 12 } }
                 },
                 cutout: '65%'
             }

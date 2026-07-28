@@ -126,3 +126,20 @@ apply_hint(words, 'そのほかのきみ')
 assert hira_of(words, '君') == 'きみ', hira_of(words, '君')
 
 print('OK')
+
+# 10. LLM 層 (mark=True) 只接受與原讀音等長的候選:apply_hint 是按「預測讀音長度」切 hint 的
+#     字串,一旦切歪就會截斷 (本性 ほんしょう(5) 被切成 4 字的「ほんしょ」)。羅馬字層 (mark=False)
+#     不受影響 —— 那邊的長度差異另有成因 (づ/ず、長音),收緊會誤殺。
+words = [{'orig': '本性', 'hira': 'ほんしょう', 'is_space': False}]
+apply_hint(words, 'ほんしょ', mark=True)
+assert hira_of(words, '本性') == 'ほんしょう', hira_of(words, '本性')  # 長度不對,不採用
+words = [{'orig': '本性', 'hira': 'ほんしょう', 'is_space': False}]
+apply_hint(words, 'ほんしょ', mark=False)
+assert hira_of(words, '本性') == 'ほんしょ'  # 羅馬字層照舊不設長度門檻
+
+# 等長的修正,mark=True 照樣要能套用 (官能 かんおう→かんのう,兩邊都是 4 字)
+words = [{'orig': '官能', 'hira': 'かんおう', 'is_space': False}]
+apply_hint(words, 'かんのう', mark=True)
+assert hira_of(words, '官能') == 'かんのう', hira_of(words, '官能')
+
+print('OK')

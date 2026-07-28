@@ -95,6 +95,7 @@ One Node.js backend, multiple thin clients, with Python scripts as helpers spawn
     - **輸出要重新逃逸**:來源是已逃逸的歌詞,而比對讀音時會先解回實體字串,不逃逸等於把 `&lt;img&gt;` 還原成真標籤。
     - 靈動島**必須吃掉 `#ROMAJI#` 行** (`island.ejs` 的 `parseLrc`),不然每句歌詞後面會跟著一行羅馬字閃過去。收進 `romajis` 對照表後,島的「第二行顯示」多一個選項「本句羅馬拼音」(與「本句翻譯」共用 `pickLines` 那條路,沒有資料就退回「下一句歌詞」)。**`pickLines` 要先決定「第一行實際是哪一句」再挑第二行** —— 活躍位置落在空行 (間奏) 時第一行會提後面那句上來,先查譯文/羅馬字的話那次查的是空行的時間戳、查不到,第二行就掉回「下一句歌詞」:症狀是每經過一次音符符號,那句的第二行就換成下一句歌詞。
     - **要不要併進廣播由 `wantsExtraLine()` 決定:歌詞區的開關 **或** 島的第二行選了它。** 兩者是同一份廣播內容,只看歌詞區開關的話,島設成「本句翻譯/羅馬拼音」卻關著對應開關時,島上永遠是空的。
+    - **但這也代表網頁的歌詞面板不能反過來看「內容裡有沒有那一行」來決定要不要畫**——島設成「本句羅馬拼音」時,即使歌詞區的「顯示羅馬拼音」是關的,廣播內容照樣帶 `#ROMAJI#`(為了島),面板若照單全收,關掉開關會沒有作用(2026-07-28 真實回報過)。修法是 `footer.ejs` 另外維護 `window.__lyricsPaneSettings`(SSR 用 `settings.show_romaji`/`show_translation` 初始化,`updateLyricsContentSetting` 切換時同步更新),`app.js` 的 `renderLyrics()` 判斷 `lyric.romaji && paneSettings.show_romaji` 才畫,不是看 `lyric.romaji` 有沒有值。
     - 樣式跟著歌詞本體走 (同字體、不斜體,只小一號):唱到那句一起反白、段落循環的綠底一起上、hover 一起變白 —— **`.lyrics-romaji` 要跟 `.lyrics-translation` 出現在同一組選擇器裡**,漏掉哪一組就是那個狀態下只有日文變、羅馬字不變。
     - 回歸測試 `node tests/test_romaji.js`。
   - **瀏覽器 (YouTube) 來源的三道處理都以 `web-app/browser-query.js` 的 `isMusicAppSource()` 為閘門** (`MUSIC_APPS` 是 `media_monitor.py` 那份的手動鏡射;未知來源保守當音樂 app)。

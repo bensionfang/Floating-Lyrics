@@ -1453,8 +1453,16 @@ function startOptionsJob(q) {
   // 外部來源 (lrclib / 網易 / 酷狗 / Python fallback) 偶爾會沒有回應,
   // 沒有逾時的話這個工作會永遠卡在 searching,按鈕就一直轉圈
   const OPTIONS_TIMEOUT_MS = 60000;
+  // 逐來源回報:每問完一家就把目前累積的結果寫回 job,不必等五個來源全問完才有東西可看
+  // (單次完整搜尋實測 25.7 秒)。/api/lyrics/options/state 輪詢就能拿到「已完成的來源」。
+  const onProgress = (partial) => {
+    job.options = partial;
+    if (global.broadcast) {
+      global.broadcast({ type: 'lyrics_options_progress', title: q.title, artist: q.artist, count: partial.length });
+    }
+  };
   const withTimeout = Promise.race([
-    searchOptions(q),
+    searchOptions(q, onProgress),
     new Promise((_, reject) => setTimeout(() => reject(new Error('搜尋逾時')), OPTIONS_TIMEOUT_MS))
   ]);
 
@@ -1482,7 +1490,7 @@ app.get('/api/lyrics/options/state', (req, res) => {
   const { title, artist } = req.query;
   const job = optionJobs.get(jobKey(artist, title));
   if (!job) return res.json({ status: 'idle', options: [] });
-  res.json({ status: job.status, options: job.status === 'done' ? job.options : [] });
+  res.json({ status: job.status, options: job.options });   // searching 中也給目前已完成來源的結果
 });
 
 app.get('/api/lyrics/options', async (req, res) => {
@@ -1499,12 +1507,14 @@ app.get('/api/lyrics/options', async (req, res) => {
   }
 });
 
-async function searchOptions({ title, artist, searchTitle, searchArtist }) {
+async function searchOptions({ title, artist, searchTitle, searchArtist }, onProgress) {
   {
     const { qTitle, qArtist, trueArtist, cleanTitle } = await buildSearchQuery(title, artist, searchTitle, searchArtist);
     const searchUrl = `https://lrclib.net/api/search?q=${encodeURIComponent(cleanTitle + ' ' + trueArtist)}`;
-    
+
     let valid_lyrics = [];
+    // 每問完一家就回報目前累積的結果 (已排序/去重過),不必等三家都問完
+    const report = () => { if (onProgress) onProgress(finalizeOptions([...valid_lyrics], cleanTitle, artist, title)); };
 
     // 網易 / 酷狗 (自家 client,不經過 syncedlyrics)
     try {
@@ -1526,6 +1536,7 @@ async function searchOptions({ title, artist, searchTitle, searchArtist }) {
         }
       }
     } catch(e) {}
+    report();
 
     // Fetch from all fallback options
     try {
@@ -1545,7 +1556,8 @@ async function searchOptions({ title, artist, searchTitle, searchArtist }) {
         }
       }
     } catch(e) {}
-    
+    report();
+
     // Lrclib 掛掉/沒回應時,別把前面幾個來源已經找到的結果一起賠掉
     let data = [];
     try {

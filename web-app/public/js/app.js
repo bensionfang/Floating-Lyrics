@@ -350,9 +350,18 @@ async function pollSystemMedia() {
             
             // 歌詞不在這裡抓 —— iTunes 日文原名還原是非同步的,這一刻的名字可能再過幾秒就變。
             // 等下面 resolving 為 false 再抓,整首歌只抓一次 (見 server.js handleMediaUpdate)
-            const scrollPane = document.getElementById('lyrics-scroll');
-            if (scrollPane) scrollPane.innerHTML = `<div class="loading-spinner"><i class="fa-solid fa-spinner fa-spin"></i> 正在搜尋歌詞...</div>`;
-            parsedLyrics = [];
+            //
+            // 這裡的 title 變了不代表換了一首歌:60 秒重試把名字從原始名換成日文原名時
+            // title 也會變,但 trackId (original_*) 沒變。不判斷的話,這裡會搶在
+            // fetchAndParseLyrics 自己的 sameTrack 判斷之前把畫面清成 spinner,等重抓撞限流
+            // 拿到空結果、sameTrack 判斷讓它「不清畫面」時,畫面已經被清過了 —— 卡在 spinner
+            // 動畫,不是「找不到」但一樣是好歌詞消失,而且沒有補救路徑。
+            const newTrackId = `${data.original_title || data.title}|||${data.original_artist || data.artist || ''}`;
+            if (newTrackId !== displayedTrackId) {
+                const scrollPane = document.getElementById('lyrics-scroll');
+                if (scrollPane) scrollPane.innerHTML = `<div class="loading-spinner"><i class="fa-solid fa-spinner fa-spin"></i> 正在搜尋歌詞...</div>`;
+                parsedLyrics = [];
+            }
             window._lyricsOptions = [];
             const listEl = document.getElementById('lyrics-options-list');
             if (listEl) listEl.innerHTML = '';
@@ -562,13 +571,17 @@ function renderLyrics() {
         return;
     }
     
+    // 廣播內容裡有沒有羅馬字/譯文行,是 server 的 wantsExtraLine (歌詞區開關 OR 島的第二行選它)
+    // 決定的 —— island_line2 選了它,即使這裡的開關是關的,內容照樣帶那一行 (不然島會是空的)。
+    // 歌詞面板要照這兩個開關自己再擋一次,不能看「內容裡有沒有」來決定要不要畫。
+    const paneSettings = window.__lyricsPaneSettings || {};
     let html = parsedLyrics.map((lyric, index) => {
         let content = `<span>${lyric.text}</span>`;
         // 羅馬字排在歌詞與譯文之間:它是同一句的讀法,比譯文更貼著原句
-        if (lyric.romaji) {
+        if (lyric.romaji && paneSettings.show_romaji) {
             content += `<div class="lyrics-romaji"><span>${lyric.romaji}</span></div>`;
         }
-        if (lyric.translation) {
+        if (lyric.translation && paneSettings.show_translation) {
             // 內層再包一顆 span:段落循環的綠底只上在 span 上,好貼著文字而不是整行滿寬。
             // 直接給這顆 div 上底色會變方塊,而 width:fit-content 又會讓歌詞對齊 (text-align) 失效
             content += `<div class="lyrics-translation"><span>${lyric.translation}</span></div>`;
@@ -801,6 +814,15 @@ document.addEventListener('keydown', (e) => {
             updateLyricsHighlight(activeLyricIndex);
             centerActiveLine();
         }
+    } else if (e.key === 'Escape' && document.body.classList.contains('window-maximized')) {
+        // 放大模式不是 Fullscreen API,瀏覽器沒有內建的 ESC 離開行為,要自己補。
+        // 但 ESC 同時也用來關浮層 (備選歌詞視窗、設定選單那兩個 document keydown 監聽在
+        // 這支之後才註冊,同一次按鍵兩邊都會跑) —— 浮層開著時讓它先關,不要連放大模式一起退出,
+        // 不然「先關浮層」跟「順便退出放大模式」會疊在同一次按鍵發生,使用者只想關浮層。
+        const optModal = document.getElementById('lyrics-options-modal');
+        const menu = document.getElementById('settings-menu');
+        const modalOpen = (optModal && optModal.classList.contains('show')) || (menu && menu.classList.contains('show'));
+        if (!modalOpen) toggleFullscreen();
     } else {
         for (const [id, hk] of Object.entries(TOOLBAR_HOTKEYS)) {
             if (fullKey === (localStorage.getItem(id) || hk.def)) {

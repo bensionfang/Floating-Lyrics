@@ -236,15 +236,18 @@ document.addEventListener('mouseover', (e) => {
     playOnce();                                           // 掛好當下這次 hover 已錯過 mouseenter,直接捲
 });
 
-// 把備選歌詞畫進視窗的清單
-function renderOptionsList(options) {
+// 把備選歌詞畫進視窗的清單。searching=true 時 (server 還在問剩下的來源) 尾巴加一行提示,
+// 讓「已有的結果先看」跟「還在補」分得出來。
+function renderOptionsList(options, searching = false) {
     const listEl = document.getElementById('lyrics-options-list');
     if (!listEl) return;
     if (!options || !options.length) {
-        listEl.innerHTML = `<div style="color: var(--text-secondary); font-size: 13px; text-align:center; padding: 10px;"><i class="fa-solid fa-face-frown"></i> 找不到備選歌詞</div>`;
+        listEl.innerHTML = searching
+            ? `<div style="color: var(--text-secondary); font-size: 13px; text-align:center; padding: 10px;"><i class="fa-solid fa-spinner fa-spin"></i> 搜尋中...</div>`
+            : `<div style="color: var(--text-secondary); font-size: 13px; text-align:center; padding: 10px;"><i class="fa-solid fa-face-frown"></i> 找不到備選歌詞</div>`;
         return;
     }
-    listEl.innerHTML = options.map((opt, i) => `
+    let html = options.map((opt, i) => `
         <div class="opt-row" onclick="applyLyricsOption(${i})">
             <div class="opt-meta">
                 <div class="opt-title opt-scroll"><span>${opt.title}</span></div>
@@ -256,6 +259,10 @@ function renderOptionsList(options) {
             </div>
         </div>
     `).join('');
+    if (searching) {
+        html += `<div style="color: var(--text-secondary); font-size: 12px; text-align:center; padding: 8px;"><i class="fa-solid fa-spinner fa-spin"></i> 還在找更多來源…</div>`;
+    }
+    listEl.innerHTML = html;
 }
 
 function closeLyricsModal() {
@@ -334,21 +341,40 @@ async function performGetOptions(forceManual = false, force = false) {
     const listEl = document.getElementById('lyrics-options-list');
     if (!listEl) return;
     listEl.innerHTML = `<div style="color: var(--text-secondary); font-size: 13px; text-align:center; padding: 10px;"><i class="fa-solid fa-spinner fa-spin"></i> 搜尋中...</div>`;
-    try {
-        const queryParams = new URLSearchParams({
-            title: songTitle,
-            artist: songArtist,
-            searchTitle: searchTitle,
-            searchArtist: searchArtist
-        });
-        if (force || forceManual) queryParams.set('force', '1');   // 丟掉 server 上舊的搜尋結果重跑
-        const resp = await fetch(`/api/lyrics/options?${queryParams.toString()}`);
-        const data = await resp.json();
-        window._lyricsOptions = data.options || [];
-        renderOptionsList(window._lyricsOptions);
-    } catch (e) {
-        listEl.innerHTML = `<div style="color: var(--text-secondary); font-size: 13px; text-align:center; padding: 10px;"><i class="fa-solid fa-triangle-exclamation"></i> 載入失敗</div>`;
-    }
+
+    const queryParams = new URLSearchParams({
+        title: songTitle,
+        artist: songArtist,
+        searchTitle: searchTitle,
+        searchArtist: searchArtist
+    });
+    if (force || forceManual) queryParams.set('force', '1');   // 丟掉 server 上舊的搜尋結果重跑
+
+    // 搜尋在 server 端跑 (見 server.js 的 optionJobs);單次完整搜尋實測 25.7 秒,
+    // 全查完才回一包的話這個視窗會乾等。改成觸發背景工作後輪詢進度,
+    // 每問完一家 (網易/酷狗 → fallback → lrclib) server 就會更新 job.options,
+    // 這裡跟著把目前已有的結果先畫出來,不是全部到齊才顯示。
+    clearInterval(window._modalOptPollTimer);
+    fetch(`/api/lyrics/options?${queryParams.toString()}`).catch(() => {});
+    await new Promise((resolve) => {
+        const stateParams = new URLSearchParams({ title: songTitle, artist: songArtist });
+        window._modalOptPollTimer = setInterval(async () => {
+            try {
+                const r = await fetch(`/api/lyrics/options/state?${stateParams}`, { cache: 'no-store' });
+                const d = await r.json();
+                window._lyricsOptions = d.options || [];
+                renderOptionsList(window._lyricsOptions, d.status === 'searching');
+                if (d.status !== 'searching') {
+                    clearInterval(window._modalOptPollTimer);
+                    resolve();
+                }
+            } catch (e) {
+                clearInterval(window._modalOptPollTimer);
+                listEl.innerHTML = `<div style="color: var(--text-secondary); font-size: 13px; text-align:center; padding: 10px;"><i class="fa-solid fa-triangle-exclamation"></i> 載入失敗</div>`;
+                resolve();
+            }
+        }, 1200);
+    });
 }
 
 async function applyLyricsOption(index) {
