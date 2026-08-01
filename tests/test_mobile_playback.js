@@ -30,6 +30,18 @@ assert.strictEqual(
   snapshot(payload({ item: { ...payload().item, artists: [{ name: 'A' }, { name: 'B' }] } }), t0).artist,
   'A, B');
 
+// 封面:images 由大到小,取 [0];沒有 album 的 (單曲、podcast) 要回空字串而不是炸掉,
+// 前端靠這個空字串把 <img> 藏起來,不然會留一個破圖框
+assert.strictEqual(s.art, '', '沒有 album 時封面應為空字串');
+assert.strictEqual(
+  snapshot(payload({ item: {
+    ...payload().item,
+    album: { images: [{ url: 'https://i.scdn.co/big' }, { url: 'https://i.scdn.co/small' }] },
+  } }), t0).art,
+  'https://i.scdn.co/big');
+assert.strictEqual(
+  snapshot(payload({ item: { ...payload().item, album: { images: [] } } }), t0).art, '');
+
 // --- positionAt -----------------------------------------------------------
 assert.strictEqual(positionAt(s, t0), 30000, '同一時刻應等於量到的位置');
 assert.strictEqual(positionAt(s, t0 + 2500), 32500, '播放中要隨時間前進');

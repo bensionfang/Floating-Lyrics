@@ -42,8 +42,16 @@
   button:disabled { opacity: .5; }
   button.ghost { background: transparent; color: var(--dim); border: 1px solid var(--border); }
   .hidden { display: none !important; }
-  .track-title { font-size: 24px; font-weight: 700; margin: 0 0 4px; }
-  .track-artist { color: var(--dim); margin: 0 0 20px; }
+  /* 封面放旁邊而不是上面:歌詞區已經吃掉 55vh,直的再壓一張大圖就沒地方了 */
+  .now { display: flex; gap: 14px; align-items: center; margin-bottom: 20px; }
+  .art { width: 64px; height: 64px; border-radius: 6px; flex-shrink: 0; object-fit: cover;
+         background: #000; }
+  /* min-width:0 不能拿掉 —— flex item 預設 min-width:auto,長歌名會把封面擠出卡片 */
+  .now-text { min-width: 0; }
+  .track-title { font-size: 22px; font-weight: 700; margin: 0 0 4px;
+                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .track-artist { color: var(--dim); margin: 0; font-size: 14px;
+                  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* 進度條由 rAF 每幀寫 width,所以刻意不加 CSS transition —— 兩邊會互相打架而變黏 */
   .bar { height: 4px; background: rgba(255,255,255,.2); border-radius: 2px; overflow: hidden; }
   .bar > i { display: block; height: 100%; width: 0; background: var(--accent); }
@@ -90,14 +98,16 @@
 
 <!-- 已登入:播放狀態 -->
 <div id="player" class="card hidden">
-  <p class="track-title" id="track-title">—</p>
-  <p class="track-artist" id="track-artist">—</p>
+  <div class="now">
+    <!-- 封面拿不到時整個藏起來 (單曲/podcast 可能沒有 album),不要留一個破圖框 -->
+    <img id="art" class="art hidden" alt="">
+    <div class="now-text">
+      <p class="track-title" id="track-title">—</p>
+      <p class="track-artist" id="track-artist">—</p>
+    </div>
+  </div>
   <div class="bar"><i id="bar-fill"></i></div>
   <div class="times"><span id="pos-fmt">0:00</span><span id="dur-fmt">0:00</span></div>
-  <div class="row"><span>progress_ms</span><span class="mono" id="progress-ms">—</span></div>
-  <div class="row"><span>is_playing</span><span class="mono" id="is-playing">—</span></div>
-  <div class="row"><span>track id</span><span class="mono" id="track-id">—</span></div>
-  <div class="row"><span>standalone</span><span class="mono" id="standalone">—</span></div>
   <div class="row"><span>歌詞來源</span><span class="mono" id="lyrics-source">—</span></div>
   <button id="logout-btn" class="ghost">登出</button>
 </div>
@@ -422,7 +432,6 @@
       const pos = positionAt(track, performance.now());
       $('bar-fill').style.width = track.durationMs ? `${(pos / track.durationMs) * 100}%` : '0';
       $('pos-fmt').textContent = formatTime(pos);
-      $('progress-ms').textContent = Math.round(pos);
       syncLyrics(pos);
     }
     requestAnimationFrame(frame);
@@ -439,9 +448,13 @@
     $('track-title').textContent = t ? t.title : '—';
     $('track-artist').textContent = t ? t.artist : '—';
     $('dur-fmt').textContent = formatTime(t ? t.durationMs : 0);
-    $('is-playing').textContent = t ? String(t.isPlaying) : '—';
-    $('track-id').textContent = t ? t.id : '—';
-    if (!t) { $('bar-fill').style.width = '0'; $('pos-fmt').textContent = '0:00'; $('progress-ms').textContent = '—'; }
+    // src 只在真的換圖時寫 —— 每次輪詢都寫同一個 URL 會讓 Safari 重新解碼一次,封面會閃
+    const art = $('art'), url = (t && t.art) || '';
+    if (art.getAttribute('src') !== url) {
+      if (url) art.setAttribute('src', url); else art.removeAttribute('src');
+    }
+    art.classList.toggle('hidden', !url);
+    if (!t) { $('bar-fill').style.width = '0'; $('pos-fmt').textContent = '0:00'; }
   }
 
   // --- 畫面切換 -------------------------------------------------------------
@@ -459,10 +472,6 @@
     $('setup').classList.add('hidden');
     $('player').classList.remove('hidden');
     keepAwake();
-    // 本階段的驗收重點 (規格 §6.1):從主畫面啟動、授權導回後是不是還在 standalone
-    const standalone = navigator.standalone === true
-      || matchMedia('(display-mode: standalone)').matches;
-    $('standalone').textContent = standalone ? 'true' : 'false';
   }
 
   // --- 進場 -----------------------------------------------------------------

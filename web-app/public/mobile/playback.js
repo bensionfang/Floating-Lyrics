@@ -18,6 +18,8 @@ function snapshot(data, now) {
     title: item.name,
     artist: (item.artists || []).map((a) => a.name).join(', '),
     durationMs: item.duration_ms || 0,
+    // images 由大到小,[0] 是 640px。單曲/podcast 可能整個沒有 album,取不到就空字串
+    art: ((item.album && item.album.images || [])[0] || {}).url || '',
     progressMs: data.progress_ms || 0,
     isPlaying: !!data.is_playing,
     at: now,                      // 這份快照是在哪個時間點量的

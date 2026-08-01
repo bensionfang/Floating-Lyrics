@@ -501,7 +501,8 @@ Dockerfile 的 venv 正好讓 PATH 上有它 —— 零程式碼改動。
 
 **規格 §6.1 那條最高風險已實測過關 (2026-07-28)**:iPhone 從主畫面圖示啟動、跑完整個
 授權導回後仍在 standalone (`navigator.standalone === true`,沒有掉回 Safari)。整個 PWA
-方案成立,不必再重測 —— 頁面上那列 `standalone` 就是為這條驗收留的。
+方案成立,不必再重測 —— 當時頁面上那列 `standalone` 是為這條驗收留的,**驗完已經拿掉**
+(連同 `progress_ms`/`is_playing`/`track id` 三列除錯資訊),要重驗自己在 console 打一次就好。
 
 - **這一頁不經過 Kanaric 的 API,只打 `accounts.spotify.com` 與 `api.spotify.com`。**
   所以同源守門一行都不用改:`express.static` 已經在服務 `public/`,頁面自己的 `<script src>`
