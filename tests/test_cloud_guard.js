@@ -40,7 +40,6 @@ async function run() {
     ['POST /api/db-clear', 'POST', '/api/db-clear'],
     ['POST /api/restore', 'POST', '/api/restore'],
     ['GET /api/llm-key', 'GET', '/api/llm-key'],
-    ['GET / (桌面後台)', 'GET', '/'],
     ['GET /island', 'GET', '/island'],
     ['GET /api/media', 'GET', '/api/media'],
   ]) {
@@ -52,6 +51,13 @@ async function run() {
   for (const p of ['/mobile/', '/mobile/index.html', '/mobile/lyrics.js', '/mobile/sw.js', '/mobile/manifest.json']) {
     const r = await fetch(BASE + p);
     check(r.ok, `靜態頁放行 ${p}`, String(r.status));
+  }
+
+  // 根路徑轉到行動版:使用者只要記一個網域。/mobile (少斜線) 一起收。
+  for (const p of ['/', '/mobile']) {
+    const r = await fetch(BASE + p, { redirect: 'manual' });
+    check(r.status === 302 && r.headers.get('location') === '/mobile/',
+      `${p} → 轉址到 /mobile/`, `${r.status} ${r.headers.get('location')}`);
   }
 
   // 進場的喚醒 ping (index.html)。帶 query 是給 SW 看的 (讓它放行走網路),B1 判斷的是

@@ -105,6 +105,12 @@ if (CLOUD) {
 
   app.use((req, res, next) => {
     if (req.method !== 'GET' && req.method !== 'HEAD') return res.status(404).end();
+    // 雲端那台只有行動版一個頁面,根路徑轉過去 —— 使用者記一個網域就好,不必記 /mobile/。
+    // **是轉址不是把頁面搬到根路徑**:搬過去的話 redirect_uri 會變成 origin + '/',而
+    // <script src="pkce.js"> 那三支相對路徑會指到 /pkce.js (檔案在 /mobile/) 全部 404。
+    // 302 不是 301:301 會被瀏覽器硬快取,以後想改就改不動了。
+    // /mobile (少了結尾斜線) 一起收 —— 它不符合下面的 startsWith('/mobile/'),不轉就是 404。
+    if (req.path === '/' || req.path === '/mobile') return res.redirect('/mobile/');
     if (req.path === '/api/lyrics') {
       if (!TOKEN || req.get('X-Kanaric-Token') !== TOKEN) return res.status(401).end();
       return rateLimit(req, res, next);

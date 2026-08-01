@@ -474,6 +474,10 @@ WebSocket 直接吃 `media_state` 廣播、不打 Spotify,角色跟靈動島一�
   `/mobile/*` 與 `GET /api/lyrics`(要 `X-Kanaric-Token`);其餘**回 404 而不是 403**,
   連「有這條路但你沒權限」都不透露。`/api/settings`、`/api/restore`、`/api/db-clear`、
   `/api/llm-key` 因此在那台**根本不存在**,不必為了上雲做帳號系統。
+  - `/` 與 `/mobile`(少了結尾斜線)**302 轉到 `/mobile/`**,使用者只要記一個網域。
+    **是轉址不是把頁面搬到根路徑** —— 搬過去 `redirect_uri` 會變成 origin + `/`,而
+    `<script src="pkce.js">` 那三支相對路徑會指到 `/pkce.js` 全部 404。用 302 不用 301,
+    301 會被瀏覽器硬快取,以後想改就改不動。
   - **`MOBILE_TOKEN` 沒設定時一律 401**。不能只寫 `req.get(...) !== process.env.MOBILE_TOKEN` ——
     兩邊都是 `undefined` 會相等而放行,設定漏了就變成公開的免費歌詞 API 且沒有任何徵兆。
   - **限流是必要的不是防禦性程式**:每次 cache miss 都會打三家平台 + spawn 一個 Python 程序,
