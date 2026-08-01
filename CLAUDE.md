@@ -490,6 +490,10 @@ WebSocket 直接吃 `media_state` 廣播、不打 Spotify,角色跟靈動島一�
 - **B4 `verifyClient` 一律回 false**:雲端沒有正當的 WebSocket 客戶端,而 upgrade 不經過
   express middleware,B1 擋不到它。
 
+**中國三家從 `singapore` region 打得通,已實測** (2026-08-01,線上第一首歌的「歌詞來源」
+是 NetEase)。這是上雲前最後一個未知數 —— 全不通的話那台只剩 lrclib,羅馬字 hint 層會整個
+沒有。動 region 之前要重驗這件事,驗法就是看那一列寫什麼。
+
 **已知落差,不是 bug**:
 - 雲端**沒有 `word_corrections` / `artist_aliases`**(使用者定案不帶上去)。注音等於三層修正
   的前兩層(羅馬字 hint + `_COMMON_READING`),手改過的那幾十個詞在雲端會回到自動讀音。

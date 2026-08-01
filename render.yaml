@@ -5,10 +5,9 @@ services:
     name: kanaric        # 網址是 <name>.onrender.com,小寫 —— 子網域不吃大寫
     runtime: docker
     plan: free
-    # 離台灣近。**中國三家從這個 region 通不通還沒實測** —— 只跑過家裡的基準
-    # (網易 3/3、酷狗 3/3、QQ 限流)。三家全不通的話這台只剩 lrclib,注音的第一層
-    # (羅馬字 hint) 會整個沒有,那是換 region 或放棄雲端的判斷點。
-    # 部署後驗:聽一首已知靠 hint 修對的歌,看注音對不對,或看 log 裡 cn_music 的 stderr。
+    # 離台灣近,而且**網易從這個 region 實測打得通** (2026-08-01,線上第一首歌的
+    # 「歌詞來源」就是 NetEase) —— 這是上雲前最後一個未知數:三家全不通的話這台
+    # 只剩 lrclib,注音的羅馬字 hint 層會整個沒有。要換 region 前先重驗這件事。
     region: singapore
     healthCheckPath: /mobile/  # /api/* 要 token,/ 是 404,只有這條能當健康檢查
     envVars:
