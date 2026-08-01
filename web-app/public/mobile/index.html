@@ -15,7 +15,7 @@
     --bg: #121212; --border: rgba(255,255,255,.14);
     --text: #fff; --dim: #b3b3b3; --accent: #1DB954;
     --lyric-dim: rgba(255,255,255,0.5);   /* 由封面主色決定,見 color.js */
-    --lyric-fs: 19px; --lyric-align: left;
+    --lyric-fs: 32px; --lyric-align: left;   /* 預設值同時寫在 JS 的 DEFAULT_PREFS,兩邊要一致 */
   }
   * { box-sizing: border-box; }
   /* 全螢幕歌詞:整頁不捲動,只有歌詞區自己捲。
@@ -25,7 +25,8 @@
     margin: 0; height: 100dvh; display: flex; flex-direction: column; overflow: hidden;
     background: var(--bg); color: var(--text);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC", sans-serif;
-    padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+    /* 下緣的 safe area 不放這裡,交給 .playbar 自己吃一部分 —— 見那邊的註解 */
+    padding: env(safe-area-inset-top) 0 0;
     -webkit-text-size-adjust: 100%;
     transition: background-color .6s;   /* 換歌時背景漸變,不要硬跳 */
   }
@@ -77,9 +78,13 @@
   .lyrics .empty { text-align: center; color: var(--lyric-dim); font-weight: 400; opacity: .8; }
 
   /* --- 底部播放列 --- */
-  /* 下緣不再自己加 padding:body 已經墊了 env(safe-area-inset-bottom) (iPhone 約 34px),
-     再疊 12px 會讓控制列離底部太遠。貼著 home indicator 上緣就是 iOS 原生 app 的做法 */
-  .playbar { flex-shrink: 0; padding: 6px 20px 0; }
+  /* 下緣只吃「safe area 減 18px」:整個 inset (iPhone 約 34px) 留白會讓控制列離底部太遠,
+     Spotify / Apple Music 都貼得更下面。減完仍留約 16px,播放鍵不會壓在 home indicator 上。
+     max() 是給沒有 inset 的環境 (桌面瀏覽器、Android) 用的保底,不然算出來是負值 */
+  .playbar {
+    flex-shrink: 0;
+    padding: 6px 20px max(4px, calc(env(safe-area-inset-bottom) - 18px));
+  }
   /* 封面刻意不顯示:畫面的底色就是從它採樣來的,這一頁的角色是「看歌詞」。
      但 <img> 必須留在 DOM 裡而且要真的載入 —— 主色採樣是掛在它的 load 事件上的。
      display:none 不會阻止圖片下載,所以用它是安全的;**不要改成不插入 <img>** */
@@ -87,8 +92,8 @@
   .track-title, .track-artist {
     margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  .track-title { font-size: 17px; font-weight: 600; }
-  .track-artist { font-size: 14px; opacity: .75; margin-top: 2px; }
+  .track-title { font-size: 20px; font-weight: 700; }
+  .track-artist { font-size: 16px; opacity: .75; margin-top: 2px; }
   /* 進度條由 rAF 每幀寫 width,所以刻意不加 CSS transition —— 兩邊會互相打架而變黏。
      外面包一層高一點的 .hit 是為了好按:視覺 4px、觸控區 20px */
   .hit { padding: 8px 0; cursor: pointer; }
@@ -207,7 +212,7 @@
   <h2>設定</h2>
 
   <div class="srow"><span>歌詞文字大小</span>
-    <input type="range" id="set-fs" min="14" max="34" step="1">
+    <input type="range" id="set-fs" min="20" max="44" step="1">
     <span class="val" id="set-fs-val">—</span>
   </div>
   <div class="srow"><span>歌詞對齊</span>
@@ -280,7 +285,8 @@
 
   // --- 顯示偏好 (純前端,不進 server) ---------------------------------------
 
-  const DEFAULT_PREFS = { fs: 19, align: 'left', furigana: true };
+  // fs 的預設 32 = 滑桿 (20~44) 的正中央,往兩邊都調得動。改這裡要一起改 CSS 的 --lyric-fs
+  const DEFAULT_PREFS = { fs: 32, align: 'left', furigana: true };
 
   function readPrefs() {
     try { return { ...DEFAULT_PREFS, ...JSON.parse(localStorage.getItem(LS_PREFS) || '{}') }; }
