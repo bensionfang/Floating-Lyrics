@@ -1,0 +1,14 @@
+.git
+node_modules
+web-app/node_modules
+web-app/release
+venv
+dist-py
+build
+*.db
+*.db-wal
+*.db-shm
+secrets.json
+ROADMAP.md
+tests
+docs

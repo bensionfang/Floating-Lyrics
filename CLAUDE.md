@@ -65,7 +65,7 @@ One Node.js backend, multiple thin clients, with Python scripts as helpers spawn
   - 同源守門是 server.js 的第一個 middleware,`cors()` 已經移除 (開 CORS 等於自己拆掉這道牆)。它同時看 `Origin` 與 `Sec-Fetch-Site`,兩層都必要:`Origin` 只有 fetch/XHR 會帶,`<script src>` 這類不帶,而 `Sec-Fetch-Site` 瀏覽器對所有請求都帶。兩個 header 都沒有 = 非瀏覽器客戶端 (curl、腳本),放行;靈動島現在是 Electron 視窗,兩個 header 都會帶,走的是同源那條。WebSocket 的 upgrade 不經過 express middleware,所以 `verifyClient` 要再擋一次。
   - **綁 127.0.0.1 擋不住跨站攻擊**,這是這道守門存在的理由:使用者開著 Kanaric 時瀏覽任一網頁,那個網頁就能打這裡的 API —— 跨站 POST `/api/settings` 把 `llm_base_url` 改成攻擊者的位址,再觸發 `/api/llm-models` 或 `/api/llm-furigana/run`,BYOK 的 API key 就送出去了。`<form>` POST 屬於 simple request,不觸發 preflight,所以光靠 CORS 設定擋不住。
   - **跨站的「頂層導覽」是例外,要放行** (`GET`/`HEAD` + `Sec-Fetch-Dest: document`):使用者從 README、聊天視窗點 `http://localhost:5720` 連結進來就是這種請求,擋掉只會讓人看到一行 JSON 錯誤。放行不開洞 —— 跨站 `<form>` POST 的 dest 也是 document,但方法是 POST,照樣擋住;`<img>`/`<script src>` 的 dest 是 image/script,iframe 內嵌是 iframe,都不是 document。**只認 dest 不要再比 mode**:mode 多擋不到東西,而且 undici 會把 fetch 的 `Sec-Fetch-Mode` 硬改成 `cors`,測試根本設不進去。
-  - **行動版 (Tailscale) 是唯一的外部來源,由設定 `mobile_origin` 明確指定**,判斷集中在 `isAllowedOrigin()`,middleware 與 `verifyClient` 共用。空值 = 一個外部來源都不放行。**不可以改成「Origin 等於請求的 Host 就放行」** —— 攻擊者把自己網域的 A record 指到 127.0.0.1 就能讓兩者相符 (DNS rebinding),整道守門形同虛設。存進來的值走 `new URL(v).origin` 正規化 (使用者多半整條網址貼進來),`updateSettings` 改到它就即時生效,不必重開 server。**初始化那行只能放在 `readSettings()` 定義之後** —— `SETTINGS_FILE` 是後面的 `const`,在守門那段呼叫會撞 TDZ。
+  - **外部來源 (不是 localhost 的頁面) 一律由設定 `mobile_origin` 明確指定**,判斷集中在 `isAllowedOrigin()`,middleware 與 `verifyClient` 共用。空值 = 一個外部來源都不放行。**不可以改成「Origin 等於請求的 Host 就放行」** —— 攻擊者把自己網域的 A record 指到 127.0.0.1 就能讓兩者相符 (DNS rebinding),整道守門形同虛設。存進來的值走 `new URL(v).origin` 正規化 (使用者多半整條網址貼進來),`updateSettings` 改到它就即時生效,不必重開 server。**初始化那行只能放在 `readSettings()` 定義之後** —— `SETTINGS_FILE` 是後面的 `const`,在守門那段呼叫會撞 TDZ。
   - 回歸測試:`node tests/test_origin_guard.js` (repo 根目錄,自己帶起一份 server)。動到這段 middleware、`ALLOWED_ORIGINS`/`mobile_origin`、或 WebSocket 的 `verifyClient` 就跑它。
   - 簡轉繁 = `web-app/s2t.js` 的 `toTraditional()` (opencc-js `cn`→`tw`)。掛在**四個 `SELECT lyrics FROM cache` 的讀取點**,外加寫入前的兩個外部歌詞入口 (自動抓取、`/api/lyrics/custom` —— 它同時是「套用備選歌詞」的入口)。**讀取時轉是必要的**:只在寫入時轉的話,改版前就存在快取裡的歌詞永遠不會變繁體,使用者重載/重開都沒用。編輯器的 `/api/lyrics/update`、`/api/lyrics/save` 是使用者自己打的字,寫入時刻意不轉。
     - **日文歌詞本體絕不能過這個轉換** (日文漢字大量與簡體同形,`声`→`聲`、`学校`→`學校`),所以有假名就跳過 —— 跟 `furigana_inject.py` 是同一條假名分界規則。唯一的例外是已標 `#TITLE#` 的製作人員列:網易連日文歌都給簡體的 `作词 : …`,那幾列照轉。
@@ -181,7 +181,7 @@ GitHub repo 也已改名 `bensionfang/Kanaric`,`server.js` 的 `GITHUB_REPO` 跟
    - **廣播走 `broadcastMediaState()` 節流,不要改回直接 `global.broadcast`。** 監控每 0.1 秒推一次,
      而 `currentMediaState` 是淺層合併的 —— 封面一旦收到就一直留在裡面,直接廣播等於每秒把幾十 KB 的
      base64 PNG 送十次。實測(有歌在播):節流前 **5 秒 46 則 / 7870 KB**,節流後 **5 秒 5 則 / 1.5 KB**。
-     本機看不出來,**行動版走 Tailscale + 行動網路就是每分鐘 90 MB**。
+     本機看不出來,**遠端客戶端走行動網路就是每分鐘 90 MB**。
    - 規則兩條:**只有 `position` 在動時降到 1 秒一次**(島、猜歌、行動版都自己內插,不靠廣播密度);
      **`position` 以外的欄位一變就立刻送**(暫停圖示、換歌不能延遲一秒)。
    - **封面沒變就整個不送那個鍵**。三個消費端都判斷 `thumbnail !== undefined` 才動封面,漏送不會清掉畫面。
@@ -401,6 +401,10 @@ Phase 3+4（同步歌詞 + 注音）、Phase 5（PWA 化）已完成:`web-app/pu
 + `pkce.js` + `playback.js` + `lyrics.js`（純函式獨立成檔的理由同 `public/js/scroll-zone.js`,
 測試 require 得到)+ `manifest.json` + `sw.js`。**五個階段都做完了,規格 §7 沒有第 6 階段。**
 
+**後端在 Render 上,不在使用者的電腦上** —— 見下面「雲端唯讀部署」。**手機端零安裝是硬目標:
+不要 VPN、不要使用者的電腦開著。** 早期評估過的 Tailscale Serve 那條路因此否決,程式碼與註解
+都已清掉,只有 `docs/mobile/PWA-SPEC.md` 那份舊規格還可能提到,以這裡為準。
+
 - **插值的時間軸一律用 `performance.now()`,不可以用 `Date.now()`** —— 後者被系統校時影響會整段跳。
   快照 (`snapshot()`) 記下量測當下的 `at`,`positionAt()` 就是「上次量到的位置 + 之後經過的時間」,
   暫停中不前進、夾在歌曲長度內。每次輪詢回來就覆蓋快照,drift 自動歸零。
@@ -450,19 +454,50 @@ Phase 3+4（同步歌詞 + 注音）、Phase 5（PWA 化）已完成:`web-app/pu
     畫面是 innerHTML 畫的,所以自己 `escapeHtml()` **整份 LRC 字串**再交給 `parseLrc` (時間戳是 ASCII,不受影響)。
   - **刻意不寫進快取**:存下去的話電腦開回來也永遠換不成有注音的那份。
   - `artist_name` 只送第一位歌手 (`snapshot()` 把 Spotify 的多位歌手 join 成一串,整串送過去查不到)。
-**鏡像模式(電腦版開著時)**:
-- 手機連上 server 的 WebSocket 就**不打 Spotify** —— 直接吃 `media_state` 廣播,**跟靈動島同一個角色**。
-  省掉 OAuth、輪詢、429 限流、歌名還原的競態,而且譯文/羅馬字/手改讀音全部跟桌面一致。
-- **`onMirrorState()` 把廣播轉成跟 `snapshot()` 完全同形的快照**(秒 → 毫秒、`id` 用 `歌手|||歌名`,
-  這條路沒有 Spotify track id),所以 `render` / `frame` / `loadLyrics` / 快取全部原封不動 —— 新增的只有連線那段。
-- **`m.resolving` 為 true 時整包丟掉**:跟桌面與島同一條規則,不等歌名定案就會用兩個鍵各抓一次歌詞。
-- 兩個模式**自動切換,沒有開關**:進場先連 WebSocket,2 秒沒連上就跑獨立模式(Spotify + lrclib);
-  之後連上仍會接管(`onopen` 停掉輪詢),斷線 `onclose` 退回獨立模式並每 15 秒重連。
-  `schedule()` 的第一行因此要擋 `mirror`,不然輪詢會在鏡像模式下復活。
-- **頁面走 https(Tailscale)時 WebSocket 一定要 `wss:`** —— `ws:` 會被當成混合內容擋掉。
-  守門那邊什麼都不用改,`verifyClient` 跟 middleware 共用 `isAllowedOrigin`,`mobile_origin` 已經涵蓋。
-- 限制:**只在電腦開著且連得到時有用**,跟獨立模式互補、不取代。
-- SW 需要 secure context:Tailscale 的 HTTPS 與 `127.0.0.1` 都算,`file://` 直接開不算 (註冊失敗就算了,不影響其他功能)。
+- SW 需要 secure context:Render 的 HTTPS 與 `127.0.0.1` 都算,`file://` 直接開不算 (註冊失敗就算了,不影響其他功能)。
+
+**做過又移除的:鏡像模式** (2026-07-28,commit `8bef724` 加入、同日移除)。手機連 server 的
+WebSocket 直接吃 `media_state` 廣播、不打 Spotify,角色跟靈動島一樣。**移除的理由不是它不好用,
+是它要求手機連得到使用者的電腦**(當時是 VPN),違反零安裝。要翻實作看 git 歷史,不要重新提案。
+(那次順手做的 `broadcastMediaState()` 節流留下來了,那是獨立的修正。)
+
+### 雲端唯讀部署 (Render)
+
+**為什麼存在**:使用者家裡沒有固網,電腦靠手機分享上網 —— 人一離開家,電腦就完全斷網,
+行動版只剩 lrclib。所以「家裡放一台常開機器」那條路不成立,歌詞後端必須在雲端。
+
+跑的是**同一份 `server.js`**,靠 `CLOUD_MODE=1` 開四個閘門,**桌面模式的行為一個字都不變**:
+
+- **B1 允許清單 middleware** —— 放在同源守門**之前**。非 GET/HEAD 一律 404;只放行
+  `/mobile/*` 與 `GET /api/lyrics`(要 `X-Kanaric-Token`);其餘**回 404 而不是 403**,
+  連「有這條路但你沒權限」都不透露。`/api/settings`、`/api/restore`、`/api/db-clear`、
+  `/api/llm-key` 因此在那台**根本不存在**,不必為了上雲做帳號系統。
+  - **`MOBILE_TOKEN` 沒設定時一律 401**。不能只寫 `req.get(...) !== process.env.MOBILE_TOKEN` ——
+    兩邊都是 `undefined` 會相等而放行,設定漏了就變成公開的免費歌詞 API 且沒有任何徵兆。
+  - **限流是必要的不是防禦性程式**:每次 cache miss 都會打三家平台 + spawn 一個 Python 程序,
+    被洗會吃光 512 MB 那台的 CPU,還可能害這台 IP 被三家封鎖。前端 `poll()` 本來就看得懂
+    429 + `Retry-After`。
+- **B2 綁 `0.0.0.0` 且用 Render 指定的 `PORT`**,不走 `findFreePort` —— 換一個 port,
+  Render 探測不到會判定部署失敗。「不綁 0.0.0.0」那段註解的理由在雲端不成立(沒有寫入路由、沒有 key)。
+- **B3 `PUBLIC_ORIGIN` 加進 `ALLOWED_ORIGINS`**:那台的頁面是它自己服務的(同源),
+  Safari 對同源 GET 多半不送 `Origin`,但送了就會撞守門。
+- **B4 `verifyClient` 一律回 false**:雲端沒有正當的 WebSocket 客戶端,而 upgrade 不經過
+  express middleware,B1 擋不到它。
+
+**已知落差,不是 bug**:
+- 雲端**沒有 `word_corrections` / `artist_aliases`**(使用者定案不帶上去)。注音等於三層修正
+  的前兩層(羅馬字 hint + `_COMMON_READING`),手改過的那幾十個詞在雲端會回到自動讀音。
+- **磁碟是暫時的**:Render 免費方案重啟就清空,歌詞快取每次都要重抓。它本來就是快取。
+- **冷啟動 30~60 秒**(閒置 15 分鐘休眠)。前端等超過 3 秒會把狀態改成「喚醒伺服器中」,
+  **刻意不加 timeout 中斷請求** —— 中斷了就永遠喚不醒。
+
+部署檔:`Dockerfile`(node:20-bookworm-slim + venv;`requirements.txt` 現場 `grep -v '^winrt'`,
+**不維護第二份清單**,兩份一定會漂)、`.dockerignore`、`render.yaml`。
+`server.js:99` 在 Linux 上找不到 `venv/Scripts/python.exe` 會 fallback 到 `python`,
+Dockerfile 的 venv 正好讓 PATH 上有它 —— 零程式碼改動。
+
+回歸測試 `node tests/test_cloud_guard.js`。**動到 B1~B4 任何一處都要跑它**,
+而且 `tests/test_origin_guard.js`(非雲端)也要照舊全過,那是桌面模式沒被改壞的證明。
 
 **規格 §6.1 那條最高風險已實測過關 (2026-07-28)**:iPhone 從主畫面圖示啟動、跑完整個
 授權導回後仍在 standalone (`navigator.standalone === true`,沒有掉回 Safari)。整個 PWA
@@ -474,14 +509,10 @@ Phase 3+4（同步歌詞 + 注音）、Phase 5（PWA 化）已完成:`web-app/pu
   正好命中守門既有的例外。
 - **`redirect_uri` 由 `location.origin + location.pathname` 推出來**,同一份程式碼在
   `http://127.0.0.1:5720/mobile/`(loopback 是 Spotify 唯一不強制 HTTPS 的形式,而且**必須是
-  IP 不能寫 localhost**)與 `https://<機器>.<tailnet>.ts.net/mobile/` 都正確 —— 兩條都要在
+  IP 不能寫 localhost**)與 `https://<服務>.onrender.com/mobile/` 都正確 —— 兩條都要在
   Spotify Dashboard 註冊。結尾的 `index.html` 一定要剝掉,對不上就是 INVALID_CLIENT。
 - Client ID 存 localStorage(公開值);`refresh_token` 存 localStorage、`access_token` 只在記憶體。
   **不可以引入 client secret**,PKCE 就是為了不需要它。
-- **同源守門已經開好行動版的門了**(見上面同源守門那節的 `mobile_origin`),Phase 3 接
-  `/api/lyrics` 時不必再動守門,只要在設定裡填 Tailscale 網域。規格 §4.1 寫的「加 CORS header」
-  是錯的方向(開 CORS 等於自己拆掉那道牆)。
-- Tailscale 那端用 `tailscale serve --bg 5720`(**不是 `funnel`** —— funnel 會公開到整個網際網路)。
-  server 照舊綁 `127.0.0.1`,Serve 跑在同一台機器上走 loopback 進來,bind 一個字都不用改。
-  代價是 tailnet 上的任何裝置都能無 auth 打這台的 API(`curl` 不帶 `Origin`/`Sec-Fetch-*`,
-  守門照規則放行)—— 自己的裝置可接受,要分享節點給別人就得先做真正的 auth。
+- **行動版打 `/api/lyrics` 是同源請求**(頁面由雲端那台自己服務),守門一行都不用改。
+  規格 §4.1 寫的「加 CORS header」是錯的方向(開 CORS 等於自己拆掉那道牆)。桌面這台的
+  `mobile_origin` 因此預設留空 —— 沒有任何外部來源需要放行。

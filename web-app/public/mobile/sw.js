@@ -4,7 +4,7 @@
  * 直接不 respondWith,讓瀏覽器照常送出去。
  */
 
-const CACHE = 'kanaric-mobile-v3';   // 改 shell 檔案時把版號往上加,activate 會清掉舊的
+const CACHE = 'kanaric-mobile-v5';   // 改 shell 檔案時把版號往上加,activate 會清掉舊的
 const SHELL = ['./', './index.html', './pkce.js', './playback.js', './lyrics.js', './manifest.json'];
 
 self.addEventListener('install', (e) => {
@@ -21,6 +21,9 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;
   if (!url.pathname.startsWith('/mobile/')) return;
+  // 帶 query 的一律走網路:index.html 進場的喚醒 ping (manifest.json?wake=1) 就是靠這條
+  // 才真的碰得到 server。走下面那段的話它會被 shell 快取接走,喚醒等於沒做。
+  if (url.search) return;
 
   // cache-first + 背景更新:離線開得起來,有網路時下一次開就是新版
   e.respondWith(caches.match(e.request).then((hit) => {

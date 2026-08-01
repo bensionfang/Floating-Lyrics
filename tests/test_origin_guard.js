@@ -103,7 +103,7 @@ async function run() {
     check(r.status === 403, `跨站 POST 清除資料庫 (${label})`, `${r.status} (expected 403)`);
   }
 
-  // 行動版 (Tailscale) 是唯一的外部來源,由設定 mobile_origin 明確指定。
+  // 外部來源一律由設定 mobile_origin 明確指定 (預設空 = 關著)。
   // 沒設定時一個外部來源都不放行;設定了也只放行那一個,不是「Origin 等於 Host 就放行」
   // (那樣攻擊者把自己網域指到 127.0.0.1 就能繞過 —— DNS rebinding)。
   const MOBILE = 'https://mobile.example';

@@ -72,13 +72,15 @@
 <body>
 
 <h1>Kanaric Mobile</h1>
-<p class="sub">Phase 5 — PWA</p>
+<p class="sub">Spotify 同步歌詞</p>
 
 <!-- 未登入:設定 Client ID 並授權 -->
 <div id="setup" class="card hidden">
   <label for="client-id">Spotify Client ID</label>
   <input id="client-id" type="text" autocomplete="off" autocapitalize="off"
          autocorrect="off" spellcheck="false" placeholder="Dashboard 上那串 32 碼">
+  <label for="api-token" style="margin-top:12px">歌詞服務 Token</label>
+  <input id="api-token" type="password" autocomplete="off" placeholder="Render 上的 MOBILE_TOKEN">
   <button id="login-btn">連接 Spotify</button>
   <p class="msg">
     Redirect URI 要在 Spotify Dashboard 註冊為 <code id="redirect-hint"></code>。
@@ -95,7 +97,6 @@
   <div class="row"><span>progress_ms</span><span class="mono" id="progress-ms">—</span></div>
   <div class="row"><span>is_playing</span><span class="mono" id="is-playing">—</span></div>
   <div class="row"><span>track id</span><span class="mono" id="track-id">—</span></div>
-  <div class="row"><span>模式</span><span class="mono" id="mode">獨立 (Spotify)</span></div>
   <div class="row"><span>standalone</span><span class="mono" id="standalone">—</span></div>
   <div class="row"><span>歌詞來源</span><span class="mono" id="lyrics-source">—</span></div>
   <button id="logout-btn" class="ghost">登出</button>
@@ -120,10 +121,11 @@
 
   const LS_CLIENT  = 'kanaric.mobile.clientId';
   const LS_REFRESH = 'kanaric.mobile.refreshToken';
+  const LS_TOKEN   = 'kanaric.mobile.apiToken';   // 雲端 /api/lyrics 的 token
   const SS_VERIFIER = 'kanaric.mobile.verifier';
   const SS_STATE    = 'kanaric.mobile.state';
 
-  // redirect_uri 由現在的網址推出來,同一份程式碼在 127.0.0.1 與 Tailscale 網域都正確
+  // redirect_uri 由現在的網址推出來,同一份程式碼在 127.0.0.1 與 Render 網域都正確
   // (兩個都要在 Dashboard 註冊)。直接開 index.html 時 pathname 會多一段,要剝掉 ——
   // 沒剝的話送出去的 redirect_uri 與註冊的那條對不上,Spotify 回 INVALID_CLIENT。
   const REDIRECT_URI = location.origin + location.pathname.replace(/index\.html$/, '');
@@ -146,6 +148,7 @@
     const id = $('client-id').value.trim();
     if (!id) return setStatus('請先填入 Client ID', true);
     localStorage.setItem(LS_CLIENT, id);
+    localStorage.setItem(LS_TOKEN, $('api-token').value.trim());   // 沒填也存,空字串等於沒 token
 
     const verifier = randomVerifier();
     const state = randomVerifier(43);
@@ -229,8 +232,6 @@
     localStorage.removeItem(LS_REFRESH);
     accessToken = null;
     expiresAt = 0;
-    // 鏡像模式不靠 Spotify,登出不該把畫面收掉 (收了廣播還在更新一個看不見的播放列)
-    if (mirror) return setStatus('已登出 Spotify,鏡像模式繼續顯示');
     showSetup();
     setStatus('已登出');
   }
@@ -287,8 +288,8 @@
   let lyricsFor = null;    // 目前這份歌詞是哪個 track id 的 (慢回應蓋掉新歌的守門)
 
   /**
-   * 換歌時打一次 Kanaric server。頁面本來就是這台 server 服務的,所以用相對路徑 =
-   * 同源請求,守門那邊什麼都不用動 (設定裡的 mobile_origin 填 Tailscale 網域即可)。
+   * 換歌時打一次 Kanaric 的歌詞服務。頁面本來就是那台 server 服務的,所以用相對路徑 =
+   * 同源請求;雲端模式那邊的允許清單只放行這一支,而且要帶 token。
    */
   async function loadLyrics(t) {
     lines = [];
@@ -299,15 +300,26 @@
     $('lyrics-source').textContent = t ? '查詢中…' : '—';
     if (!t) return;
 
-    // 快取命中就整個不打 server (規格 §4.3),連 Tailscale 離線時也還有歌詞
+    // 快取命中就整個不打 server (規格 §4.3),離線時也還有歌詞
     const hit = readCache(localStorage, t.id);
     if (hit) return showLyrics(hit);
 
+    // Render 免費方案閒置 15 分鐘就休眠,第一次請求要等 30~60 秒。**不要加 timeout 中斷它** ——
+    // 中斷了就等於永遠喚不醒;改成等超過 3 秒就把狀態換掉,讓使用者知道不是當掉
+    const waking = setTimeout(() => {
+      if (lyricsFor === t.id) $('lyrics-source').textContent = '喚醒伺服器中…(免費方案冷啟動)';
+    }, 3000);
+
     try {
       const q = new URLSearchParams({ title: t.title, artist: t.artist, duration_ms: t.durationMs });
-      const resp = await fetch(`/api/lyrics?${q}`, { cache: 'no-store' });
-      const data = await resp.json();
+      const resp = await fetch(`/api/lyrics?${q}`, {
+        cache: 'no-store',
+        headers: { 'X-Kanaric-Token': localStorage.getItem(LS_TOKEN) || '' },
+      });
       if (lyricsFor !== t.id) return;    // 這期間已經換歌了,舊回應丟掉
+      // 401 是 token 不對,不是 Spotify 的事 —— 別把使用者踢回登入畫面
+      if (resp.status === 401) throw new Error('歌詞服務 Token 不對');
+      const data = await resp.json();
       if (!resp.ok) throw new Error(data.error || `server 回 ${resp.status}`);
 
       showLyrics(data);
@@ -316,6 +328,8 @@
     } catch (e) {
       if (lyricsFor !== t.id) return;
       $('lyrics-source').textContent = `讀取失敗:${e.message}`;
+    } finally {
+      clearTimeout(waking);
     }
     // server 連不上 (電腦關機) 或它也沒有 —— 退到 lrclib,至少歌詞不會整個消失
     await loadFromLrclib(t);
@@ -370,7 +384,7 @@
   /** 排下一次輪詢。分頁隱藏時不排 —— Safari 背景會凍結 timer,醒來也是靠 visibilitychange */
   function schedule(overrideMs) {
     clearTimeout(pollTimer);
-    if (mirror || document.hidden) return;   // 鏡像模式下播放狀態由電腦版推過來,不打 Spotify
+    if (document.hidden) return;
     const wait = overrideMs != null ? overrideMs : pollDelay(track);
     if (wait === Infinity) return;
     pollTimer = setTimeout(tick, wait);
@@ -385,65 +399,8 @@
     if (document.hidden) return clearTimeout(pollTimer);
     if ($('player').classList.contains('hidden')) return;
     keepAwake();   // 分頁一隱藏 lock 就被系統釋放,回前景一定要重拿 (規格 §5.3 點名的坑)
-    if (!mirror) tick();   // 鏡像模式的校正靠廣播自己來,WebSocket 斷了 onclose 會退回獨立模式
+    tick();
   });
-
-  // --- 鏡像模式 -------------------------------------------------------------
-
-  /**
-   * 電腦版開著而且連得到時,直接吃它的 WebSocket 廣播 —— **跟靈動島同一個角色**,
-   * 純顯示端。省掉 OAuth / 輪詢 / 429 限流 / 歌名還原的競態,而且譯文、羅馬字、
-   * 你手改過的讀音全部跟桌面一致 (獨立模式那條要自己再查一次)。
-   *
-   * 連不上就退回獨立模式 (Spotify + lrclib):出門在外電腦本來就是斷網的,兩個模式互補。
-   */
-  let mirror = false;
-
-  function connectMirror() {
-    let ws;
-    try {
-      // 頁面走 https (Tailscale) 時一定要 wss,ws 會被瀏覽器當成混合內容擋掉
-      ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}`);
-    } catch (e) {
-      return setTimeout(connectMirror, 15000);
-    }
-
-    ws.onopen = () => {
-      mirror = true;
-      clearTimeout(pollTimer);
-      $('mode').textContent = '鏡像 (跟著電腦版)';
-      showPlayer();
-      setStatus('鏡像模式:顯示電腦版正在播的歌');
-    };
-    ws.onmessage = (ev) => {
-      let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
-      if (msg.type === 'init' || msg.type === 'media_state') onMirrorState(msg.state || {});
-    };
-    ws.onclose = () => {
-      const wasMirror = mirror;
-      mirror = false;
-      $('mode').textContent = '獨立 (Spotify)';
-      setTimeout(connectMirror, 15000);   // 電腦可能只是暫時關掉,別放棄重連
-      if (wasMirror) { setTrack(null); startIndependent(); }
-    };
-    ws.onerror = () => ws.close();
-  }
-
-  /** 廣播的狀態 → 跟 Spotify 那條完全同形的快照,下游 (render/frame/loadLyrics) 一行都不用改 */
-  function onMirrorState(m) {
-    // resolving = 歌名還沒定案 (iTunes 日文原名還原中)。跟桌面與島同一條規則:
-    // 不等它就會用兩個不同的鍵各抓一次歌詞,第二次多半撞到限流變成「找不到歌詞」
-    if (m.resolving) return;
-    setTrack(m.title ? {
-      id: `${m.artist || ''}|||${m.title}`,   // 這條路沒有 Spotify track id,用歌手+歌名當鍵
-      title: m.title,
-      artist: m.artist || '',
-      durationMs: (m.duration || 0) * 1000,   // 廣播的單位是秒,快照用毫秒
-      progressMs: (m.position || 0) * 1000,
-      isPlaying: !!m.is_playing,
-      at: performance.now(),
-    } : null);
-  }
 
   // --- 螢幕恆亮 -------------------------------------------------------------
 
@@ -495,13 +452,7 @@
     $('player').classList.add('hidden');
     $('lyrics-card').classList.add('hidden');
     $('client-id').value = clientId();
-  }
-
-  /** 獨立模式 (Spotify + lrclib) 的進場。鏡像模式接管中就不做 —— 那條不需要 Spotify */
-  function startIndependent() {
-    if (mirror) return;
-    if (localStorage.getItem(LS_REFRESH) && clientId()) { showPlayer(); tick(); }
-    else showSetup();
+    $('api-token').value = localStorage.getItem(LS_TOKEN) || '';
   }
 
   function showPlayer() {
@@ -521,9 +472,15 @@
     $('login-btn').addEventListener('click', () => login().catch(e => setStatus(e.message, true)));
     $('logout-btn').addEventListener('click', logout);
     requestAnimationFrame(frame);
-    // SW 要 secure context:Tailscale 的 HTTPS 與 127.0.0.1 都算,直接開檔案不算 (失敗就算了)
+    // SW 要 secure context:Render 的 HTTPS 與 127.0.0.1 都算,直接開檔案不算 (失敗就算了)
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
-    connectMirror();
+    // 進場就先射一發把休眠中的 server 叫醒 (免費方案冷啟動 30~60 秒),跟下面的 Spotify
+    // 授權/輪詢平行跑 —— 等歌名確定要打 /api/lyrics 時,它已經醒了一段時間。
+    // **打靜態檔不打 /api/lyrics**:那支會查 DB、spawn Python、對外打三家平台,拿它當喚醒
+    // 等於每次開 app 都多一輪對外請求,可能害雲端那台的 IP 被三家限流。
+    // 不 await、不理錯誤:這只是喚醒,失敗了 loadLyrics 自己會再打一次。
+    // 帶 ?wake 是為了讓 SW 放行走網路 —— 不帶的話會被 shell 快取接走,根本沒碰到 server。
+    fetch('manifest.json?wake=1', { cache: 'no-store' }).catch(() => {});
 
     try {
       if (await handleRedirect()) {
@@ -535,9 +492,8 @@
       return showSetup();
     }
 
-    // 先給鏡像一點時間握手 —— 它一開起來就不必打 Spotify 了。2 秒內沒連上就先跑獨立模式,
-    // 之後 WebSocket 真的連上仍然會接管 (onopen 會停掉輪詢)
-    setTimeout(startIndependent, 2000);
+    if (localStorage.getItem(LS_REFRESH) && clientId()) { showPlayer(); tick(); }
+    else showSetup();
   })();
 })();
 </script>

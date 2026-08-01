@@ -1,0 +1,20 @@
+# Render 的雲端唯讀歌詞服務。免費方案:512 MB RAM、閒置 15 分鐘休眠 (冷啟動 30~60 秒)、
+# 磁碟是暫時的 —— 歌詞快取每次重啟都掉,重抓即可 (它本來就是快取)。
+services:
+  - type: web
+    name: kanaric-lyrics
+    runtime: docker
+    plan: free
+    # 離台灣近。**中國三家從這個 region 通不通還沒實測** —— 只跑過家裡的基準
+    # (網易 3/3、酷狗 3/3、QQ 限流)。三家全不通的話這台只剩 lrclib,注音的第一層
+    # (羅馬字 hint) 會整個沒有,那是換 region 或放棄雲端的判斷點。
+    # 部署後驗:聽一首已知靠 hint 修對的歌,看注音對不對,或看 log 裡 cn_music 的 stderr。
+    region: singapore
+    healthCheckPath: /mobile/  # /api/* 要 token,/ 是 404,只有這條能當健康檢查
+    envVars:
+      - key: CLOUD_MODE
+        value: "1"
+      - key: MOBILE_TOKEN
+        generateValue: true    # Render 自己產一組,到 Dashboard 複製到手機上
+      - key: PUBLIC_ORIGIN
+        sync: false            # 部署後填實際網址 https://<name>.onrender.com
