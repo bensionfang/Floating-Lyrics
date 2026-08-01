@@ -2,7 +2,7 @@
 # 磁碟是暫時的 —— 歌詞快取每次重啟都掉,重抓即可 (它本來就是快取)。
 services:
   - type: web
-    name: kanaric-lyrics
+    name: kanaric        # 網址是 <name>.onrender.com,小寫 —— 子網域不吃大寫
     runtime: docker
     plan: free
     # 離台灣近。**中國三家從這個 region 通不通還沒實測** —— 只跑過家裡的基準
