@@ -77,7 +77,9 @@
   .lyrics .empty { text-align: center; color: var(--lyric-dim); font-weight: 400; opacity: .8; }
 
   /* --- 底部播放列 --- */
-  .playbar { flex-shrink: 0; padding: 8px 20px 12px; }
+  /* 下緣不再自己加 padding:body 已經墊了 env(safe-area-inset-bottom) (iPhone 約 34px),
+     再疊 12px 會讓控制列離底部太遠。貼著 home indicator 上緣就是 iOS 原生 app 的做法 */
+  .playbar { flex-shrink: 0; padding: 6px 20px 0; }
   /* 封面刻意不顯示:畫面的底色就是從它採樣來的,這一頁的角色是「看歌詞」。
      但 <img> 必須留在 DOM 裡而且要真的載入 —— 主色採樣是掛在它的 load 事件上的。
      display:none 不會阻止圖片下載,所以用它是安全的;**不要改成不插入 <img>** */
@@ -85,8 +87,8 @@
   .track-title, .track-artist {
     margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  .track-title { font-size: 14px; font-weight: 600; }
-  .track-artist { font-size: 13px; opacity: .75; margin-top: 1px; }
+  .track-title { font-size: 17px; font-weight: 600; }
+  .track-artist { font-size: 14px; opacity: .75; margin-top: 2px; }
   /* 進度條由 rAF 每幀寫 width,所以刻意不加 CSS transition —— 兩邊會互相打架而變黏。
      外面包一層高一點的 .hit 是為了好按:視覺 4px、觸控區 20px */
   .hit { padding: 8px 0; cursor: pointer; }
@@ -94,7 +96,7 @@
   .bar > i { display: block; height: 100%; width: 0; background: var(--text); }
   .times { display: flex; justify-content: space-between; margin-top: 4px;
            font-size: 11px; opacity: .65; font-variant-numeric: tabular-nums; }
-  .ctrl { display: flex; align-items: center; justify-content: center; gap: 28px; margin-top: 6px; }
+  .ctrl { display: flex; align-items: center; justify-content: center; gap: 28px; margin-top: 2px; }
   .ctrl .icon-btn { width: 48px; height: 48px; }
   .ctrl .play { width: 58px; height: 58px; background: var(--text); color: #000; opacity: 1; }
   .ctrl .play:active { background: var(--text); opacity: .85; }
@@ -103,36 +105,49 @@
          word-break: break-word; min-height: 15px; }
   .msg.err { color: #ff8b8b; opacity: 1; }
 
-  /* --- 設定面板 --- */
-  .scrim { position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 9; }
-  .sheet {
-    position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
-    background: #181818; border-radius: 16px 16px 0 0;
-    padding: 20px 20px calc(20px + env(safe-area-inset-bottom));
-    max-height: 88dvh; overflow-y: auto;
-    box-shadow: 0 -8px 32px rgba(0,0,0,.5);
+  /* --- 設定側欄 (從左邊滑出) --- */
+  /* 開關用 .open 而不是 .hidden:display:none 會讓 transition 完全不觸發,
+     滑出動畫就變成瞬間出現。遮罩同理走 opacity + pointer-events */
+  .scrim {
+    position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 9;
+    opacity: 0; pointer-events: none; transition: opacity .25s;
   }
-  .sheet h2 { font-size: 15px; margin: 0 0 14px; opacity: .6; font-weight: 600; }
+  .scrim.open { opacity: 1; pointer-events: auto; }
+  .drawer {
+    position: fixed; top: 0; left: 0; bottom: 0; z-index: 10;
+    width: min(86vw, 340px);
+    background: #181818; overflow-y: auto; -webkit-overflow-scrolling: touch;
+    padding: calc(18px + env(safe-area-inset-top)) 20px calc(20px + env(safe-area-inset-bottom))
+             max(20px, env(safe-area-inset-left));
+    transform: translateX(-100%);
+    transition: transform .25s ease;
+    box-shadow: 4px 0 28px rgba(0,0,0,.5);
+  }
+  .drawer.open { transform: none; }
+  .drawer h2 { font-size: 15px; margin: 0 0 14px; opacity: .6; font-weight: 600; }
   .srow { display: flex; align-items: center; justify-content: space-between;
           gap: 12px; padding: 11px 0; border-top: 1px solid var(--border); font-size: 14px; }
   .srow:first-of-type { border-top: 0; }
-  .srow input[type=range] { flex: 1; accent-color: var(--accent); }
+  .srow input[type=range] { flex: 1; accent-color: var(--accent); min-width: 0; }
+  /* tabular-nums + 固定寬度:數字從 14 跳到 100 時滑桿不會跟著抽動 */
+  .srow .val { flex-shrink: 0; width: 44px; text-align: right;
+               font-variant-numeric: tabular-nums; opacity: .7; font-size: 13px; }
   .srow input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); }
   .seg { display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
   .seg button { background: transparent; border: 0; color: var(--dim);
                 padding: 7px 14px; font-size: 13px; cursor: pointer; -webkit-appearance: none; }
   .seg button.on { background: var(--accent); color: #000; font-weight: 600; }
-  .sheet label { display: block; font-size: 12px; color: var(--dim); margin: 14px 0 6px; }
-  .sheet input[type=text], .sheet input[type=password] {
+  .drawer label { display: block; font-size: 12px; color: var(--dim); margin: 14px 0 6px; }
+  .drawer input[type=text], .drawer input[type=password] {
     width: 100%; padding: 11px; font-size: 16px;   /* 16px 以下 iOS Safari 會自動放大整頁 */
     background: #000; color: var(--text); border: 1px solid var(--border); border-radius: 8px;
   }
-  .sheet .btn {
+  .drawer .btn {
     width: 100%; padding: 13px; margin-top: 12px; font-size: 15px; font-weight: 600;
     background: var(--accent); color: #000; border: 0; border-radius: 999px;
     cursor: pointer; -webkit-appearance: none;
   }
-  .sheet .btn.ghost { background: transparent; color: var(--dim); border: 1px solid var(--border); }
+  .drawer .btn.ghost { background: transparent; color: var(--dim); border: 1px solid var(--border); }
   .hint { font-size: 11px; color: var(--dim); margin: 10px 0 0; word-break: break-all; }
   code { background: #000; padding: 2px 5px; border-radius: 4px; }
 </style>
@@ -187,12 +202,13 @@
   </div>
 </div>
 
-<div id="scrim" class="scrim hidden"></div>
-<div id="sheet" class="sheet hidden">
+<div id="scrim" class="scrim"></div>
+<div id="drawer" class="drawer">
   <h2>設定</h2>
 
   <div class="srow"><span>歌詞文字大小</span>
     <input type="range" id="set-fs" min="14" max="34" step="1">
+    <span class="val" id="set-fs-val">—</span>
   </div>
   <div class="srow"><span>歌詞對齊</span>
     <div class="seg" id="set-align">
@@ -276,6 +292,7 @@
     document.documentElement.style.setProperty('--lyric-align', p.align);
     document.body.classList.toggle('no-furigana', !p.furigana);
     $('set-fs').value = p.fs;
+    $('set-fs-val').textContent = `${p.fs}px`;
     $('set-furigana').checked = p.furigana;
     for (const b of $('set-align').children) b.classList.toggle('on', b.dataset.align === p.align);
   }
@@ -291,14 +308,18 @@
   function openSheet() {
     $('client-id').value = clientId();
     $('api-token').value = localStorage.getItem(LS_TOKEN) || '';
-    $('logout-btn').classList.toggle('hidden', !localStorage.getItem(LS_REFRESH));
-    $('sheet').classList.remove('hidden');
-    $('scrim').classList.remove('hidden');
+    // 「連接 Spotify」與「登出」是互斥的,同時出現只會讓人猶豫該按哪顆。
+    // 已登入但想換 Client ID 的話:先登出再連接 (兩下,但狀態不會曖昧)
+    const signedIn = !!localStorage.getItem(LS_REFRESH);
+    $('login-btn').classList.toggle('hidden', signedIn);
+    $('logout-btn').classList.toggle('hidden', !signedIn);
+    $('drawer').classList.add('open');
+    $('scrim').classList.add('open');
   }
 
   function closeSheet() {
-    $('sheet').classList.add('hidden');
-    $('scrim').classList.add('hidden');
+    $('drawer').classList.remove('open');
+    $('scrim').classList.remove('open');
   }
 
   // --- OAuth ---------------------------------------------------------------

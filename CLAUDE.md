@@ -499,7 +499,8 @@ Phase 3+4（同步歌詞 + 注音）、Phase 5（PWA 化）已完成:`web-app/pu
 - 設定面板(⋯ 開的 sheet)**只有純前端的項目**:歌詞字級、對齊、顯示日文假名(`body.no-furigana`
   把 `rt` 藏起來)、歌詞來源(唯讀)、Client ID / Token、連接/登出。全部存 localStorage 的
   `kanaric.mobile.prefs`,零 server 改動。**Client ID / Token 的 input 只有這一份** —— 未登入時
-  自動把 sheet 打開,不再另外做一個 setup 卡片,免得兩個畫面各存各的。
+  自動把 sheet 打開,不再另外做一個 setup 卡片,免得兩個畫面各存各的。「連接 Spotify」與「登出」
+  依 refresh token 在不在**互斥顯示**,同時出現只會讓人猶豫該按哪顆(要換 Client ID 就先登出再連接)。
 - 中文翻譯 / 羅馬拼音 / 片假名標平假名**還沒做**:`/api/lyrics` 只跑 `injectFurigana`,那三樣的資料
   根本沒送到手機,要做得改 server 並讓雲端每首多跑一次譯文抓取。
 - 回歸測試 `node tests/test_mobile_color.js`。
