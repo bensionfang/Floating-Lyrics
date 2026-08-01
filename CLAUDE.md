@@ -53,7 +53,7 @@ gh release create v1.1.0 \
 tag 沒帶 `v` 或漏推,純 node 模式的更新提醒也抓不到新版。安裝檔未簽章,`gh release create` 會直接
 公開發布,屬於「發布公開內容」的動作,不要自動執行,要使用者自己按。
 - 靈動島 = Electron 的一個視窗 (`web-app/island.js`),由 `npm run app` 一起帶起,沒有獨立進程也沒有 build 步驟。
-- 沒有 test runner 或 linter。零星的獨立測試檔直接用直譯器跑:`node tests/test_origin_guard.js` (同源守門)、`node tests/test_s2t.js` (簡轉繁)、`node tests/test_lyric_quality.js` (內嵌注音的歌詞守門)、`node tests/test_search_query.js` (繁轉簡 + 瀏覽器標題去噪)、`node tests/test_title_lines.js` (製作人員/版權列標記)、`node tests/test_translations.js` (中文譯文合併)、`node tests/test_romaji.js` (羅馬拼音)、`node tests/test_itunes_resolving.js` (iTunes 原名還原的時序)、`node tests/test_history_toggle.js` (聆聽紀錄開關 + 清除白名單)、`node tests/test_backup_restore.js` (備份/還原 + 還原前的驗證守門)、`node tests/test_scroll_zone.js` (歌詞自動捲動的三段判定)、`node tests/test_game.js` (猜歌的干擾選項挑選)、`node tests/test_island_position.js` (靈動島的多螢幕位置記憶)、`node tests/test_llm_wand.js` (魔杖對非日文歌詞的守門)、`node tests/test_pkce.js` (行動版的 OAuth PKCE)、`node tests/test_mobile_playback.js` (行動版的播放位置插值)、`node tests/test_mobile_lyrics.js` (行動版的 LRC 解析)、`python tests/test_pick_session.py`、`python tests/test_furigana_hint.py` (Python 的要用 `venv/Scripts/python.exe`,系統 python 沒裝 fugashi)。
+- 沒有 test runner 或 linter。零星的獨立測試檔直接用直譯器跑:`node tests/test_origin_guard.js` (同源守門)、`node tests/test_s2t.js` (簡轉繁)、`node tests/test_lyric_quality.js` (內嵌注音的歌詞守門)、`node tests/test_search_query.js` (繁轉簡 + 瀏覽器標題去噪)、`node tests/test_title_lines.js` (製作人員/版權列標記)、`node tests/test_translations.js` (中文譯文合併)、`node tests/test_romaji.js` (羅馬拼音)、`node tests/test_itunes_resolving.js` (iTunes 原名還原的時序)、`node tests/test_history_toggle.js` (聆聽紀錄開關 + 清除白名單)、`node tests/test_backup_restore.js` (備份/還原 + 還原前的驗證守門)、`node tests/test_scroll_zone.js` (歌詞自動捲動的三段判定)、`node tests/test_game.js` (猜歌的干擾選項挑選)、`node tests/test_island_position.js` (靈動島的多螢幕位置記憶)、`node tests/test_llm_wand.js` (魔杖對非日文歌詞的守門)、`node tests/test_pkce.js` (行動版的 OAuth PKCE)、`node tests/test_mobile_playback.js` (行動版的播放位置插值)、`node tests/test_mobile_lyrics.js` (行動版的 LRC 解析)、`node tests/test_mobile_color.js` (行動版的封面主色採樣)、`python tests/test_pick_session.py`、`python tests/test_furigana_hint.py` (Python 的要用 `venv/Scripts/python.exe`,系統 python 沒裝 fugashi)。
 - `ROADMAP.md` (repo 根,**本機檔案,不進版控**) 記著 v1.0.0 之後的規劃與**明確不做的事**。動到「未來要做什麼」的討論先看它,免得重新提案已經否決過的方向 (雲端同步、換 tokenizer、離線辭典、Steam 式強制更新)。clone 下來沒有這個檔屬正常。
   主軸是**歌詞體驗**,不是學日文 —— 翻譯/查詞這類功能要進來,得先過「它讓歌詞更好讀嗎」這一關。
 
@@ -457,6 +457,41 @@ Phase 3+4（同步歌詞 + 注音）、Phase 5（PWA 化）已完成:`web-app/pu
   - **刻意不寫進快取**:存下去的話電腦開回來也永遠換不成有注音的那份。
   - `artist_name` 只送第一位歌手 (`snapshot()` 把 Spotify 的多位歌手 join 成一串,整串送過去查不到)。
 - SW 需要 secure context:Render 的 HTTPS 與 `127.0.0.1` 都算,`file://` 直接開不算 (註冊失敗就算了,不影響其他功能)。
+
+**全螢幕歌詞介面 (2026-08-01 改版)**:版面從「卡片式除錯頁」改成 Spotify 歌詞頁 —— 頂列只有一顆 ⋯、
+歌詞區 `flex: 1` 佔滿、底部一條播放列。`<body>` 是 `height: 100dvh` 的直向 flex 且 `overflow: hidden`,
+**整頁不捲動,只有歌詞區自己捲**。
+- **`100dvh` 不是 `100vh`** —— Safari 分頁模式的網址列會吃掉高度,`vh` 量的是「網址列收起來時」的值,
+  底部播放列會被切掉一截。standalone 模式看不出來,用瀏覽器開就很明顯。
+- 歌詞區的 **`position: relative` 不可以拿掉**(理由同改版前:置中靠 `el.offsetTop`,沒有它
+  `offsetParent` 變成 `<body>`,多算了頂列的高度)。
+- 封面主色 = **`public/mobile/color.js` 的 `pickBg()`**,純函式獨立成檔的理由同 `lyrics.js`。
+  數學**照抄電腦版** (`public/js/app.js` 的 `coverImg.onload`):RGB 平均 → ×0.65 壓暗 →
+  感知亮度 (`0.299r+0.587g+0.114b`) 大於 80 就把非活躍歌詞改成黑透明。兩邊要看起來是同一個 app,
+  不要另外發明一套。
+  - **`<img crossorigin="anonymous">` 是前提**:不加的話 canvas 被跨網域污染,`getImageData` 直接丟
+    SecurityError。**屬性要寫在 HTML 上** —— 設完 `src` 才補是不生效的。已實測 `i.scdn.co` 有回
+    `Access-Control-Allow-Origin: *`。取不到就退回 `FALLBACK`,不要讓整頁跟著壞。
+  - 採樣前先把圖縮到 32×32:平均色一樣,但少讀幾十萬個像素。
+  - `getComputedStyle(document.body).backgroundColor` **驗不到這件事** —— body 的背景會傳播到
+    viewport,computed 值仍是原本的 `--bg`。要驗看 `document.body.style.backgroundColor` 或直接截圖。
+- **播放控制需要 `user-modify-playback-state` scope,而改 scope 會讓已存的 `refresh_token` 失效。**
+  舊 token 打控制端點只回 403,症狀看起來像「Premium 沒生效」,使用者無從猜起。所以 localStorage 存
+  `kanaric.mobile.scope` 記住上次授權用的 scope,進場比對不一致就清掉 refresh token 並提示重新連接。
+  **動 `SCOPE` 常數時這段守門不能省。**
+  - 控制端點回 204 且不回新狀態,所以 `control()` 要**先改本地快照再送出**(樂觀更新),否則畫面要等
+    下一輪輪詢(最多 3 秒)才動,按起來像沒反應;送完 400ms 補一次 `tick()` 校正。
+  - 403 = 免費帳號或 scope 不對 → 整排控制鈕收起來並提示一次,不要每按一次吐一次;404 = Spotify app
+    沒開,沒有可控制的裝置。
+  - 進度條**只做點擊跳轉不做拖曳**:拖曳要另外管 pointer 事件、還要在拖曳期間擋掉 rAF 對 `width` 的
+    覆寫。程式碼裡留了 `ponytail:` 註解寫升級路徑。點歌詞跳轉直接用 `parseLrc` 結果的 `ms`。
+- 設定面板(⋯ 開的 sheet)**只有純前端的項目**:歌詞字級、對齊、顯示日文假名(`body.no-furigana`
+  把 `rt` 藏起來)、歌詞來源(唯讀)、Client ID / Token、連接/登出。全部存 localStorage 的
+  `kanaric.mobile.prefs`,零 server 改動。**Client ID / Token 的 input 只有這一份** —— 未登入時
+  自動把 sheet 打開,不再另外做一個 setup 卡片,免得兩個畫面各存各的。
+- 中文翻譯 / 羅馬拼音 / 片假名標平假名**還沒做**:`/api/lyrics` 只跑 `injectFurigana`,那三樣的資料
+  根本沒送到手機,要做得改 server 並讓雲端每首多跑一次譯文抓取。
+- 回歸測試 `node tests/test_mobile_color.js`。
 
 **做過又移除的:鏡像模式** (2026-07-28,commit `8bef724` 加入、同日移除)。手機連 server 的
 WebSocket 直接吃 `media_state` 廣播、不打 Spotify,角色跟靈動島一樣。**移除的理由不是它不好用,

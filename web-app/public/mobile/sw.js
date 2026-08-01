@@ -4,8 +4,9 @@
  * 直接不 respondWith,讓瀏覽器照常送出去。
  */
 
-const CACHE = 'kanaric-mobile-v6';   // 改 shell 檔案時把版號往上加,activate 會清掉舊的
-const SHELL = ['./', './index.html', './pkce.js', './playback.js', './lyrics.js', './manifest.json'];
+const CACHE = 'kanaric-mobile-v7';   // 改 shell 檔案時把版號往上加,activate 會清掉舊的
+const SHELL = ['./', './index.html', './pkce.js', './playback.js', './lyrics.js',
+               './color.js', './manifest.json'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
