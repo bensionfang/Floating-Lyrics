@@ -31,8 +31,14 @@
   }
   .hidden { display: none !important; }
 
-  /* --- 頂列:只有一顆 ⋯ --- */
-  .top { flex-shrink: 0; display: flex; justify-content: flex-end; padding: 6px 12px; }
+  /* --- 頂列:⋯ 在左,歌名/歌手置中兩行 --- */
+  /* 三欄 grid 而不是 flex + space-between:右邊那個等寬的空欄是為了讓中間**真的**置中,
+     不然歌名會被左邊那顆按鈕推偏 40px */
+  .top {
+    flex-shrink: 0; display: grid; grid-template-columns: 40px 1fr 40px;
+    align-items: center; padding: 6px 12px; gap: 8px;
+  }
+  .top-text { min-width: 0; text-align: center; }   /* min-width:0 讓長歌名縮得下去而不是撐爆格線 */
   .icon-btn {
     background: transparent; border: 0; color: var(--text); opacity: .8;
     width: 40px; height: 40px; padding: 0; border-radius: 999px;
@@ -47,7 +53,16 @@
   .lyrics {
     position: relative; flex: 1; min-height: 0;
     overflow-y: auto; -webkit-overflow-scrolling: touch;
-    padding: 30vh 22px;   /* 上下留白讓第一句/最後一句也能捲到畫面中央 */
+    /* 上緣只留一點點:**第一句要貼在畫面上方,不是被推到正中央**。捲不上去時
+       scrollTo 自己會夾住,所以 syncLyrics 那條置中邏輯不必改。
+       這個留白要**大於下面遮罩的上緣淡出高度 (20px)**,否則第一句一開始就是半透明的 ——
+       所以那個淡出寫成固定 px 而不是 %,%的話面板一變高淡出區就跟著長,又會蓋回第一句。
+       下緣留 45vh 是必要的 —— 沒有它最後幾句永遠捲不到畫面中央,會卡在最底下 */
+    padding: 26px 22px 45vh;
+    /* 與頂列/播放列接觸的地方淡出,歌詞不會硬生生被切斷。
+       -webkit- 前綴不能省:iOS Safari 到現在還是只認前綴版的 mask-image */
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 20px, #000 90%, transparent 100%);
+    mask-image: linear-gradient(to bottom, transparent 0, #000 20px, #000 90%, transparent 100%);
   }
   .lyrics p {
     margin: 0; padding: 12px 0; line-height: 1.85;
@@ -63,16 +78,15 @@
 
   /* --- 底部播放列 --- */
   .playbar { flex-shrink: 0; padding: 8px 20px 12px; }
-  .now { display: flex; gap: 12px; align-items: center; margin-bottom: 10px; }
-  .art { width: 44px; height: 44px; border-radius: 5px; flex-shrink: 0; object-fit: cover;
-         background: rgba(0,0,0,.4); }
-  /* min-width:0 不能拿掉 —— flex item 預設 min-width:auto,長歌名會把封面擠出畫面 */
-  .now-text { min-width: 0; flex: 1; }
+  /* 封面刻意不顯示:畫面的底色就是從它採樣來的,這一頁的角色是「看歌詞」。
+     但 <img> 必須留在 DOM 裡而且要真的載入 —— 主色採樣是掛在它的 load 事件上的。
+     display:none 不會阻止圖片下載,所以用它是安全的;**不要改成不插入 <img>** */
+  #art { display: none; }
   .track-title, .track-artist {
     margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  .track-title { font-size: 16px; font-weight: 700; }
-  .track-artist { font-size: 13px; opacity: .7; margin-top: 2px; }
+  .track-title { font-size: 14px; font-weight: 600; }
+  .track-artist { font-size: 13px; opacity: .75; margin-top: 1px; }
   /* 進度條由 rAF 每幀寫 width,所以刻意不加 CSS transition —— 兩邊會互相打架而變黏。
      外面包一層高一點的 .hit 是為了好按:視覺 4px、觸控區 20px */
   .hit { padding: 8px 0; cursor: pointer; }
@@ -131,21 +145,22 @@
       <circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/>
     </svg>
   </button>
+  <div class="top-text">
+    <p class="track-title" id="track-title">—</p>
+    <p class="track-artist" id="track-artist">—</p>
+  </div>
+  <!-- 右邊留一個等寬的空格,中間那欄才會真的置中 -->
+  <span></span>
 </div>
 
 <div id="lyrics" class="lyrics"></div>
 
 <div id="playbar" class="playbar hidden">
   <p id="status" class="msg"></p>
-  <div class="now">
-    <!-- crossorigin 是主色採樣的前提:不加的話 canvas 被跨網域污染,getImageData 直接丟
-         SecurityError。要寫在 HTML 屬性上 —— 設完 src 才補是不生效的 -->
-    <img id="art" class="art hidden" crossorigin="anonymous" alt="">
-    <div class="now-text">
-      <p class="track-title" id="track-title">—</p>
-      <p class="track-artist" id="track-artist">—</p>
-    </div>
-  </div>
+  <!-- 封面不顯示 (見 CSS 的 .art),但一定要留著而且要載入 —— 主色採樣掛在它的 load 事件上。
+       crossorigin 是採樣的前提:不加的話 canvas 被跨網域污染,getImageData 直接丟
+       SecurityError。要寫在 HTML 屬性上 —— 設完 src 才補是不生效的 -->
+  <img id="art" crossorigin="anonymous" alt="">
   <div class="hit" id="prog-hit">
     <div class="bar"><i id="bar-fill"></i></div>
   </div>
@@ -634,12 +649,12 @@
     $('dur-fmt').textContent = formatTime(t ? t.durationMs : 0);
     $('ico-play').classList.toggle('hidden', !!(t && t.isPlaying));
     $('ico-pause').classList.toggle('hidden', !(t && t.isPlaying));
-    // src 只在真的換圖時寫 —— 每次輪詢都寫同一個 URL 會讓 Safari 重新解碼一次,封面會閃
+    // 封面不顯示,但還是要換 src —— 背景色是從它採樣的。
+    // src 只在真的換圖時寫:每次輪詢都寫同一個 URL 會讓 Safari 重新解碼一次
     const art = $('art'), url = (t && t.art) || '';
     if (art.getAttribute('src') !== url) {
       if (url) art.setAttribute('src', url); else { art.removeAttribute('src'); paintBg(FALLBACK); }
     }
-    art.classList.toggle('hidden', !url);
     if (!t) { $('bar-fill').style.width = '0'; $('pos-fmt').textContent = '0:00'; }
   }
 
