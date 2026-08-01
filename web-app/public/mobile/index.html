@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Kanaric">
+<meta name="theme-color" content="#121212">
+<link rel="manifest" href="manifest.json">
+<title>Kanaric Mobile</title>
+<style>
+  /* 版面刻意不用桌面版的 public/css/style.css —— 那份是為桌面 grid 寫的 */
+  :root {
+    --bg: #121212; --panel: #181818; --border: rgba(255,255,255,.1);
+    --text: #fff; --dim: #b3b3b3; --accent: #1DB954;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC", sans-serif;
+    padding: max(24px, env(safe-area-inset-top)) 20px max(24px, env(safe-area-inset-bottom));
+    -webkit-text-size-adjust: 100%;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--dim); font-size: 13px; margin: 0 0 24px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px; margin-bottom: 16px;
+  }
+  label { display: block; font-size: 13px; color: var(--dim); margin-bottom: 6px; }
+  input {
+    width: 100%; padding: 12px; font-size: 16px;   /* 16px 以下 iOS Safari 會自動放大 */
+    background: #000; color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+  }
+  button {
+    width: 100%; padding: 14px; margin-top: 12px; font-size: 16px; font-weight: 600;
+    background: var(--accent); color: #000; border: 0; border-radius: 999px;
+    cursor: pointer; -webkit-appearance: none;
+  }
+  button:disabled { opacity: .5; }
+  button.ghost { background: transparent; color: var(--dim); border: 1px solid var(--border); }
+  .hidden { display: none !important; }
+  /* 封面放旁邊而不是上面:歌詞區已經吃掉 55vh,直的再壓一張大圖就沒地方了 */
+  .now { display: flex; gap: 14px; align-items: center; margin-bottom: 20px; }
+  .art { width: 64px; height: 64px; border-radius: 6px; flex-shrink: 0; object-fit: cover;
+         background: #000; }
+  /* min-width:0 不能拿掉 —— flex item 預設 min-width:auto,長歌名會把封面擠出卡片 */
+  .now-text { min-width: 0; }
+  .track-title { font-size: 22px; font-weight: 700; margin: 0 0 4px;
+                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .track-artist { color: var(--dim); margin: 0; font-size: 14px;
+                  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* 進度條由 rAF 每幀寫 width,所以刻意不加 CSS transition —— 兩邊會互相打架而變黏 */
+  .bar { height: 4px; background: rgba(255,255,255,.2); border-radius: 2px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; width: 0; background: var(--accent); }
+  .times { display: flex; justify-content: space-between; margin: 6px 0 16px;
+           font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .row { display: flex; justify-content: space-between; padding: 8px 0; border-top: 1px solid var(--border); font-size: 14px; }
+  .row span:first-child { color: var(--dim); }
+  .mono { font-variant-numeric: tabular-nums; }
+  .msg { font-size: 13px; color: var(--dim); margin-top: 12px; word-break: break-word; }
+  .msg.err { color: #ff6b6b; }
+  code { background: #000; padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+  /* 歌詞:自己一個捲動容器,置中靠寫 scrollTop (不動整頁,免得與 body 捲動打架) */
+  /* position 不可以拿掉:置中是靠 el.offsetTop 算的,沒有它 offsetParent 會變成 <body>,
+     量到的是「離整頁頂端」的距離 (多算了上面那兩張卡),當前行就被推到畫面上方外 */
+  .lyrics { position: relative; height: 55vh; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .lyrics p {
+    margin: 0; padding: 10px 0; font-size: 19px; line-height: 1.9;
+    color: var(--dim); opacity: .55; transition: opacity .2s, color .2s;
+  }
+  .lyrics p.on { color: var(--text); opacity: 1; font-weight: 600; }
+  /* ruby 在 iOS Safari 預設會把行高撐開,自己壓一下讀音大小 */
+  .lyrics rt { font-size: .5em; color: var(--dim); font-weight: 400; }
+  .lyrics p.on rt { color: var(--text); }
+</style>
+</head>
+<body>
+
+<h1>Kanaric Mobile</h1>
+<p class="sub">Spotify 同步歌詞</p>
+
+<!-- 未登入:設定 Client ID 並授權 -->
+<div id="setup" class="card hidden">
+  <label for="client-id">Spotify Client ID</label>
+  <input id="client-id" type="text" autocomplete="off" autocapitalize="off"
+         autocorrect="off" spellcheck="false" placeholder="Dashboard 上那串 32 碼">
+  <label for="api-token" style="margin-top:12px">歌詞服務 Token</label>
+  <input id="api-token" type="password" autocomplete="off" placeholder="Render 上的 MOBILE_TOKEN">
+  <button id="login-btn">連接 Spotify</button>
+  <p class="msg">
+    Redirect URI 要在 Spotify Dashboard 註冊為 <code id="redirect-hint"></code>。
+    Client ID 是公開值，只存在這台裝置的瀏覽器裡。
+  </p>
+</div>
+
+<!-- 已登入:播放狀態 -->
+<div id="player" class="card hidden">
+  <div class="now">
+    <!-- 封面拿不到時整個藏起來 (單曲/podcast 可能沒有 album),不要留一個破圖框 -->
+    <img id="art" class="art hidden" alt="">
+    <div class="now-text">
+      <p class="track-title" id="track-title">—</p>
+      <p class="track-artist" id="track-artist">—</p>
+    </div>
+  </div>
+  <div class="bar"><i id="bar-fill"></i></div>
+  <div class="times"><span id="pos-fmt">0:00</span><span id="dur-fmt">0:00</span></div>
+  <div class="row"><span>歌詞來源</span><span class="mono" id="lyrics-source">—</span></div>
+  <button id="logout-btn" class="ghost">登出</button>
+</div>
+
+<div id="lyrics-card" class="card hidden">
+  <div id="lyrics" class="lyrics"></div>
+</div>
+
+<p id="status" class="msg"></p>
+
+<script src="pkce.js"></script>
+<script src="playback.js"></script>
+<script src="lyrics.js"></script>
+<script>
+(() => {
+  'use strict';
+
+  const AUTH_URL  = 'https://accounts.spotify.com/authorize';
+  const TOKEN_URL = 'https://accounts.spotify.com/api/token';
+  const SCOPE     = 'user-read-playback-state';   // Phase 1 只讀播放狀態,不要多要
+
+  const LS_CLIENT  = 'kanaric.mobile.clientId';
+  const LS_REFRESH = 'kanaric.mobile.refreshToken';
+  const LS_TOKEN   = 'kanaric.mobile.apiToken';   // 雲端 /api/lyrics 的 token
+  const SS_VERIFIER = 'kanaric.mobile.verifier';
+  const SS_STATE    = 'kanaric.mobile.state';
+
+  // redirect_uri 由現在的網址推出來,同一份程式碼在 127.0.0.1 與 Render 網域都正確
+  // (兩個都要在 Dashboard 註冊)。直接開 index.html 時 pathname 會多一段,要剝掉 ——
+  // 沒剝的話送出去的 redirect_uri 與註冊的那條對不上,Spotify 回 INVALID_CLIENT。
+  const REDIRECT_URI = location.origin + location.pathname.replace(/index\.html$/, '');
+
+  const $ = (id) => document.getElementById(id);
+  const setStatus = (text, isError = false) => {
+    $('status').textContent = text || '';
+    $('status').classList.toggle('err', !!isError);
+  };
+
+  // access_token 只放記憶體 (重整就重拿,refresh_token 才進 localStorage)
+  let accessToken = null;
+  let expiresAt = 0;
+
+  const clientId = () => localStorage.getItem(LS_CLIENT) || '';
+
+  // --- OAuth ---------------------------------------------------------------
+
+  async function login() {
+    const id = $('client-id').value.trim();
+    if (!id) return setStatus('請先填入 Client ID', true);
+    localStorage.setItem(LS_CLIENT, id);
+    localStorage.setItem(LS_TOKEN, $('api-token').value.trim());   // 沒填也存,空字串等於沒 token
+
+    const verifier = randomVerifier();
+    const state = randomVerifier(43);
+    sessionStorage.setItem(SS_VERIFIER, verifier);
+    sessionStorage.setItem(SS_STATE, state);
+
+    const params = new URLSearchParams({
+      client_id: id,
+      response_type: 'code',
+      redirect_uri: REDIRECT_URI,
+      scope: SCOPE,
+      state,
+      code_challenge_method: 'S256',
+      code_challenge: await challengeFor(verifier),
+    });
+    location.href = `${AUTH_URL}?${params}`;
+  }
+
+  async function postToken(body) {
+    const resp = await fetch(TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(body),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.error_description || data.error || `token 端點回 ${resp.status}`);
+    accessToken = data.access_token;
+    expiresAt = Date.now() + (data.expires_in || 3600) * 1000;
+    // 更新時 Spotify 不一定會回新的 refresh_token,沒回就沿用舊的
+    if (data.refresh_token) localStorage.setItem(LS_REFRESH, data.refresh_token);
+    return data;
+  }
+
+  // 從授權頁導回來:? 裡帶 code 或 error
+  async function handleRedirect() {
+    const q = new URLSearchParams(location.search);
+    const code = q.get('code');
+    const error = q.get('error');
+    if (!code && !error) return false;
+
+    // code 只能用一次,先把 query string 清掉,否則重整會拿用過的 code 再換一次而失敗
+    history.replaceState(null, '', REDIRECT_URI);
+
+    if (error) { setStatus(`授權被拒:${error}`, true); return false; }
+
+    const expected = sessionStorage.getItem(SS_STATE);
+    const verifier = sessionStorage.getItem(SS_VERIFIER);
+    sessionStorage.removeItem(SS_STATE);
+    sessionStorage.removeItem(SS_VERIFIER);
+    if (!expected || q.get('state') !== expected) { setStatus('state 不符,授權中止', true); return false; }
+    if (!verifier) { setStatus('找不到 code_verifier,請重新授權', true); return false; }
+
+    await postToken({
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: REDIRECT_URI,
+      client_id: clientId(),
+      code_verifier: verifier,
+    });
+    return true;
+  }
+
+  /** 統一的 token 出口:到期前 60 秒就先換新的 (規格 §3.1)。拿不到就回 null,由呼叫端退回登入畫面 */
+  async function getToken() {
+    if (accessToken && Date.now() < expiresAt - 60000) return accessToken;
+    const refresh = localStorage.getItem(LS_REFRESH);
+    if (!refresh || !clientId()) return null;
+    try {
+      await postToken({ grant_type: 'refresh_token', refresh_token: refresh, client_id: clientId() });
+      return accessToken;
+    } catch (e) {
+      // iOS 的 ITP 可能清掉儲存,或授權被撤銷 —— 不要卡死,回到登入畫面重來
+      localStorage.removeItem(LS_REFRESH);
+      accessToken = null;
+      setStatus(`需要重新授權:${e.message}`, true);
+      return null;
+    }
+  }
+
+  function logout() {
+    localStorage.removeItem(LS_REFRESH);
+    accessToken = null;
+    expiresAt = 0;
+    showSetup();
+    setStatus('已登出');
+  }
+
+  // --- 播放狀態 -------------------------------------------------------------
+
+  let track = null;      // playback.js 的快照,插值的基準
+  let pollTimer = null;
+
+  /** 打一次 /me/player 並更新快照。回傳「下次輪詢要等多久」,回 null 表示照常 (pollDelay) */
+  async function poll() {
+    const token = await getToken();
+    if (!token) { showSetup(); return Infinity; }   // 沒 token 就停手,等使用者重新授權
+
+    try {
+      const resp = await fetch('https://api.spotify.com/v1/me/player', {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: 'no-store',
+      });
+      if (resp.status === 204) {   // 沒有任何裝置在播 —— 是正常狀態,不是錯誤
+        setTrack(null);
+        setStatus('目前沒有播放中的裝置');
+        return null;
+      }
+      // 401 只要把記憶體的 token 丟掉,下一輪 getToken() 會自己拿 refresh_token 換新的
+      if (resp.status === 401) { accessToken = null; setStatus('token 失效,更新中…'); return 1000; }
+      if (resp.status === 429) {
+        // Spotify 會用 Retry-After (秒) 告訴你要等多久,照著等才不會一直被擋
+        const wait = (Number(resp.headers.get('Retry-After')) || 30) * 1000;
+        setStatus(`被 Spotify 限流,${Math.round(wait / 1000)} 秒後再試`, true);
+        return wait;
+      }
+      if (!resp.ok) { setStatus(`Spotify 回 ${resp.status}`, true); return null; }
+      setTrack(snapshot(await resp.json(), performance.now()));
+      setStatus(`更新於 ${new Date().toLocaleTimeString()}`);
+      return null;
+    } catch (e) {
+      setStatus(`讀取失敗:${e.message}`, true);   // 家裡機器離線/飛航模式,下一輪再試
+      return null;
+    }
+  }
+
+  function setTrack(next) {
+    // 換歌以 item.id 為準 (規格 §3.4) —— 同名歌太多,比歌名會誤判
+    if ((next && next.id) !== (track && track.id)) loadLyrics(next);
+    track = next;
+    render(next);
+  }
+
+  // --- 歌詞 -----------------------------------------------------------------
+
+  let lines = [];
+  let activeLine = -1;
+  let lyricsFor = null;    // 目前這份歌詞是哪個 track id 的 (慢回應蓋掉新歌的守門)
+
+  /**
+   * 換歌時打一次 Kanaric 的歌詞服務。頁面本來就是那台 server 服務的,所以用相對路徑 =
+   * 同源請求;雲端模式那邊的允許清單只放行這一支,而且要帶 token。
+   */
+  async function loadLyrics(t) {
+    lines = [];
+    activeLine = -1;
+    lyricsFor = t && t.id;
+    $('lyrics').innerHTML = '';
+    $('lyrics-card').classList.toggle('hidden', !t);
+    $('lyrics-source').textContent = t ? '查詢中…' : '—';
+    if (!t) return;
+
+    // 快取命中就整個不打 server (規格 §4.3),離線時也還有歌詞
+    const hit = readCache(localStorage, t.id);
+    if (hit) return showLyrics(hit);
+
+    // Render 免費方案閒置 15 分鐘就休眠,第一次請求要等 30~60 秒。**不要加 timeout 中斷它** ——
+    // 中斷了就等於永遠喚不醒;改成等超過 3 秒就把狀態換掉,讓使用者知道不是當掉
+    const waking = setTimeout(() => {
+      if (lyricsFor === t.id) $('lyrics-source').textContent = '喚醒伺服器中…(免費方案冷啟動)';
+    }, 3000);
+
+    try {
+      const q = new URLSearchParams({ title: t.title, artist: t.artist, duration_ms: t.durationMs });
+      const resp = await fetch(`/api/lyrics?${q}`, {
+        cache: 'no-store',
+        headers: { 'X-Kanaric-Token': localStorage.getItem(LS_TOKEN) || '' },
+      });
+      if (lyricsFor !== t.id) return;    // 這期間已經換歌了,舊回應丟掉
+      // 401 是 token 不對,不是 Spotify 的事 —— 別把使用者踢回登入畫面
+      if (resp.status === 401) throw new Error('歌詞服務 Token 不對');
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || `server 回 ${resp.status}`);
+
+      showLyrics(data);
+      // 只快取真的有歌詞的:「找不到歌詞」存下去等於永遠不再重試
+      if (lines.length) return writeCache(localStorage, t.id, data);
+    } catch (e) {
+      if (lyricsFor !== t.id) return;
+      $('lyrics-source').textContent = `讀取失敗:${e.message}`;
+    } finally {
+      clearTimeout(waking);
+    }
+    // server 連不上 (電腦關機) 或它也沒有 —— 退到 lrclib,至少歌詞不會整個消失
+    await loadFromLrclib(t);
+  }
+
+  /**
+   * 備援 (規格 §4.2):前端直接打 lrclib 的公開 API。它有給 CORS header,所以瀏覽器打得到 ——
+   * 中國平台那三家都沒有,而且 QQ/酷狗還要解密,手機端沒有路。
+   */
+  async function loadFromLrclib(t) {
+    try {
+      const q = new URLSearchParams({
+        track_name: t.title,
+        artist_name: t.artist.split(',')[0].trim(),   // lrclib 只吃單一歌手
+        duration: Math.round(t.durationMs / 1000),
+      });
+      const resp = await fetch(`https://lrclib.net/api/get?${q}`, { cache: 'no-store' });
+      if (lyricsFor !== t.id) return;
+      if (!resp.ok) throw new Error(`lrclib 回 ${resp.status}`);
+      const data = await resp.json();
+      if (!data.syncedLyrics) throw new Error('lrclib 只有無時間軸的版本');
+      // 這份沒經過 furigana_inject.py,沒有人幫它逃逸,自己來 (innerHTML 畫的)
+      showLyrics({ source: 'lrclib(無注音)', lyrics: escapeHtml(data.syncedLyrics) });
+      // 刻意不進快取:電腦開回來時要能換成有注音的那份
+    } catch (e) {
+      if (lyricsFor !== t.id) return;
+      $('lyrics-source').textContent = `找不到歌詞:${e.message}`;
+    }
+  }
+
+  function showLyrics(data) {
+    lines = parseLrc(data.lyrics);
+    $('lyrics-source').textContent = lines.length ? data.source : '找不到歌詞';
+    // 歌詞是 furigana_inject.py 逃逸過的 <ruby> HTML,可以直接 innerHTML
+    $('lyrics').innerHTML = lines.map((l) => `<p>${l.html || '♪'}</p>`).join('');
+  }
+
+  /** 高亮 + 置中。只在換行時動,不然每幀寫 scrollTop 會把手動捲動整個吃掉 */
+  function syncLyrics(posMs) {
+    const i = activeIndex(lines, posMs);
+    if (i === activeLine) return;
+    const pane = $('lyrics');
+    const prev = pane.children[activeLine];
+    if (prev) prev.classList.remove('on');
+    activeLine = i;
+    const el = pane.children[i];
+    if (!el) return;
+    el.classList.add('on');
+    pane.scrollTo({ top: el.offsetTop - pane.clientHeight / 2 + el.offsetHeight / 2, behavior: 'smooth' });
+  }
+
+  /** 排下一次輪詢。分頁隱藏時不排 —— Safari 背景會凍結 timer,醒來也是靠 visibilitychange */
+  function schedule(overrideMs) {
+    clearTimeout(pollTimer);
+    if (document.hidden) return;
+    const wait = overrideMs != null ? overrideMs : pollDelay(track);
+    if (wait === Infinity) return;
+    pollTimer = setTimeout(tick, wait);
+  }
+
+  async function tick() {
+    schedule(await poll());
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    // 回到前景立刻校正一次:背景期間 timer 被凍結,插值早就漂掉了 (驗收標準 6)
+    if (document.hidden) return clearTimeout(pollTimer);
+    if ($('player').classList.contains('hidden')) return;
+    keepAwake();   // 分頁一隱藏 lock 就被系統釋放,回前景一定要重拿 (規格 §5.3 點名的坑)
+    tick();
+  });
+
+  // --- 螢幕恆亮 -------------------------------------------------------------
+
+  let wakeLock = null;
+
+  async function keepAwake() {
+    if (!('wakeLock' in navigator) || document.hidden || wakeLock) return;
+    try {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => { wakeLock = null; });
+    } catch (e) {
+      wakeLock = null;   // 低電量模式會直接拒絕 —— 是正常情況,不用吵使用者
+    }
+  }
+
+  // 進度條:rAF 每幀用 performance.now() 插值。分頁隱藏時瀏覽器自己會停掉 rAF,不必自己管
+  function frame() {
+    if (track) {
+      const pos = positionAt(track, performance.now());
+      $('bar-fill').style.width = track.durationMs ? `${(pos / track.durationMs) * 100}%` : '0';
+      $('pos-fmt').textContent = formatTime(pos);
+      syncLyrics(pos);
+    }
+    requestAnimationFrame(frame);
+  }
+
+  // app.js:913 的 formatTime,毫秒版
+  const formatTime = (ms) => {
+    const total = Math.floor(ms / 1000);
+    return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+  };
+
+  /** 每次輪詢回來時寫的欄位 (播放位置不在這裡,由 frame() 每幀插值寫) */
+  function render(t) {
+    $('track-title').textContent = t ? t.title : '—';
+    $('track-artist').textContent = t ? t.artist : '—';
+    $('dur-fmt').textContent = formatTime(t ? t.durationMs : 0);
+    // src 只在真的換圖時寫 —— 每次輪詢都寫同一個 URL 會讓 Safari 重新解碼一次,封面會閃
+    const art = $('art'), url = (t && t.art) || '';
+    if (art.getAttribute('src') !== url) {
+      if (url) art.setAttribute('src', url); else art.removeAttribute('src');
+    }
+    art.classList.toggle('hidden', !url);
+    if (!t) { $('bar-fill').style.width = '0'; $('pos-fmt').textContent = '0:00'; }
+  }
+
+  // --- 畫面切換 -------------------------------------------------------------
+
+  function showSetup() {
+    clearTimeout(pollTimer);
+    $('setup').classList.remove('hidden');
+    $('player').classList.add('hidden');
+    $('lyrics-card').classList.add('hidden');
+    $('client-id').value = clientId();
+    $('api-token').value = localStorage.getItem(LS_TOKEN) || '';
+  }
+
+  function showPlayer() {
+    $('setup').classList.add('hidden');
+    $('player').classList.remove('hidden');
+    keepAwake();
+  }
+
+  // --- 進場 -----------------------------------------------------------------
+
+  (async () => {
+    $('redirect-hint').textContent = REDIRECT_URI;
+    $('login-btn').addEventListener('click', () => login().catch(e => setStatus(e.message, true)));
+    $('logout-btn').addEventListener('click', logout);
+    requestAnimationFrame(frame);
+    // SW 要 secure context:Render 的 HTTPS 與 127.0.0.1 都算,直接開檔案不算 (失敗就算了)
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+    // 進場就先射一發把休眠中的 server 叫醒 (免費方案冷啟動 30~60 秒),跟下面的 Spotify
+    // 授權/輪詢平行跑 —— 等歌名確定要打 /api/lyrics 時,它已經醒了一段時間。
+    // **打靜態檔不打 /api/lyrics**:那支會查 DB、spawn Python、對外打三家平台,拿它當喚醒
+    // 等於每次開 app 都多一輪對外請求,可能害雲端那台的 IP 被三家限流。
+    // 不 await、不理錯誤:這只是喚醒,失敗了 loadLyrics 自己會再打一次。
+    // 帶 ?wake 是為了讓 SW 放行走網路 —— 不帶的話會被 shell 快取接走,根本沒碰到 server。
+    fetch('manifest.json?wake=1', { cache: 'no-store' }).catch(() => {});
+
+    try {
+      if (await handleRedirect()) {
+        showPlayer();
+        return tick();
+      }
+    } catch (e) {
+      setStatus(`換 token 失敗:${e.message}`, true);
+      return showSetup();
+    }
+
+    if (localStorage.getItem(LS_REFRESH) && clientId()) { showPlayer(); tick(); }
+    else showSetup();
+  })();
+})();
+</script>
+</body>
+</html>
