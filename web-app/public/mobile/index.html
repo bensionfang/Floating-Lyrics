@@ -78,12 +78,13 @@
   .lyrics .empty { text-align: center; color: var(--lyric-dim); font-weight: 400; opacity: .8; }
 
   /* --- 底部播放列 --- */
-  /* 下緣只吃「safe area 減 22px」:整個 inset (iPhone 約 34px) 留白會讓控制列離底部太遠,
-     Spotify / Apple Music 都貼得更下面。減完仍留約 12px,播放鍵不會壓在 home indicator 上。
-     max() 是給沒有 inset 的環境 (桌面瀏覽器、Android) 用的保底,不然算出來是負值 */
+  /* 下緣只吃「safe area 減 28px」:整個 inset (iPhone 約 34px) 留白會讓控制列離底部太遠,
+     Spotify / Apple Music 都貼得更下面。減完剩約 6px —— 已經很貼,再往下播放鍵就會壓到
+     home indicator 那條線上。max() 是給沒有 inset 的環境 (桌面、Android) 保底,
+     不然算出來是負值 */
   .playbar {
     flex-shrink: 0;
-    padding: 6px 20px max(0px, calc(env(safe-area-inset-bottom) - 22px));
+    padding: 6px 20px max(0px, calc(env(safe-area-inset-bottom) - 28px));
   }
   /* 封面刻意不顯示:畫面的底色就是從它採樣來的,這一頁的角色是「看歌詞」。
      但 <img> 必須留在 DOM 裡而且要真的載入 —— 主色採樣是掛在它的 load 事件上的。
@@ -109,6 +110,12 @@
   .msg { font-size: 12px; text-align: center; opacity: .7; margin: 0 0 6px;
          word-break: break-word; min-height: 15px; }
   .msg.err { color: #ff8b8b; opacity: 1; }
+  /* 沒有活躍裝置時才出現 (見 JS 的 resumeOnSpotify) */
+  .resume {
+    display: block; margin: 0 auto 8px; padding: 9px 18px;
+    background: var(--accent); color: #000; border: 0; border-radius: 999px;
+    font-size: 14px; font-weight: 600; cursor: pointer; -webkit-appearance: none;
+  }
 
   /* --- 設定側欄 (從左邊滑出) --- */
   /* 開關用 .open 而不是 .hidden:display:none 會讓 transition 完全不觸發,
@@ -177,6 +184,7 @@
 
 <div id="playbar" class="playbar hidden">
   <p id="status" class="msg"></p>
+  <button id="resume-btn" class="resume hidden">在 Spotify 開始播放</button>
   <!-- 封面不顯示 (見 CSS 的 .art),但一定要留著而且要載入 —— 主色採樣掛在它的 load 事件上。
        crossorigin 是採樣的前提:不加的話 canvas 被跨網域污染,getImageData 直接丟
        SecurityError。要寫在 HTML 屬性上 —— 設完 src 才補是不生效的 -->
@@ -442,6 +450,9 @@
       if (resp.status === 204) {   // 沒有任何裝置在播 —— 是正常狀態,不是錯誤
         setTrack(null);
         setStatus('目前沒有播放中的裝置');
+        // 暫停一陣子後裝置會從 Spotify 的活躍名單消失,這一頁就再也抓不到東西。
+        // 那顆按鈕是唯一的出路 (setTrack(null) 走的 render 不會把它藏起來)
+        $('resume-btn').classList.remove('hidden');
         return null;
       }
       // 401 只要把記憶體的 token 丟掉,下一輪 getToken() 會自己拿 refresh_token 換新的
@@ -493,13 +504,51 @@
         $('ctrl').classList.add('hidden');
         return setStatus('播放控制需要 Spotify Premium', true);
       }
-      if (resp.status === 404) return setStatus('找不到播放裝置,請先在 Spotify 開始播放', true);
+      // 404 = 沒有活躍裝置。這時把「在 Spotify 開始播放」叫出來,那顆才有辦法救
+      if (resp.status === 404) {
+        $('resume-btn').classList.remove('hidden');
+        return setStatus('找不到播放裝置', true);
+      }
       if (!resp.ok && resp.status !== 204) return setStatus(`控制失敗:${resp.status}`, true);
     } catch (e) {
       return setStatus(`控制失敗:${e.message}`, true);
     }
     clearTimeout(pollTimer);
     pollTimer = setTimeout(tick, 400);
+  }
+
+  /**
+   * 「在 Spotify 開始播放」。Spotify 的裝置在閒置一段時間後會從活躍名單消失,
+   * 那時 /me/player 回 204、控制端點回 404 —— **Web API 叫不醒一個已經消失的裝置**。
+   *
+   * 兩條路,先試不用跳出去的那條:
+   *   1. /me/player/devices 還列得到裝置 → 直接把播放轉移過去並開始播,人不必離開這一頁。
+   *      is_restricted 的裝置不吃 Web API 的控制,要跳過。
+   *   2. 一台都沒有 = Spotify app 根本沒在跑 → 只能用 spotify: 把它叫起來,
+   *      使用者自己按播放再切回來。**切回來不必做任何事** —— visibilitychange
+   *      本來就會立刻補一次輪詢校正。
+   */
+  async function resumeOnSpotify() {
+    const token = await getToken();
+    if (!token) return;
+    try {
+      const r = await fetch(`${API}/me/player/devices`, {
+        headers: { Authorization: `Bearer ${token}` }, cache: 'no-store',
+      });
+      const dev = ((await r.json()).devices || []).find((d) => !d.is_restricted);
+      if (dev) {
+        setStatus('喚醒裝置中…');
+        await fetch(`${API}/me/player`, {
+          method: 'PUT',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ device_ids: [dev.id], play: true }),
+        });
+        clearTimeout(pollTimer);
+        pollTimer = setTimeout(tick, 800);   // 轉移要一點時間才會反映到 /me/player
+        return;
+      }
+    } catch (e) { /* 查不到裝置就走下面那條,不用吵使用者 */ }
+    location.href = 'spotify:';
   }
 
   const togglePlay = () => (track && track.isPlaying)
@@ -676,6 +725,8 @@
     $('dur-fmt').textContent = formatTime(t ? t.durationMs : 0);
     $('ico-play').classList.toggle('hidden', !!(t && t.isPlaying));
     $('ico-pause').classList.toggle('hidden', !(t && t.isPlaying));
+    // 有歌在播就不需要那顆救援鈕;沒有裝置時 (204) 才留著
+    if (t) $('resume-btn').classList.add('hidden');
     // 封面不顯示,但還是要換 src —— 背景色是從它採樣的。
     // src 只在真的換圖時寫:每次輪詢都寫同一個 URL 會讓 Safari 重新解碼一次
     const art = $('art'), url = (t && t.art) || '';
@@ -746,6 +797,7 @@
       b.addEventListener('click', () => control('POST', b.dataset.act));
     }
     $('play-btn').addEventListener('click', togglePlay);
+    $('resume-btn').addEventListener('click', resumeOnSpotify);
 
     // 進度條點一下跳轉。**只做點擊不做拖曳** —— 拖曳要另外管 pointer 事件、還要在拖曳
     // 期間擋掉 rAF 對 width 的覆寫,多一整截程式碼;手機上點也比拖好按。
