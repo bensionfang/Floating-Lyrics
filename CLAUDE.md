@@ -175,6 +175,8 @@ GitHub repo 也已改名 `bensionfang/Kanaric`,`server.js` 的 `GITHUB_REPO` 跟
 
 `build.files` 是**白名單**:新增 repo 根層的 js 檔 (`s2t.js`、`island.js`、`preload-island.js` 這類 server 端 require 得到的檔案) 一定要同步加進去,否則 dev 正常、打包版一啟動就 MODULE_NOT_FOUND。
 
+**雲端部署的檔案不會被打包進安裝檔,不必特別處理。** `build.files` 的路徑是相對 `web-app/`,而 `Dockerfile`、`render.yaml`、`.dockerignore`、`tests/`、`scripts/` 全在 repo 根層、也都不在清單裡 —— 白名單天生就把它們排除了。唯一會跟著進安裝檔的行動版檔案是 `public/mobile/` 那 45 KB 靜態頁 (`public/**` 收得到),那是刻意留的:打包版的 server 照樣服務 `http://127.0.0.1:5720/mobile/`,而那個位址本來就是 Spotify 註冊過的 redirect URI。**不要為了「桌面版用不到行動版」把它從白名單挖掉** —— 挖了要多寫一條排除規則,省下的 45 KB 沒有意義。
+
 ### Data flow (the key sequence)
 
 1. `media_monitor.py` (or an edge agent) reports a track change → `handleMediaUpdate` → WebSocket broadcast to all clients.
