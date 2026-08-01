@@ -78,12 +78,12 @@
   .lyrics .empty { text-align: center; color: var(--lyric-dim); font-weight: 400; opacity: .8; }
 
   /* --- 底部播放列 --- */
-  /* 下緣只吃「safe area 減 18px」:整個 inset (iPhone 約 34px) 留白會讓控制列離底部太遠,
-     Spotify / Apple Music 都貼得更下面。減完仍留約 16px,播放鍵不會壓在 home indicator 上。
+  /* 下緣只吃「safe area 減 22px」:整個 inset (iPhone 約 34px) 留白會讓控制列離底部太遠,
+     Spotify / Apple Music 都貼得更下面。減完仍留約 12px,播放鍵不會壓在 home indicator 上。
      max() 是給沒有 inset 的環境 (桌面瀏覽器、Android) 用的保底,不然算出來是負值 */
   .playbar {
     flex-shrink: 0;
-    padding: 6px 20px max(4px, calc(env(safe-area-inset-bottom) - 18px));
+    padding: 6px 20px max(0px, calc(env(safe-area-inset-bottom) - 22px));
   }
   /* 封面刻意不顯示:畫面的底色就是從它採樣來的,這一頁的角色是「看歌詞」。
      但 <img> 必須留在 DOM 裡而且要真的載入 —— 主色採樣是掛在它的 load 事件上的。
