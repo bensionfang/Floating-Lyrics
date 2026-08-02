@@ -707,18 +707,20 @@ function charAtMs(points, ms) {
     return points[points.length - 1][0];
 }
 
-/** 目前這一行的填色。每幀跑,但實際會動到 DOM 的只有邊界那一兩顆 span */
-function karaokeFill(lineEl, lyric, position, nextTime) {
+/**
+ * 目前這一行的填色。每幀跑,但實際會動到 DOM 的只有邊界那一兩顆 span。
+ *
+ * **沒有逐字資料就整行一起變白** (`.lyrics-line.active` 本來的行為)。做過勻速掃光
+ * (整句時間平均分給每個字) 又拿掉了:那是猜的,句中有停頓或長音就明顯對不上,
+ * 而「一行一行換」至少永遠是對的。
+ */
+function karaokeFill(lineEl, lyric, position) {
+    const points = lyric.words;
+    if (!points || points.length < 2) return;
+    splitLineChars(lineEl);
     // `:scope > span` = 歌詞本體那顆,譯文/羅馬字是 div 所以自然排除
     const chars = lineEl.querySelectorAll(':scope > span .kc');
     if (!chars.length) return;
-    let points = lyric.words;
-    if (!points || points.length < 2) {
-        // 沒有逐字資料 (QQ 沒收錄這首) 就勻速掃光:整句時間平均分給每個字。
-        // 尾段沒有下一句時用 4 秒保底,不然最後一句會瞬間填滿。
-        const span = (nextTime > lyric.time ? nextTime - lyric.time : 4) * 1000;
-        points = [[0, 0], [chars.length, span]];
-    }
     const k = charAtMs(points, (position - lyric.time) * 1000);
     const full = Math.floor(k);
     for (let i = 0; i < chars.length; i++) {
@@ -729,8 +731,9 @@ function karaokeFill(lineEl, lyric, position, nextTime) {
     // 一行頂多幾顆 ruby,每幀全掃比記「哪顆變了」便宜
     for (const r of lineEl.__rubies || []) {
         const p = Math.max(0, Math.min(1, (k - r.start) / r.len));
-        r.rt.classList.toggle('rt-sung', p >= 1);
+        r.rt.classList.toggle('rt-pending', p <= 0);
         r.rt.classList.toggle('rt-now', p > 0 && p < 1);
+        r.rt.classList.toggle('rt-sung', p >= 1);
         if (p > 0 && p < 1) r.rt.style.setProperty('--k', `${p * 100}%`);
     }
     // 正在唱的那一個字做局部漸層。單一個字不會換行,所以水平漸層在這裡是正確的
@@ -763,8 +766,8 @@ function syncLyricsToTime(position) {
             if (prevLine) {
                 prevLine.classList.remove('active');
                 // 換行時要把填色狀態一起收掉,不然唱過的那一行會整行留白
-                prevLine.querySelectorAll('.kc.sung, .kc.kc-now, rt.rt-sung, rt.rt-now')
-                        .forEach((c) => c.classList.remove('sung', 'kc-now', 'rt-sung', 'rt-now'));
+                prevLine.querySelectorAll('.kc.sung, .kc.kc-now, rt.rt-pending, rt.rt-now, rt.rt-sung')
+                        .forEach((c) => c.classList.remove('sung', 'kc-now', 'rt-pending', 'rt-now', 'rt-sung'));
             }
         }
 
@@ -780,13 +783,10 @@ function syncLyricsToTime(position) {
     }
 
     // 填色**在早退之外**:行號沒變的每一幀都要更新,那才是「逐字」的意思。
-    // 沒有開關 —— 有逐字資料就逐字亮、沒有就整句勻速亮,兩者是同一件事的不同精度
+    // 沒有開關 —— 有逐字資料就逐字亮,沒有的話 karaokeFill 自己早退、整行一起變白
     if (activeLyricIndex < 0) return;
     const line = document.getElementById(`lyric-line-${activeLyricIndex}`);
-    if (!line) return;
-    splitLineChars(line);
-    const next = parsedLyrics[activeLyricIndex + 1];
-    karaokeFill(line, parsedLyrics[activeLyricIndex], position, next ? next.time : 0);
+    if (line) karaokeFill(line, parsedLyrics[activeLyricIndex], position);
 }
 
 // -------------------------------------------------------------

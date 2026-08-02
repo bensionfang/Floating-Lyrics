@@ -874,7 +874,11 @@ button.menu-action i {
     transition: color 0.2s;
 }
 
-/* 當前句的 rt 反白由下面卡拉OK那節負責 (跟著它的漢字逐字亮),不在這裡一次全白 */
+/* 沒有逐字資料的歌就整行 (含注音) 一起變白。有逐字時 app.js 會給 rt 掛
+   rt-pending/rt-now/rt-sung,那三條在下面卡拉OK那節,權重比這條高 */
+.lyrics-line.active rt {
+    color: #ffffff;
+}
 
 /* Spotify hover: 非當前句滑過變白 + 底線 (可點擊跳轉) */
 .lyrics-line:not(.active):hover {
@@ -920,14 +924,19 @@ button.menu-action i {
 
 /* 注音也逐字填:app.js 記著每顆 ruby 蓋住的字元範圍,唱到幾成就填幾成。
    rt 很短不會換行,所以整塊套水平漸層是對的 (歌詞本體不行,見上面)。
-   不做的話漢字還在半途、上面的假名已經整塊全白,看起來像填色壞掉 */
-.lyrics-line.active rt {
+   不做的話漢字還在半途、上面的假名已經整塊全白,看起來像填色壞掉。
+
+   這三個 class 只有真的在逐字填時才掛得上,所以沒有逐字資料的歌 rt 一個 class 都沒有,
+   仍然走上面那條 `.lyrics-line.active rt` 整塊變白 —— 那也是為什麼 transition: none
+   寫在這三條而不是寫在 active 那條上:整行一起換的歌照舊有 0.2s 的補間。 */
+.lyrics-line.active rt.rt-pending {
     color: var(--lyrics-inactive, rgba(255, 255, 255, 0.5));
-    transition: none;   /* .lyrics-line rt 有 0.2s 的 color 補間,逐字亮起來會糊掉 */
+    transition: none;
 }
 
 .lyrics-line.active rt.rt-sung {
     color: #ffffff;
+    transition: none;
 }
 
 .lyrics-line.active rt.rt-now {
@@ -937,6 +946,7 @@ button.menu-action i {
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
+    transition: none;
 }
 
 /* 假名編輯模式:整行的 hover 反白關掉,只有游標指到的漢字亮起來 */

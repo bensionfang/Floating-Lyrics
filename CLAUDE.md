@@ -106,7 +106,8 @@ One Node.js backend, multiple thin clients, with Python scripts as helpers spawn
     - 補抓沿用 **`ensureTranslations`** —— 它本來就是 `source:'all'`,pytools 一次把讀音提示/譯文/逐字時間全寫進去。**不要另外開一條抓取路徑。**
     - **ROADMAP 原本規劃的 `data-cs`/`data-clen` 不必做,`furigana_inject.py` 一行都沒動**:瀏覽器端 `TreeWalker` 略過 `<rt>` 走文字節點,得到的就是原始行的字元序 (`stripRuby` 已經在賭同一件事)。
     - 畫面在 `app.js`:行變成 active 時就地把文字節點切成一字一顆 `<span class="kc">` (切過就打旗標,不還原),每幀只動邊界那一兩顆。**不用整行的 `background-clip` 漸層** —— 32px 的歌詞會換行,水平漸層對第二列的位置是錯的;只有「正在唱的那一個字」做局部漸層,換行天然正確。**注音也逐字填**:切分時記下每顆 ruby 蓋住的字元範圍 (`lineEl.__rubies`),唱到範圍的幾成、上面的假名就填幾成 (`みらい` 跟著 `未来` 從 0 走到 100%)。整塊一次亮的話漢字還在半途、假名已經全白,看起來像壞掉。**`rt` 可以整塊套水平漸層** —— 它很短不會換行,跟歌詞本體不同。`rt` 在當前句要 `transition: none`,不然補間會把「唱到哪」糊掉。
-    - **沒有開關,有逐字就套。** 拿不到逐字資料的歌 (抽樣 14%) 用整行時間合成**同樣形狀**的兩點折線勻速掃光 —— 渲染端只認一種輸入格式,不分岔。這跟 `show_romaji`/`show_translation` 不是同一類東西:那兩個是「多顯示一行資訊」,卡拉OK填色只是同一行歌詞的高亮方式,有逐字就逐字亮、沒有就整句勻速亮,使用者沒有理由要去選。**不要為它加設定。**
+    - **沒有逐字資料就整行一起變白** (`.lyrics-line.active` 本來的行為),`karaokeFill` 直接早退、連字元 span 都不切。做過「用整句時間平均分給每個字」的勻速掃光又拿掉了:那是猜的,句中有停頓或長音就明顯對不上,而「一行一行換」至少永遠是對的。連帶地 `rt` 的 `rt-pending`/`rt-now`/`rt-sung` 三個 class 只有真的在填時才掛得上,沒有逐字的歌 rt 一個 class 都沒有、走 `.lyrics-line.active rt` 整塊變白 —— **`transition: none` 因此要寫在那三條上而不是寫在 `.lyrics-line.active rt`**,整行一起換的歌照舊要有 0.2s 補間。
+    - **沒有開關,有逐字就套。** 這跟 `show_romaji`/`show_translation` 不是同一類東西:那兩個是「多顯示一行資訊」,卡拉OK填色只是同一行歌詞的高亮方式,有逐字就逐字亮、沒有就整句勻速亮,使用者沒有理由要去選。**不要為它加設定。**
     - 舊的 `.lyrics-line.active rt { color:#fff }` 已經拿掉:當前句的注音改成跟著它的漢字逐字亮,不再一次全白。
     - **島與行動版的 `parseLrc` 各要吃掉 `#WORDS#`**(同 `#ROMAJI#` 的理由):三個客戶端吃的是同一份廣播字串,不丟就會多出一行數字閃過去。
     - 回歸測試 `node tests/test_word_times.js`。
