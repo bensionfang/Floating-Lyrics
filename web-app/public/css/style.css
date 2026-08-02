@@ -924,6 +924,7 @@ body.karaoke-mode .lyrics-line.active > span .kc.kc-now {
    不做的話漢字還是暗的、上面的假名已經全白,看起來像填色壞掉 */
 body.karaoke-mode .lyrics-line.active rt {
     color: var(--lyrics-inactive, rgba(255, 255, 255, 0.5));
+    transition: none;   /* .lyrics-line rt 有 0.2s 的 color 補間,逐字亮起來會糊掉 */
 }
 
 body.karaoke-mode .lyrics-line.active ruby.ruby-sung rt {
