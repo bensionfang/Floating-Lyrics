@@ -106,8 +106,8 @@ One Node.js backend, multiple thin clients, with Python scripts as helpers spawn
     - 補抓沿用 **`ensureTranslations`** —— 它本來就是 `source:'all'`,pytools 一次把讀音提示/譯文/逐字時間全寫進去。**不要另外開一條抓取路徑。**
     - **ROADMAP 原本規劃的 `data-cs`/`data-clen` 不必做,`furigana_inject.py` 一行都沒動**:瀏覽器端 `TreeWalker` 略過 `<rt>` 走文字節點,得到的就是原始行的字元序 (`stripRuby` 已經在賭同一件事)。
     - 畫面在 `app.js`:行變成 active 時就地把文字節點切成一字一顆 `<span class="kc">` (切過就打旗標,不還原),每幀只動邊界那一兩顆。**不用整行的 `background-clip` 漸層** —— 32px 的歌詞會換行,水平漸層對第二列的位置是錯的;只有「正在唱的那一個字」做局部漸層,換行天然正確。注音靠 `.kc` 記著自己所屬的 `<ruby>` 一起亮 (不做的話漢字還暗、假名已全白,看起來像壞掉),而且 `rt` 在卡拉OK模式要 `transition: none`。
-    - 拿不到逐字資料的歌 (抽樣 14%) 用整行時間合成**同樣形狀**的兩點折線勻速掃光 —— 渲染端只認一種輸入格式,不分岔。
-    - 設定 `show_karaoke` 預設關,進 `REBROADCAST_KEYS`;**CSS 全部 gate 在 `body.karaoke-mode`**,所以關掉時不必清那些已經切出來的 span。
+    - **沒有開關,有逐字就套。** 拿不到逐字資料的歌 (抽樣 14%) 用整行時間合成**同樣形狀**的兩點折線勻速掃光 —— 渲染端只認一種輸入格式,不分岔。這跟 `show_romaji`/`show_translation` 不是同一類東西:那兩個是「多顯示一行資訊」,卡拉OK填色只是同一行歌詞的高亮方式,有逐字就逐字亮、沒有就整句勻速亮,使用者沒有理由要去選。**不要為它加設定。**
+    - 舊的 `.lyrics-line.active rt { color:#fff }` 已經拿掉:當前句的注音改成跟著它的漢字逐字亮,不再一次全白。
     - **島與行動版的 `parseLrc` 各要吃掉 `#WORDS#`**(同 `#ROMAJI#` 的理由):三個客戶端吃的是同一份廣播字串,不丟就會多出一行數字閃過去。
     - 回歸測試 `node tests/test_word_times.js`。
   - **`_fetch_qqmusic` 的搜尋 module 是 `DoSearchForQQMusicMobile` 不是 `...Desktop`。** Desktop 那支已經對任何字串都回 0 筆 (`code` 仍然是 0、空 list,不報錯),純中文歌 `晴天 周杰伦` 也一樣 —— 不是限流也不是日文的問題。它靜默死掉的期間 QQ 這一家等於整個不存在:歌詞快取 378 首裡 QQ 佔 0 首,羅馬字提示也少了唯一把 `私` 讀對的來源。Mobile 那支的結果在 `req.data.body.item_song`,欄位是 `title` 不是 `name`,其餘形狀相同。

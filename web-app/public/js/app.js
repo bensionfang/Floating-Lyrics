@@ -768,8 +768,9 @@ function syncLyricsToTime(position) {
         }
     }
 
-    // 填色**在早退之外**:行號沒變的每一幀都要更新,那才是「逐字」的意思
-    if (activeLyricIndex < 0 || !(window.__lyricsPaneSettings || {}).show_karaoke) return;
+    // 填色**在早退之外**:行號沒變的每一幀都要更新,那才是「逐字」的意思。
+    // 沒有開關 —— 有逐字資料就逐字亮、沒有就整句勻速亮,兩者是同一件事的不同精度
+    if (activeLyricIndex < 0) return;
     const line = document.getElementById(`lyric-line-${activeLyricIndex}`);
     if (!line) return;
     splitLineChars(line);

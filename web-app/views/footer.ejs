@@ -91,10 +91,7 @@
         // 選了它」——選了給島用時,即使歌詞區開關是關的,廣播內容照樣帶那一行 (不然島會是空的)。
         // 網頁的歌詞面板要自己再擋一次,只認這兩個開關本身,不能看「內容裡有沒有那一行」來決定要不要畫,
         // 否則 island_line2 設成 romaji/translation 時,關掉歌詞區的對應開關會沒有作用。
-        // show_karaoke 走同一份:它決定 app.js 要不要每幀填色,以及 body 上的 karaoke-mode class
-        // (CSS 的 gate —— 切出來的 .kc span 不還原,關掉時靠 class 讓整行回到「一起變白」)
-        window.__lyricsPaneSettings = { show_romaji: <%- !!settings.show_romaji %>, show_translation: <%- !!settings.show_translation %>, show_karaoke: <%- !!settings.show_karaoke %> };
-        document.body.classList.toggle('karaoke-mode', <%- !!settings.show_karaoke %>);
+        window.__lyricsPaneSettings = { show_romaji: <%- !!settings.show_romaji %>, show_translation: <%- !!settings.show_translation %> };
 
         function toggleSettingsMenu(e) {
             if (e) e.stopPropagation();
@@ -827,10 +824,9 @@
         // 兩個開關共用這條路徑 —— 少一個就是「切了沒反應,要重整才生效」。
         // 不用 fetchAndParseLyrics:那會先塞「正在搜尋歌詞」的轉圈,切個開關不該閃一下。
         async function updateLyricsContentSetting(key, checked) {
-            if (key === 'show_romaji' || key === 'show_translation' || key === 'show_karaoke') {
+            if (key === 'show_romaji' || key === 'show_translation') {
                 window.__lyricsPaneSettings = { ...window.__lyricsPaneSettings, [key]: checked };
             }
-            if (key === 'show_karaoke') document.body.classList.toggle('karaoke-mode', checked);
             await saveSettingsToServer(key, checked);
             const { title, artist } = currentSong();
             if (!title || typeof parseLrcLyrics !== 'function') return;   // 只有首頁有歌詞面板
@@ -1032,10 +1028,7 @@
                 if (trEl) trEl.checked = data.show_translation === true;
                 const roEl = document.getElementById('setting-romaji');
                 if (roEl) roEl.checked = data.show_romaji === true;
-                const kaEl = document.getElementById('setting-karaoke');
-                if (kaEl) kaEl.checked = data.show_karaoke === true;
-                window.__lyricsPaneSettings = { show_romaji: data.show_romaji === true, show_translation: data.show_translation === true, show_karaoke: data.show_karaoke === true };
-                document.body.classList.toggle('karaoke-mode', data.show_karaoke === true);
+                window.__lyricsPaneSettings = { show_romaji: data.show_romaji === true, show_translation: data.show_translation === true };
                 if (data.auto_lyrics_options !== undefined) {
                     const alEl = document.getElementById('setting-auto-lyrics-options');
                     if (alEl) alEl.checked = data.auto_lyrics_options;

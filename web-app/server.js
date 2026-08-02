@@ -721,7 +721,7 @@ global.updateSettings = function (patch) {
   }
   // 這幾個都是「產出內容」而非純樣式,改了要重新推播,不然要等換歌才看得到。
   // 片假名 ruby 在注音時就決定;譯文在注音之後才併進去;島的第二行來源決定要不要帶譯文。
-  const REBROADCAST_KEYS = ['katakana_ruby', 'show_translation', 'show_romaji', 'island_line2', 'show_karaoke'];
+  const REBROADCAST_KEYS = ['katakana_ruby', 'show_translation', 'show_romaji', 'island_line2'];
   if (REBROADCAST_KEYS.some((k) => k in patch) && currentMediaState.title) {
     rebroadcastLyrics(currentMediaState.artist, currentMediaState.title);
   }
@@ -999,12 +999,15 @@ function applyTranslations(artist, title, html, force) {
 /**
  * 注音完的 HTML 併上逐字時間 (#WORDS#)。形狀與 applyTranslations 完全一致。
  *
+ * **沒有開關,有逐字就套。** 卡拉OK填色不是「多顯示一行資訊」(那才需要 show_romaji /
+ * show_translation 那種開關),而是同一行歌詞的高亮方式 —— 有逐字資料就逐字亮、沒有就
+ * 整句勻速亮,兩者都是同一件事的不同精度,使用者沒有理由要去選。
+ *
  * 逐字時間只有 QQ 的 QRC 有,而 `fetch()` 拿到網易的歌詞就不會再問 QQ —— 所以查無資料時
  * 走的是同一支 ensureTranslations (它是 source:'all',三家都跑、pytools 一次把讀音提示/
  * 譯文/逐字時間全寫進去)。**不要另外開一條抓取路徑。**
  */
 function applyWordTimes(artist, title, html) {
-  if (readSettings().show_karaoke !== true) return Promise.resolve(html);
   return new Promise((resolve) => {
     db.get('SELECT data FROM word_times WHERE artist = ? AND title = ?', [artist, title], (err, row) => {
       // 建表是非同步的,全新 DB 上這支 SELECT 可能先到 —— 有 callback 就不會炸成未捕捉例外
