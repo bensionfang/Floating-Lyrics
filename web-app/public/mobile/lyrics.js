@@ -10,8 +10,8 @@
  * LRC → [{ ms, html, trans }],依時間排序。一行可以掛多個時間戳 (副歌重複),各自展開成一句。
  *
  * `#TRANS#` 是 mergeTranslations 插進來的譯文行,時間戳與它要翻的那句**完全相同**,
- * 所以用時間當鍵掛回去、不自成一句。`#TITLE#` (製作人員列) 與 `#ROMAJI#` (羅馬拼音)
- * 仍然整行吃掉:前者不是歌詞,後者手機上沒有對應的顯示開關。
+ * 所以用時間當鍵掛回去、不自成一句。`#TITLE#` (製作人員列)、`#ROMAJI#` (羅馬拼音) 與
+ * `#WORDS#` (逐字時間) 仍然整行吃掉:第一個不是歌詞,後兩個手機上沒有對應的顯示功能。
  */
 function parseLrc(text) {
   const out = [];
@@ -20,7 +20,7 @@ function parseLrc(text) {
     const m = line.match(/^((?:\[\d+:\d+(?:\.\d+)?\])+)(.*)$/);
     if (!m) continue;
     const html = m[2].trim();
-    if (/^#(TITLE|ROMAJI)#/.test(html)) continue;
+    if (/^#(TITLE|ROMAJI|WORDS)#/.test(html)) continue;
     const isTrans = html.startsWith('#TRANS#');
     for (const tag of m[1].match(/\[\d+:\d+(?:\.\d+)?\]/g) || []) {
       const [mm, ss] = tag.slice(1, -1).split(':');

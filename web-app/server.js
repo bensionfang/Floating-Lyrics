@@ -22,6 +22,7 @@ const { cleanBrowserQuery, isMusicAppSource } = require('./browser-query');   //
 const { autoMarkTitleLines } = require('./title-lines');   // 製作人員/版權列標記 #TITLE#
 const { mergeTranslations } = require('./translations');   // 中文譯文合併 #TRANS# (注音之後才做)
 const { mergeRomaji } = require('./romaji');               // 羅馬拼音合併 #ROMAJI# (讀音直接取自注音結果)
+const { mergeWordTimes } = require('./word-times');        // 逐字時間合併 #WORDS# (卡拉OK填色)
 const { pickDistractors, filterArtistTracks } = require('./game');   // 猜歌遊戲:選項與提示句的挑選規則
 const { titleKey } = require('./public/js/song-key');                // 曲目池去重 (前後端共用那份)
 require('dotenv').config();
@@ -277,6 +278,9 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
     // 中文譯文快取 (data 為 JSON: {正規化後的日文行: 譯文};空 {} = 查過但沒有來源附翻譯)。
     // Python 端 db.py 也會建同一張,改一邊要改兩邊
     db.run(`CREATE TABLE IF NOT EXISTS lyrics_translations (artist TEXT, title TEXT, data TEXT, PRIMARY KEY (artist, title))`);
+    // 逐字時間快取 (data 為 JSON: {flow, ms} = 整首歌的字元流與每字毫秒;空 {} = 三家都問過、沒有逐字)。
+    // Python 端 db.py 也會建同一張,改一邊要改兩邊
+    db.run(`CREATE TABLE IF NOT EXISTS word_times (artist TEXT, title TEXT, data TEXT, PRIMARY KEY (artist, title))`);
     // 猜歌遊戲的每題紀錄。Python 端不碰這張表,所以 db.py 不必跟著建。
     db.run(`CREATE TABLE IF NOT EXISTS game_history (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -717,7 +721,7 @@ global.updateSettings = function (patch) {
   }
   // 這幾個都是「產出內容」而非純樣式,改了要重新推播,不然要等換歌才看得到。
   // 片假名 ruby 在注音時就決定;譯文在注音之後才併進去;島的第二行來源決定要不要帶譯文。
-  const REBROADCAST_KEYS = ['katakana_ruby', 'show_translation', 'show_romaji', 'island_line2'];
+  const REBROADCAST_KEYS = ['katakana_ruby', 'show_translation', 'show_romaji', 'island_line2', 'show_karaoke'];
   if (REBROADCAST_KEYS.some((k) => k in patch) && currentMediaState.title) {
     rebroadcastLyrics(currentMediaState.artist, currentMediaState.title);
   }
@@ -992,12 +996,40 @@ function applyTranslations(artist, title, html, force) {
   });
 }
 
+/**
+ * 注音完的 HTML 併上逐字時間 (#WORDS#)。形狀與 applyTranslations 完全一致。
+ *
+ * 逐字時間只有 QQ 的 QRC 有,而 `fetch()` 拿到網易的歌詞就不會再問 QQ —— 所以查無資料時
+ * 走的是同一支 ensureTranslations (它是 source:'all',三家都跑、pytools 一次把讀音提示/
+ * 譯文/逐字時間全寫進去)。**不要另外開一條抓取路徑。**
+ */
+function applyWordTimes(artist, title, html) {
+  if (readSettings().show_karaoke !== true) return Promise.resolve(html);
+  return new Promise((resolve) => {
+    db.get('SELECT data FROM word_times WHERE artist = ? AND title = ?', [artist, title], (err, row) => {
+      // 建表是非同步的,全新 DB 上這支 SELECT 可能先到 —— 有 callback 就不會炸成未捕捉例外
+      if (err || !row) {
+        if (!err) ensureTranslations(artist, title);
+        return resolve(html);
+      }
+      try {
+        resolve(mergeWordTimes(html, JSON.parse(row.data)));
+      } catch (e) {
+        resolve(html);
+      }
+    });
+  });
+}
+
 // meta (選填) 是 out-param:force 重跑時 Python 回報的 LLM 失敗原因放 meta.llmError
 function injectFurigana(artist, title, lyrics, forceLlm = false, meta = null) {
   return injectFuriganaRaw(artist, title, lyrics, forceLlm, meta)
     .then((html) => applyTranslations(artist, title, html))
     // 羅馬字要在譯文之後 —— 兩者都插在歌詞行後面,後插的會排在前面,順序才是 歌詞/羅馬字/譯文
-    .then((html) => (wantsExtraLine('romaji') ? mergeRomaji(html) : html));
+    .then((html) => (wantsExtraLine('romaji') ? mergeRomaji(html) : html))
+    // 逐字時間排最後:它不是要顯示的行,插在最貼著歌詞的位置最省事,
+    // 而且 mergeTranslations / mergeRomaji 的跳過清單就不必多認一種標記
+    .then((html) => applyWordTimes(artist, title, html));
 }
 
 // 譯文刻意不進 furiganaCache:切換「顯示翻譯」就不必重跑 python,快取也不用多一個比對維度
@@ -2311,7 +2343,7 @@ app.post('/api/game/result', express.json(), (req, res) => {
 // 猜歌成績與聆聽紀錄是兩件事,清一個不該順手把另一個清掉
 const CLEAR_TARGETS = {
   history: ['listening_history'],
-  lyrics: ['cache', 'romaji_hints', 'llm_hints', 'lyrics_translations'],
+  lyrics: ['cache', 'romaji_hints', 'llm_hints', 'lyrics_translations', 'word_times'],
   game: ['game_history'],
 };
 
@@ -2330,6 +2362,7 @@ app.get('/api/db-usage', (req, res) => {
     one(`SELECT COUNT(*) AS rows, COALESCE(SUM(LENGTH(data)), 0) AS bytes FROM romaji_hints`),
     one(`SELECT COUNT(*) AS rows, COALESCE(SUM(LENGTH(data)), 0) AS bytes FROM llm_hints`),
     one(`SELECT COUNT(*) AS rows, COALESCE(SUM(LENGTH(data)), 0) AS bytes FROM lyrics_translations`),
+    one(`SELECT COUNT(*) AS rows, COALESCE(SUM(LENGTH(data)), 0) AS bytes FROM word_times`),
     one(`SELECT COUNT(*) AS rows,
                 COALESCE(SUM(LENGTH(artist) + LENGTH(title) + LENGTH(COALESCE(album, '')) + 12), 0) AS bytes
          FROM listening_history`),
@@ -2338,9 +2371,9 @@ app.get('/api/db-usage', (req, res) => {
               + (SELECT COUNT(*) FROM artist_aliases)
               + (SELECT COUNT(*) FROM search_overrides) AS rows, 0 AS bytes`),
     one(`SELECT COUNT(*) AS rows, 0 AS bytes FROM game_history`),
-  ]).then(([cache, romaji, llm, trans, history, manual, game]) => {
-    // 對使用者而言「歌詞快取」就是一首歌的全部衍生資料,提示與譯文不另外列一項
-    const lyrics = { rows: cache.rows, bytes: cache.bytes + romaji.bytes + llm.bytes + trans.bytes };
+  ]).then(([cache, romaji, llm, trans, words, history, manual, game]) => {
+    // 對使用者而言「歌詞快取」就是一首歌的全部衍生資料,提示/譯文/逐字時間不另外列一項
+    const lyrics = { rows: cache.rows, bytes: cache.bytes + romaji.bytes + llm.bytes + trans.bytes + words.bytes };
     // 實際佔用要含 WAL —— 剛寫入的資料還在 -wal 裡,只看主檔會少算
     let file = 0;
     for (const p of [DB_PATH, DB_PATH + '-wal']) {

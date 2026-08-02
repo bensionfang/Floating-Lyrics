@@ -66,6 +66,10 @@ class DatabaseManager:
         self.cursor.execute('''CREATE TABLE IF NOT EXISTS llm_hints (artist TEXT, title TEXT, data TEXT, PRIMARY KEY (artist, title))''')
         # 中文譯文快取 (data 為 JSON: {正規化後的日文行: 譯文})。定義同時寫在 server.js,改一邊要改兩邊
         self.cursor.execute('''CREATE TABLE IF NOT EXISTS lyrics_translations (artist TEXT, title TEXT, data TEXT, PRIMARY KEY (artist, title))''')
+        # 逐字時間快取 (data 為 JSON: {"flow": 整首歌的正規化字元流, "ms": [每個字元的絕對毫秒]})。
+        # 存整首而不是逐行:逐行的配對要跟「當下的 cache.lyrics」比,而使用者換過備選歌詞或
+        # 手動編輯過那份就變了,所以配對只能在 server 端每次重算 (見 web-app/word-times.js)
+        self.cursor.execute('''CREATE TABLE IF NOT EXISTS word_times (artist TEXT, title TEXT, data TEXT, PRIMARY KEY (artist, title))''')
         self.conn.commit()
 
     def get_artist_alias(self, alias: str) -> str:
@@ -131,6 +135,25 @@ class DatabaseManager:
         self.cursor.execute(
             "INSERT OR REPLACE INTO lyrics_translations VALUES (?, ?, ?)",
             (artist, title, json.dumps(translations, ensure_ascii=False))
+        )
+        self.conn.commit()
+
+    def get_word_times(self, artist: str, title: str) -> Optional[dict]:
+        """取得快取的逐字時間。None = 沒抓過,{} = 抓過但沒有來源有逐字 (負快取,同 romaji_hints)"""
+        self.cursor.execute("SELECT data FROM word_times WHERE artist=? AND title=?", (artist, title))
+        row = self.cursor.fetchone()
+        if not row:
+            return None
+        try:
+            return json.loads(row[0])
+        except (ValueError, TypeError):
+            return {}
+
+    def save_word_times(self, artist: str, title: str, word_times: dict) -> None:
+        """儲存逐字時間。空 dict 也要存,否則每次播這首歌都會重打一次網路"""
+        self.cursor.execute(
+            "INSERT OR REPLACE INTO word_times VALUES (?, ?, ?)",
+            (artist, title, json.dumps(word_times, ensure_ascii=False))
         )
         self.conn.commit()
 

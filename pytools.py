@@ -58,7 +58,7 @@ def main():
             # 兩者分開取第一個有東西的來源 —— 一家可能有羅馬字卻沒翻譯,反之亦然。
             # 譯文一定要寫入 (沒有就寫空的當負快取),否則 server 的 ensureTranslations
             # 會判斷成「還沒查過」,每次播這首歌都重抓一輪。
-            def _stash(results):
+            def _stash(results, tried_all):
                 for r in results:
                     if r.get("hints"):
                         db.save_romaji_hints(artist, title, r["hints"])
@@ -69,10 +69,19 @@ def main():
                         break
                 else:
                     db.save_translations(artist, title, {})
+                for r in results:
+                    if r.get("word_times"):
+                        db.save_word_times(artist, title, r["word_times"])
+                        break
+                else:
+                    # 逐字時間只有 QQ 給得出來,而 fetch() 拿到網易的歌詞就不會再問 QQ ——
+                    # 那時寫負快取等於把每一首歌都判成「沒有逐字」。只有真的三家都問過才寫。
+                    if tried_all:
+                        db.save_word_times(artist, title, {})
 
             if source == "all":
                 results = cn_music.fetch_all(q_artist, q_title, duration)
-                _stash(results)
+                _stash(results, True)
                 print(json.dumps({
                     "success": True,
                     "results": [{"lyrics": r["lyrics"], "source": r["source"]} for r in results]
@@ -80,7 +89,7 @@ def main():
             else:
                 r = cn_music.fetch(q_artist, q_title, source, duration)
                 if r.get("lyrics"):
-                    _stash([r])
+                    _stash([r], False)
                     print(json.dumps({
                         "success": True, "lyrics": r["lyrics"], "source": r["source"]
                     }, ensure_ascii=False))

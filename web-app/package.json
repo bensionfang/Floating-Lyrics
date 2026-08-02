@@ -46,6 +46,7 @@
       "title-lines.js",
       "translations.js",
       "romaji.js",
+      "word-times.js",
       "game.js",
       "island.js",
       "island-position.js",

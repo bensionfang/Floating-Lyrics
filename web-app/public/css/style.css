@@ -898,6 +898,38 @@ button.menu-action i {
     color: #ffffff;
 }
 
+/* 逐字卡拉OK填色。只在 body.karaoke-mode 底下生效 —— app.js 切出來的 .kc span 不會還原,
+   關掉設定時靠這個 gate 讓整行回到「一起變白」,不必清 DOM。
+   刻意**不用整行的漸層**:32px 的歌詞會換行,水平漸層對第二列的位置是錯的;
+   逐字 span + 只有正在唱的那一個字做局部漸層,換行天然正確。
+   .kc 沒有 transition:逐字就是要銳利,補間會把「唱到哪」糊掉。 */
+body.karaoke-mode .lyrics-line.active > span .kc {
+    color: var(--lyrics-inactive, rgba(255, 255, 255, 0.5));
+}
+
+body.karaoke-mode .lyrics-line.active > span .kc.sung {
+    color: #ffffff;
+}
+
+body.karaoke-mode .lyrics-line.active > span .kc.kc-now {
+    background: linear-gradient(90deg,
+        #ffffff var(--k, 0%),
+        var(--lyrics-inactive, rgba(255, 255, 255, 0.5)) var(--k, 0%));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+}
+
+/* 注音跟著它的漢字一起亮 (app.js 在 .kc 唱到時給所屬 <ruby> 掛 .ruby-sung)。
+   不做的話漢字還是暗的、上面的假名已經全白,看起來像填色壞掉 */
+body.karaoke-mode .lyrics-line.active rt {
+    color: var(--lyrics-inactive, rgba(255, 255, 255, 0.5));
+}
+
+body.karaoke-mode .lyrics-line.active ruby.ruby-sung rt {
+    color: #ffffff;
+}
+
 /* 假名編輯模式:整行的 hover 反白關掉,只有游標指到的漢字亮起來 */
 body.ruby-edit-mode .lyrics-line:not(.active):hover,
 body.ruby-edit-mode .lyrics-line:not(.active):hover rt,

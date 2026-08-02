@@ -279,24 +279,58 @@ def _qrc_lines(text: str) -> list:
     return out
 
 
+def _qrc_flow(text: str) -> dict:
+    """
+    QRC 主體 -> 整首歌的逐字時間流 {"flow": 正規化字元, "ms": [每字的絕對毫秒]}。
+
+    QRC 的逐字標記寫在文字**後面**:`[0,529]Lemon - (0,33)米(33,66)津(99,33)`,
+    括號裡是 (絕對起始毫秒, 長度毫秒)。一個 token 不一定只有一個字 (`Lemon - ` 是一個),
+    所以 token 內把長度平均分給 normalize_line 保留下來的字元。
+
+    刻意不逐行存:呼叫端 (web-app/word-times.js) 要拿它去比對「當下的 cache.lyrics」,
+    而兩邊的斷句常常不同 (網易切短行、QQ 併長行)。串成一條流再單調前進比對,
+    實測行覆蓋率從 62% 拉到 98%。
+    """
+    flow, ms = [], []
+    for line in (text or '').split('\n'):
+        m = re.match(r'^\[(\d+),\d+\](.*)$', line)
+        if not m:
+            continue
+        for tok in re.finditer(r'(.*?)\((\d+),(\d+)\)', m.group(2)):
+            chars = normalize_line(tok.group(1))
+            if not chars:
+                continue
+            start, dur = int(tok.group(2)), int(tok.group(3))
+            step = dur / len(chars)
+            for i, c in enumerate(chars):
+                flow.append(c)
+                ms.append(int(start + i * step))
+    return {"flow": ''.join(flow), "ms": ms} if flow else {}
+
+
 def _qq_plain_track(resp: str, tag: str) -> str:
     """取出某一軌的原始內容 (不解密)。譯文軌是明文 LRC,拿到就能直接餵 _parse_lrc"""
     m = re.search(rf'<{tag}[^>]*><!\[CDATA\[(.*?)\]\]></{tag}>', resp, re.S)
     return m.group(1).strip() if m else ''
 
 
-def _qq_track(resp: str, tag: str) -> list:
-    """從 lyric_download 的回應裡取出某一軌並解密。空軌或解不開就回 []"""
+def _qq_raw(resp: str, tag: str) -> str:
+    """從 lyric_download 的回應裡取出某一軌並解密,回傳仍帶逐字標記的原始 QRC 主體"""
     m = re.search(rf'<{tag}[^>]*><!\[CDATA\[(.*?)\]\]></{tag}>', resp, re.S)
     if not m or not m.group(1).strip():
-        return []
+        return ''
     try:
         plain = qrc_decrypt.decrypt_qrc(m.group(1).strip())
     except Exception:
-        return []  # 翻譯軌有時是明文 LRC 而非 hex,解不開很正常
+        return ''  # 翻譯軌有時是明文 LRC 而非 hex,解不開很正常
     # QRC 可能再包一層 XML,真正的內容在 LyricContent 屬性裡
     inner = re.search(r'LyricContent="(.*?)"', plain, re.S)
-    return _qrc_lines(inner.group(1) if inner else plain)
+    return inner.group(1) if inner else plain
+
+
+def _qq_track(resp: str, tag: str) -> list:
+    """從 lyric_download 的回應裡取出某一軌並解密。空軌或解不開就回 []"""
+    return _qrc_lines(_qq_raw(resp, tag))
 
 
 def _qq_lyrics(song_id) -> dict:
@@ -311,7 +345,8 @@ def _qq_lyrics(song_id) -> dict:
     r.encoding = "utf-8"
     resp = r.text.replace("<!--", "").replace("-->", "")
 
-    jp_lines = _qq_track(resp, "content")
+    raw = _qq_raw(resp, "content")
+    jp_lines = _qrc_lines(raw)
     if not jp_lines:
         return {}
 
@@ -331,7 +366,7 @@ def _qq_lyrics(song_id) -> dict:
         if round(start_ms / 1000.0, 1) in trans_lrc
     )
 
-    return {"lyrics": _krc_to_lrc(jp_lines), "hints": hints,
+    return {"lyrics": _krc_to_lrc(jp_lines), "hints": hints, "word_times": _qrc_flow(raw),
             "translations": translations, "source": "QQMusic"}
 
 

@@ -358,6 +358,9 @@ function parseLrc(text) {
     if (!m) continue;
     const html = m[2].trim();
     if (html.startsWith('#TITLE#')) continue;   // 製作人員列不進島
+    // 逐字時間 (卡拉OK填色) 只有網頁歌詞區在用。**一定要吃掉** —— 不然島上每句後面
+    // 會跟著一行數字閃過去 (同 #ROMAJI# 的理由)
+    if (html.startsWith('#WORDS#')) continue;
     for (const tag of m[1].match(/\[\d+:\d+(?:\.\d+)?\]/g) || []) {
       const [mm, ss] = tag.slice(1, -1).split(':');
       const t = parseInt(mm) * 60 + parseFloat(ss);

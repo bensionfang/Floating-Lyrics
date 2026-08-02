@@ -485,7 +485,31 @@ function parseLrcLyrics(lrcText) {
             if (prev) prev.romaji = text.substring(8);
             return;
         }
-        
+        // 逐字時間行 (server 端 mergeWordTimes 插的):`字元索引:相對毫秒` 的折線,
+        // 客戶端線性內插就得到「現在唱到第幾個字」。毫秒是相對於這一句自己的時間戳 ——
+        // 逐字來源 (QQ) 與歌詞來源 (多半網易) 是兩條時間軸,只有逐行重新對齊才對得上。
+        if (text.startsWith('#WORDS#')) {
+            const pts = text.substring(7).split(',').map((p) => {
+                const [idx, ms] = p.split(':');
+                return [parseInt(idx, 10), parseInt(ms, 10)];
+            }).filter(([idx, ms]) => Number.isFinite(idx) && Number.isFinite(ms));
+            // 掛回去要**比對時間戳**而不是「掛到上一句」:副歌重複時一行帶多個時間戳,
+            // 會展開成好幾筆,只掛最後一筆的話重複的那幾句就沒有填色 (譯文/羅馬字有同樣的
+            // 限制,但那兩個少一行只是少一行,這裡是功能整段不動)
+            const times = new Set();
+            timeReg.lastIndex = 0;
+            let wm;
+            while ((wm = timeReg.exec(line)) !== null) {
+                times.add(parseInt(wm[1]) * 60 + parseInt(wm[2]) + (wm[3] ? parseFloat('0.' + wm[3]) : 0));
+            }
+            for (let i = parsedLyrics.length - 1; i >= 0 && times.size; i--) {
+                if (!times.has(parsedLyrics[i].time)) continue;
+                parsedLyrics[i].words = pts;
+                times.delete(parsedLyrics[i].time);
+            }
+            return;
+        }
+
         timeReg.lastIndex = 0;
         let lineHasTag = false;
         while ((match = timeReg.exec(line)) !== null) {
@@ -538,8 +562,8 @@ function parseLrcLyrics(lrcText) {
                     prev.translation += ' / ' + current.text;
                 }
             } else {
-                // translation/romaji 要帶過來 —— 那兩行是在上面掛到物件上的,寫死 null 會把它洗掉
-                mergedLyrics.push({ time: current.time, text: current.text, translation: current.translation || null, romaji: current.romaji || null });
+                // translation/romaji/words 要帶過來 —— 那幾個是在上面掛到物件上的,漏一個就洗掉一個
+                mergedLyrics.push({ time: current.time, text: current.text, translation: current.translation || null, romaji: current.romaji || null, words: current.words || null });
             }
         }
         parsedLyrics = mergedLyrics;
@@ -624,9 +648,94 @@ function updatePlaybackProgress(position) {
     if (totalTimeEl) totalTimeEl.textContent = formatTime(actualDuration);
 }
 
+// -------------------------------------------------------------
+// 逐字卡拉OK填色
+// -------------------------------------------------------------
+/**
+ * 把一行歌詞的文字節點就地切成一字一顆 `<span class="kc">`。
+ *
+ * **不用整行的 background-clip 漸層**:32px 的歌詞會換行,水平漸層對換行後的第二列
+ * 位置是錯的。逐字 span + 只有「正在唱的那一個字」做局部漸層,換行天然正確。
+ *
+ * 切過就打旗標不再切、也不還原:多出來的 span 是無害的,而還原會跟 ruby 編輯、
+ * 段落循環那幾個也在讀這棵 DOM 的功能打架。`<rt>` 與譯文/羅馬字兩顆 div 要跳過 ——
+ * rt 是注音不是歌詞本體,索引會整個歪掉。
+ */
+function splitLineChars(lineEl) {
+    if (lineEl.dataset.kc) return;
+    lineEl.dataset.kc = '1';
+    const root = lineEl.firstElementChild;   // 歌詞本體那顆 <span>
+    if (!root) return;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+        acceptNode: (n) => (n.parentElement.closest('rt') ? NodeFilter.FILTER_REJECT
+                                                         : NodeFilter.FILTER_ACCEPT)
+    });
+    const texts = [];
+    while (walker.nextNode()) texts.push(walker.currentNode);
+    for (const node of texts) {
+        const frag = document.createDocumentFragment();
+        // 注音要跟著它的漢字一起亮,所以記下所屬的 <ruby> (多半是一個字一顆)。
+        // 存成物件屬性而不是 data-*:每幀都會讀,不必為它多做一次 DOM 屬性寫入
+        const ruby = node.parentElement.closest('ruby');
+        for (const ch of node.data) {
+            const s = document.createElement('span');
+            s.className = 'kc';
+            s.textContent = ch;
+            s.__ruby = ruby;
+            frag.appendChild(s);
+        }
+        node.parentNode.replaceChild(frag, node);
+    }
+}
+
+/**
+ * 折線內插:給相對毫秒,回傳「唱到第幾個字」(小數)。
+ * 沒有逐字資料時由 karaokeFill 用整行時間合成同樣形狀的兩點折線 —— 渲染端只認一種輸入。
+ */
+function charAtMs(points, ms) {
+    if (ms <= points[0][1]) return points[0][0];
+    for (let i = 1; i < points.length; i++) {
+        const [pi, pt] = points[i - 1];
+        const [ci, ct] = points[i];
+        if (ms < ct) return ct === pt ? ci : pi + (ci - pi) * ((ms - pt) / (ct - pt));
+    }
+    return points[points.length - 1][0];
+}
+
+/** 目前這一行的填色。每幀跑,但實際會動到 DOM 的只有邊界那一兩顆 span */
+function karaokeFill(lineEl, lyric, position, nextTime) {
+    // `:scope > span` = 歌詞本體那顆,譯文/羅馬字是 div 所以自然排除
+    const chars = lineEl.querySelectorAll(':scope > span .kc');
+    if (!chars.length) return;
+    let points = lyric.words;
+    if (!points || points.length < 2) {
+        // 沒有逐字資料 (QQ 沒收錄這首) 就勻速掃光:整句時間平均分給每個字。
+        // 尾段沒有下一句時用 4 秒保底,不然最後一句會瞬間填滿。
+        const span = (nextTime > lyric.time ? nextTime - lyric.time : 4) * 1000;
+        points = [[0, 0], [chars.length, span]];
+    }
+    const k = charAtMs(points, (position - lyric.time) * 1000);
+    const full = Math.floor(k);
+    for (let i = 0; i < chars.length; i++) {
+        const on = i < full;
+        if (chars[i].classList.contains('sung') === on) continue;
+        chars[i].classList.toggle('sung', on);
+        if (chars[i].__ruby) chars[i].__ruby.classList.toggle('ruby-sung', on);
+    }
+    // 正在唱的那一個字做局部漸層。單一個字不會換行,所以水平漸層在這裡是正確的
+    const cur = chars[full];
+    if (karaokeCurrent && karaokeCurrent !== cur) karaokeCurrent.classList.remove('kc-now');
+    karaokeCurrent = cur || null;
+    if (cur) {
+        cur.classList.add('kc-now');
+        cur.style.setProperty('--k', `${Math.max(0, Math.min(1, k - full)) * 100}%`);
+    }
+}
+let karaokeCurrent = null;
+
 function syncLyricsToTime(position) {
     if (parsedLyrics.length === 0 || isUnsyncedLyrics) return;
-    
+
     const prevIndex = activeLyricIndex;
     let foundIndex = -1;
     for (let i = 0; i < parsedLyrics.length; i++) {
@@ -640,11 +749,16 @@ function syncLyricsToTime(position) {
     if (foundIndex !== activeLyricIndex) {
         if (activeLyricIndex >= 0) {
             const prevLine = document.getElementById(`lyric-line-${activeLyricIndex}`);
-            if (prevLine) prevLine.classList.remove('active');
+            if (prevLine) {
+                prevLine.classList.remove('active');
+                // 換行時要把填色狀態一起收掉,不然唱過的那一行會整行留白
+                prevLine.querySelectorAll('.kc.sung, .kc.kc-now, ruby.ruby-sung')
+                        .forEach((c) => c.classList.remove('sung', 'kc-now', 'ruby-sung'));
+            }
         }
-        
+
         activeLyricIndex = foundIndex;
-        
+
         if (activeLyricIndex >= 0) {
             const currentLine = document.getElementById(`lyric-line-${activeLyricIndex}`);
             if (currentLine) {
@@ -653,6 +767,14 @@ function syncLyricsToTime(position) {
             }
         }
     }
+
+    // 填色**在早退之外**:行號沒變的每一幀都要更新,那才是「逐字」的意思
+    if (activeLyricIndex < 0 || !(window.__lyricsPaneSettings || {}).show_karaoke) return;
+    const line = document.getElementById(`lyric-line-${activeLyricIndex}`);
+    if (!line) return;
+    splitLineChars(line);
+    const next = parsedLyrics[activeLyricIndex + 1];
+    karaokeFill(line, parsedLyrics[activeLyricIndex], position, next ? next.time : 0);
 }
 
 // -------------------------------------------------------------
