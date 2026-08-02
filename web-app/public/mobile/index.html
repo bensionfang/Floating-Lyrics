@@ -211,7 +211,7 @@
     <p class="track-artist" id="track-artist">—</p>
   </div>
   <!-- 右欄本來是為了「讓中間真的置中」的空格,現在正好給工具條的開關用 (同寬) -->
-  <button id="tools-btn" class="icon-btn" aria-label="歌詞工具">
+  <button id="tools-btn" class="icon-btn" aria-label="微調歌詞時間軸">
     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <path d="M4 6h10M18 6h2M4 12h2M10 12h10M4 18h10M18 18h2"/>
       <circle cx="16" cy="6" r="2"/><circle cx="8" cy="12" r="2"/><circle cx="16" cy="18" r="2"/>
@@ -226,10 +226,6 @@
     <button class="tbtn" id="off-minus" aria-label="歌詞提前">−</button>
     <button class="tval" id="off-val" aria-label="歸零">0.0s</button>
     <button class="tbtn" id="off-plus" aria-label="歌詞延後">＋</button>
-  </div>
-  <div class="trow"><span>段落循環</span>
-    <span class="tdim" id="loop-val">長按歌詞設起點</span>
-    <button class="tbtn hidden" id="loop-clear" aria-label="取消循環">✕</button>
   </div>
 </div>
 
@@ -288,6 +284,10 @@
     <input type="checkbox" id="set-trans">
   </div>
   <div class="srow"><span>歌詞來源</span><span id="lyrics-source">—</span></div>
+  <div class="srow"><span>段落循環</span><span id="loop-val">未設定</span></div>
+  <p class="hint">長按一句歌詞設起點,再長按另一句設終點,唱完會自動跳回去。
+     已經設好之後再長按任何一句 = 重選起點。</p>
+  <button id="loop-clear" class="btn ghost hidden">取消循環</button>
 
   <button id="opts-btn" class="btn ghost">搜尋備選歌詞</button>
   <button id="reload-btn" class="btn ghost">重新載入歌詞</button>
@@ -565,9 +565,15 @@
         $('ctrl').classList.add('hidden');
         return setStatus('播放控制需要 Spotify Premium', true);
       }
-      // 404 = 沒有活躍裝置。這時把「在 Spotify 開始播放」叫出來,那顆才有辦法救
+      // 404 = 沒有活躍裝置。但「沒有活躍裝置」不等於「Spotify 沒在跑」 —— 暫停一陣子後
+      // 裝置只是從活躍名單掉出去,app 還活著 (iOS 的控制中心那時仍留著播放狀態),
+      // /me/player/devices 照樣列得到它,轉移過去就會開始播。所以先自己救一次,
+      // 不要只吐一行錯誤再叫使用者去按救援鈕 —— 那等於同一件事要按兩下。
+      // **暫停要排除**:transferToDevice 是帶 play:true 轉移的,對「按暫停卻找不到裝置」
+      // 做這件事等於使用者按暫停反而開始播
       if (resp.status === 404) {
-        $('resume-btn').classList.remove('hidden');
+        if (path !== 'pause' && await transferToDevice()) return;
+        $('resume-btn').classList.remove('hidden');   // 裝置列表也空了 = app 真的被系統清掉
         return setStatus('找不到播放裝置', true);
       }
       if (!resp.ok && resp.status !== 204) return setStatus(`控制失敗:${resp.status}`, true);
@@ -822,13 +828,13 @@
     }
     paintLoop();
     renderTools();
-    $('tools').classList.remove('hidden');   // 讓使用者看得到目前設到哪、也才有地方取消
   }
 
+  // 工具條只剩時間軸;段落循環的狀態與說明在抽屜裡 (它靠長按操作,不需要常駐的控制項)
   function renderTools() {
     $('off-val').textContent = `${offsetMs > 0 ? '+' : ''}${(offsetMs / 1000).toFixed(1)}s`;
-    $('loop-val').textContent = loopA === null ? '長按歌詞設起點'
-      : loopB === null ? `起點第 ${loopA + 1} 句,長按終點`
+    $('loop-val').textContent = loopA === null ? '未設定'
+      : loopB === null ? `起點第 ${loopA + 1} 句`
       : `第 ${loopA + 1} – ${loopB + 1} 句`;
     $('loop-clear').classList.toggle('hidden', loopA === null);
   }
