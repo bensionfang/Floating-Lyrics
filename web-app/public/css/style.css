@@ -778,6 +778,10 @@ button.menu-action i {
     background: transparent; border: none;
     padding: 40px 80px; overflow-y: scroll; position: relative;
     text-align: center;
+    /* 上下淡出,與行動版同一個作法 (public/mobile/index.html)。
+       mask 吃的是元素的 border box 而不是捲動內容,所以固定就是畫面上下緣。 */
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 40px, #000 calc(100% - 60px), transparent 100%);
+    mask-image: linear-gradient(to bottom, transparent 0, #000 40px, #000 calc(100% - 60px), transparent 100%);
 }
 
 .lyrics-empty {
@@ -1573,6 +1577,10 @@ body.window-maximized .fullscreen-btn .icon-compress { display: inline !importan
 
 .main-content.is-home-page {
     background: var(--lyrics-bg, #121212);
+    /* 歌詞面板要自己填滿整塊有色區域:留 padding 的話捲動內容會提早 24px 消失,
+       上下淡出也跟著內縮,邊邊留一圈「有顏色卻不會有字」的死區。
+       文字的內縮改由 .lyrics-scroll-pane 自己的 padding 負責 (它在捲動容器內,不切字)。 */
+    padding: 0;
 }
 
 /* Hide old header */

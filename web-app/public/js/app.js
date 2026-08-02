@@ -1274,8 +1274,10 @@ function toggleFullscreen() {
     const isMaximized = document.body.classList.toggle('window-maximized');
     localStorage.setItem('zoomModeActive', isMaximized ? 'true' : 'false');
 
-    // Re-center the lyrics after the transition
-    setTimeout(centerActiveLine, 300);
+    // 版面是瞬間換的 (那批 body.window-maximized 規則全是 !important 的幾何值,側欄直接 display:none,
+    // 沒有任何 transition),所以下一幀量得到新版面就對正,而且要瞬移 —— 平滑捲動會讓歌詞在切換完
+    // 之後才明顯滑一段,看起來像畫面自己動了一下。
+    requestAnimationFrame(() => { jumpToActiveLine = true; centerActiveLine(); });
 }
 
 
