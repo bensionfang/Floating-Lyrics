@@ -10,28 +10,40 @@
  * LRC → [{ ms, html, trans }],依時間排序。一行可以掛多個時間戳 (副歌重複),各自展開成一句。
  *
  * `#TRANS#` 是 mergeTranslations 插進來的譯文行,時間戳與它要翻的那句**完全相同**,
- * 所以用時間當鍵掛回去、不自成一句。`#TITLE#` (製作人員列)、`#ROMAJI#` (羅馬拼音) 與
- * `#WORDS#` (逐字時間) 仍然整行吃掉:第一個不是歌詞,後兩個手機上沒有對應的顯示功能。
+ * 所以用時間當鍵掛回去、不自成一句。`#WORDS#` (逐字時間) 同理,掛成 `l.words` 給
+ * 卡拉OK填色用。`#TITLE#` (製作人員列) 與 `#ROMAJI#` (羅馬拼音) 仍然整行吃掉:
+ * 前者不是歌詞,後者手機上沒有對應的顯示開關。
  */
 function parseLrc(text) {
   const out = [];
   const trans = new Map();
+  const words = new Map();
   for (const line of String(text || '').split('\n')) {
     const m = line.match(/^((?:\[\d+:\d+(?:\.\d+)?\])+)(.*)$/);
     if (!m) continue;
     const html = m[2].trim();
-    if (/^#(TITLE|ROMAJI|WORDS)#/.test(html)) continue;
+    if (/^#(TITLE|ROMAJI)#/.test(html)) continue;
     const isTrans = html.startsWith('#TRANS#');
+    const isWords = html.startsWith('#WORDS#');
     for (const tag of m[1].match(/\[\d+:\d+(?:\.\d+)?\]/g) || []) {
       const [mm, ss] = tag.slice(1, -1).split(':');
       const ms = (parseInt(mm, 10) * 60 + parseFloat(ss)) * 1000;
       if (isTrans) trans.set(ms, html.slice(7));
+      else if (isWords) {
+        words.set(ms, html.slice(7).split(',').map((p) => {
+          const [i, t] = p.split(':');
+          return [parseInt(i, 10), parseInt(t, 10)];
+        }).filter(([i, t]) => Number.isFinite(i) && Number.isFinite(t)));
+      }
       else out.push({ ms, html });
     }
   }
-  // 掛譯文要等整份掃完 —— 譯文行在歌詞行後面,邊掃邊掛也可以,但同一個時間戳可能
-  // 先出現譯文再出現歌詞 (來源沒有保證順序),掃完再掛才不會漏
-  for (const l of out) if (trans.has(l.ms)) l.trans = trans.get(l.ms);
+  // 掛譯文/逐字要等整份掃完 —— 那兩種行在歌詞行後面,邊掃邊掛也可以,但同一個時間戳
+  // 可能先出現它們再出現歌詞 (來源沒有保證順序),掃完再掛才不會漏
+  for (const l of out) {
+    if (trans.has(l.ms)) l.trans = trans.get(l.ms);
+    if (words.has(l.ms)) l.words = words.get(l.ms);
+  }
   return out.sort((a, b) => a.ms - b.ms);
 }
 

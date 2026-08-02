@@ -4,7 +4,9 @@
 <head>
 <meta charset="UTF-8">
 <title>Kanaric Island</title>
-<link rel="stylesheet" href="/css/island.css?v=15">
+<link rel="stylesheet" href="/css/island.css?v=16">
+<!-- 逐字卡拉OK填色:與歌詞區、行動版共用同一份實作 -->
+<script src="/js/karaoke.js?v=1"></script>
 </head>
 <body>
 <div id="island" class="docked">
@@ -208,6 +210,7 @@ let islandLine2 = 'next';
 // 時間戳 -> 譯文。譯文行不進 lyrics[],否則會被當成獨立一句輪播過去
 let translations = {};
 let romajis = {};
+let words = {};          // 逐字時間:時間戳 -> [[字元索引, 相對毫秒], …]
 
 let _lastDisplaySettings = null;
 function applySettings(s) {
@@ -353,14 +356,12 @@ function parseLrc(text) {
   const out = [];
   translations = {};
   romajis = {};
+  words = {};
   for (const line of text.split('\n')) {
     const m = line.match(/^((?:\[\d+:\d+(?:\.\d+)?\])+)(.*)$/);
     if (!m) continue;
     const html = m[2].trim();
     if (html.startsWith('#TITLE#')) continue;   // 製作人員列不進島
-    // 逐字時間 (卡拉OK填色) 只有網頁歌詞區在用。**一定要吃掉** —— 不然島上每句後面
-    // 會跟著一行數字閃過去 (同 #ROMAJI# 的理由)
-    if (html.startsWith('#WORDS#')) continue;
     for (const tag of m[1].match(/\[\d+:\d+(?:\.\d+)?\]/g) || []) {
       const [mm, ss] = tag.slice(1, -1).split(':');
       const t = parseInt(mm) * 60 + parseFloat(ss);
@@ -369,6 +370,14 @@ function parseLrc(text) {
       // 羅馬拼音同樣共用時間戳,收進對照表 (第二行選它時才畫)。**一定要吃掉** ——
       // 當成獨立一句的話,島上每句歌詞後面都會跟著一行羅馬字閃過去。
       else if (html.startsWith('#ROMAJI#')) romajis[t] = html.substring(8);
+      // 逐字時間:同樣共用時間戳,收進對照表給卡拉OK填色用。**一定要吃掉** ——
+      // 不然島上每句後面會跟著一行數字閃過去
+      else if (html.startsWith('#WORDS#')) {
+        words[t] = html.substring(7).split(',').map((p) => {
+          const [idx, ms] = p.split(':');
+          return [parseInt(idx, 10), parseInt(ms, 10)];
+        }).filter(([idx, ms]) => Number.isFinite(idx) && Number.isFinite(ms));
+      }
       else out.push({ t, html });
     }
   }
@@ -385,7 +394,7 @@ function pickLines(i) {
     idx = -1;
     for (let k = i + 1; k < lyrics.length; k++) if (lyrics[k].html) { idx = k; break; }
     if (idx < 0) for (let k = i - 1; k >= 0; k--) if (lyrics[k].html) { idx = k; break; }
-    if (idx < 0) return ['', ''];
+    if (idx < 0) return ['', '', -1];
   }
   const line1 = lyrics[idx].html;
 
@@ -393,18 +402,22 @@ function pickLines(i) {
   // 「下一句歌詞」,不然切了設定卻整片空白,看起來像壞掉
   if (islandLine2 !== 'next') {
     const alt = (islandLine2 === 'romaji' ? romajis : translations)[lyrics[idx].t];
-    if (alt) return [line1, alt];
+    if (alt) return [line1, alt, idx];
   }
   // 「下一句歌詞」最多往後看兩句 (中間夾一個空行還算數),再遠的就跟現在這句沒關係了
   let line2 = '';
   for (let k = idx + 1; k <= idx + 2 && k < lyrics.length; k++) {
     if (lyrics[k].html) { line2 = lyrics[k].html; break; }
   }
-  return [line1, line2];
+  return [line1, line2, idx];
 }
 
 function paint(node, html) {
   node.innerHTML = html;
+  // innerHTML 換掉了,karaokeSplit 記在元素上的那份切分結果全是死掉的節點 —— 一定要作廢,
+  // 不然填色會去改上一句的 span (畫面上什麼都不會動,而且沒有錯誤訊息)
+  node.__kc = null;
+  node.__kcNow = null;
   node.classList.remove('hidden', 'lyric-anim');
   void node.offsetWidth;          // 強制 reflow,動畫才會重播
   node.classList.add('lyric-anim');
@@ -431,20 +444,25 @@ function frame() {
   let i = -1;
   for (let k = 0; k < lyrics.length; k++) if (lyrics[k].t <= now) i = k; else break;
   if (i < 0) return;
-  const [line1, line2] = pickLines(i);
-  if (line1 === lastLine1) return;
-  // 上一個狀態也是歌詞行才 grow-only;從前奏歌名 (通常較寬) 切到第一句歌詞要允許縮
-  const fromLyric = lastLine1 !== null && lastLine1 !== 'INTRO';
-  lastLine1 = line1;
-  curIdx = i;
-  el.song.classList.add('hidden');
-  paint(el.l1, line1);
-  updateL0();
-  const showLine2 = !!line2 && islandLines === 2;
-  if (showLine2) paint(el.l2, line2);
-  else el.l2.classList.add('hidden');
-  // 逐行切換:視窗寬固定為整首最寬 (零閃),藥丸靠 CSS 縮到本行寬;高度 grow-only
-  fitSize(line1, showLine2 ? line2 : '', null, fromLyric, songMaxW);
+  const [line1, line2, idx] = pickLines(i);
+  if (line1 !== lastLine1) {
+    // 上一個狀態也是歌詞行才 grow-only;從前奏歌名 (通常較寬) 切到第一句歌詞要允許縮
+    const fromLyric = lastLine1 !== null && lastLine1 !== 'INTRO';
+    lastLine1 = line1;
+    curIdx = i;
+    el.song.classList.add('hidden');
+    paint(el.l1, line1);
+    updateL0();
+    const showLine2 = !!line2 && islandLines === 2;
+    if (showLine2) paint(el.l2, line2);
+    else el.l2.classList.add('hidden');
+    // 逐行切換:視窗寬固定為整首最寬 (零閃),藥丸靠 CSS 縮到本行寬;高度 grow-only
+    fitSize(line1, showLine2 ? line2 : '', null, fromLyric, songMaxW);
+  }
+  // 卡拉OK填色:**每一幀都要跑,而且要排在重繪之後** (換行那一幀 el.l1 的內容剛換掉)。
+  // 用 now - 0.5 而不是 now —— 那 0.5 秒是「提早換行來抵銷淡入動畫」的補償,
+  // 不是真實播放位置,拿它去填色整句會快半秒。
+  if (idx >= 0) karaokePaint(el.l1, words[lyrics[idx].t], (now - 0.5 - lyrics[idx].t) * 1000);
 }
 requestAnimationFrame(frame);
 </script>

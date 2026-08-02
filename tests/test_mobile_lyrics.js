@@ -25,12 +25,23 @@ const { parseLrc, activeIndex, medianGap, loopEndMs, escapeHtml, readCache, writ
     '[00:05.00]<ruby>春<rt>はる</rt></ruby>',
     '[00:05.00]#TRANS#春天',
     '[00:05.00]#ROMAJI#haru',
+    '[00:05.00]#WORDS#0:0,1:400',
     '[00:08.00]',
   ].join('\n'));
   assert.deepStrictEqual(lines.map((l) => l.html), ['<ruby>春<rt>はる</rt></ruby>', '']);
   // 譯文不能自成一句 (會多出一行且時間軸重複),要掛在對應那句上
   assert.strictEqual(lines[0].trans, '春天');
   assert.strictEqual(lines[1].trans, undefined, '沒有譯文的行不該長出 trans');
+  // 逐字時間同理:掛成 words 給卡拉OK填色用,不能自成一句
+  assert.deepStrictEqual(lines[0].words, [[0, 0], [1, 400]]);
+  assert.strictEqual(lines[1].words, undefined, '沒有逐字的行不該長出 words');
+}
+
+// 3a. 壞掉的 #WORDS# 不能把整份解析弄爆 (雲端那台的資料是外部來源)
+{
+  const lines = parseLrc('[00:05.00]本文\n[00:05.00]#WORDS#壞,掉:的,2:800');
+  assert.strictEqual(lines.length, 1);
+  assert.deepStrictEqual(lines[0].words, [[2, 800]], '只留解析得出數字的那幾點');
 }
 
 // 3b. 譯文行排在歌詞行前面也要掛得上 (來源不保證順序)

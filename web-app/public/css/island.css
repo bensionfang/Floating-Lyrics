@@ -355,3 +355,43 @@ ruby rt {
 html.hide-furigana rt {
   display: none;
 }
+
+/* 逐字卡拉OK填色 (public/js/karaoke.js 掛的 class,三個端共用同一份實作)。
+   島的主行本來就是白的,所以是「還沒唱到的先暗下去」。
+   沒有逐字資料的歌一個 class 都不會掛上,整行照舊全白。
+   #l1 是 nowrap,理論上可以整行套漸層,但共用實作用逐字 span —— 歌詞區會換行,
+   兩邊做法分岔只會多一份要維護的東西。 */
+#l1 .kc {
+  color: rgba(255, 255, 255, 0.45);
+}
+
+#l1 .kc.sung {
+  color: #fff;
+}
+
+#l1 .kc.kc-now {
+  background: linear-gradient(90deg,
+      #fff var(--k, 0%),
+      rgba(255, 255, 255, 0.45) var(--k, 0%));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* 假名跟著它蓋住的那幾個字一起填 (rt 的 color: inherit 會拿到 .kc 的顏色,要蓋掉) */
+#l1 rt.rt-pending {
+  color: rgba(255, 255, 255, 0.45);
+}
+
+#l1 rt.rt-sung {
+  color: #fff;
+}
+
+#l1 rt.rt-now {
+  background: linear-gradient(90deg,
+      #fff var(--k, 0%),
+      rgba(255, 255, 255, 0.45) var(--k, 0%));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}

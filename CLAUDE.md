@@ -109,7 +109,10 @@ One Node.js backend, multiple thin clients, with Python scripts as helpers spawn
     - **沒有逐字資料就整行一起變白** (`.lyrics-line.active` 本來的行為),`karaokeFill` 直接早退、連字元 span 都不切。做過「用整句時間平均分給每個字」的勻速掃光又拿掉了:那是猜的,句中有停頓或長音就明顯對不上,而「一行一行換」至少永遠是對的。連帶地 `rt` 的 `rt-pending`/`rt-now`/`rt-sung` 三個 class 只有真的在填時才掛得上,沒有逐字的歌 rt 一個 class 都沒有、走 `.lyrics-line.active rt` 整塊變白 —— **`transition: none` 因此要寫在那三條上而不是寫在 `.lyrics-line.active rt`**,整行一起換的歌照舊要有 0.2s 補間。
     - **沒有開關,有逐字就套。** 這跟 `show_romaji`/`show_translation` 不是同一類東西:那兩個是「多顯示一行資訊」,卡拉OK填色只是同一行歌詞的高亮方式,有逐字就逐字亮、沒有就整句勻速亮,使用者沒有理由要去選。**不要為它加設定。**
     - 舊的 `.lyrics-line.active rt { color:#fff }` 已經拿掉:當前句的注音改成跟著它的漢字逐字亮,不再一次全白。
-    - **島與行動版的 `parseLrc` 各要吃掉 `#WORDS#`**(同 `#ROMAJI#` 的理由):三個客戶端吃的是同一份廣播字串,不丟就會多出一行數字閃過去。
+    - **填色的實作只有 `web-app/public/js/karaoke.js` 一份,三個端共用** (歌詞區 / 靈動島 / 行動版)。各寫一份就是靜默失效的來源 —— 哪一端漏掉一個狀態不會有錯誤訊息,只是那裡不會動。放 `public/js` 是為了讓瀏覽器 `<script>` 載得到,同 `scroll-zone.js`/`song-key.js` 的先例。**行動版刻意不複製一份進 `public/mobile/`**,而是 `<script src="../js/karaoke.js">` + `sw.js` 的 `SHELL_EXTRA` 放行那條路徑 (它不在 `/mobile/` 底下,`fetch` 事件的條件要跟著加,否則離線抓不到)。
+    - **島與行動版的 `parseLrc` 各要認 `#WORDS#`**(同 `#ROMAJI#` 的理由):三個客戶端吃的是同一份廣播字串,不收進對照表就會多出一行數字閃過去。
+    - 島的兩個坑:**`paint()` 換掉 innerHTML 時一定要把 `node.__kc`/`__kcNow` 作廢**,不然填色會去改上一句那批死掉的 span (畫面完全不動,而且沒有錯誤訊息);**填色要排在重繪之後、而且在「行沒換就早退」之外**,並且用 `now - 0.5` 而不是 `now` —— 那 0.5 秒是「提早換行抵銷淡入動畫」的補償,不是真實播放位置,拿它填色整句會快半秒。
+    - 行動版的 `rejectSel` 要傳 `'rt, .tr'`:譯文在手機上是 `<p>` 的子 `<span class="tr">`,不像桌面是另一顆 div,不排除就會被切成字元、跟著填色。
     - 備選歌詞視窗的格式標籤有三種:**逐字** (黃,QQ 的 QRC) / **LRC** (綠,只有行級時間) / **TXT** (灰,沒有時間軸)。旗標 `hasWords` 由 `pytools cnlyrics` 的 `source:'all'` 逐筆帶出來 —— **不能只看 DB 有沒有 stash**,那是整首歌一份、只記第一個有的來源,分不出是哪一筆候選。標的是**那份檔案本身的格式**,不是「選了它才有卡拉OK」:逐字時間是跨來源比對回來的,選 NetEase 那份照樣會填。
     - 回歸測試 `node tests/test_word_times.js`。
   - **`_fetch_qqmusic` 的搜尋 module 是 `DoSearchForQQMusicMobile` 不是 `...Desktop`。** Desktop 那支已經對任何字串都回 0 筆 (`code` 仍然是 0、空 list,不報錯),純中文歌 `晴天 周杰伦` 也一樣 —— 不是限流也不是日文的問題。它靜默死掉的期間 QQ 這一家等於整個不存在:歌詞快取 378 首裡 QQ 佔 0 首,羅馬字提示也少了唯一把 `私` 讀對的來源。Mobile 那支的結果在 `req.data.body.item_song`,欄位是 `title` 不是 `name`,其餘形狀相同。

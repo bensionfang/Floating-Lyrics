@@ -649,103 +649,19 @@ function updatePlaybackProgress(position) {
 }
 
 // -------------------------------------------------------------
-// 逐字卡拉OK填色
+// 逐字卡拉OK填色 —— 實作在 public/js/karaoke.js (歌詞區/靈動島/行動版共用)
 // -------------------------------------------------------------
 /**
- * 把一行歌詞的文字節點就地切成一字一顆 `<span class="kc">`。
- *
- * **不用整行的 background-clip 漸層**:32px 的歌詞會換行,水平漸層對換行後的第二列
- * 位置是錯的。逐字 span + 只有「正在唱的那一個字」做局部漸層,換行天然正確。
- *
- * 切過就打旗標不再切、也不還原:多出來的 span 是無害的,而還原會跟 ruby 編輯、
- * 段落循環那幾個也在讀這棵 DOM 的功能打架。`<rt>` 與譯文/羅馬字兩顆 div 要跳過 ——
- * rt 是注音不是歌詞本體,索引會整個歪掉。
- */
-function splitLineChars(lineEl) {
-    if (lineEl.dataset.kc) return;
-    lineEl.dataset.kc = '1';
-    const root = lineEl.firstElementChild;   // 歌詞本體那顆 <span>
-    if (!root) return;
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-        acceptNode: (n) => (n.parentElement.closest('rt') ? NodeFilter.FILTER_REJECT
-                                                         : NodeFilter.FILTER_ACCEPT)
-    });
-    const texts = [];
-    while (walker.nextNode()) texts.push(walker.currentNode);
-    // 注音也要逐字填,所以記下每顆 <ruby> 蓋住的字元範圍 —— 唱到範圍的幾成,
-    // 上面的假名就填幾成。存成物件屬性而不是 data-*:每幀都會讀,不必多做 DOM 屬性存取
-    const rubies = [];
-    let idx = 0;
-    for (const node of texts) {
-        const frag = document.createDocumentFragment();
-        const ruby = node.parentElement.closest('ruby');
-        const rt = ruby && ruby.querySelector('rt');
-        if (rt && rt.textContent) rubies.push({ rt, start: idx, len: node.data.length });
-        for (const ch of node.data) {
-            const s = document.createElement('span');
-            s.className = 'kc';
-            s.textContent = ch;
-            frag.appendChild(s);
-            idx++;
-        }
-        node.parentNode.replaceChild(frag, node);
-    }
-    lineEl.__rubies = rubies;
-}
-
-/**
- * 折線內插:給相對毫秒,回傳「唱到第幾個字」(小數)。
- * 沒有逐字資料時由 karaokeFill 用整行時間合成同樣形狀的兩點折線 —— 渲染端只認一種輸入。
- */
-function charAtMs(points, ms) {
-    if (ms <= points[0][1]) return points[0][0];
-    for (let i = 1; i < points.length; i++) {
-        const [pi, pt] = points[i - 1];
-        const [ci, ct] = points[i];
-        if (ms < ct) return ct === pt ? ci : pi + (ci - pi) * ((ms - pt) / (ct - pt));
-    }
-    return points[points.length - 1][0];
-}
-
-/**
- * 目前這一行的填色。每幀跑,但實際會動到 DOM 的只有邊界那一兩顆 span。
+ * 目前這一行的填色。
  *
  * **沒有逐字資料就整行一起變白** (`.lyrics-line.active` 本來的行為)。做過勻速掃光
  * (整句時間平均分給每個字) 又拿掉了:那是猜的,句中有停頓或長音就明顯對不上,
  * 而「一行一行換」至少永遠是對的。
  */
 function karaokeFill(lineEl, lyric, position) {
-    const points = lyric.words;
-    if (!points || points.length < 2) return;
-    splitLineChars(lineEl);
-    // `:scope > span` = 歌詞本體那顆,譯文/羅馬字是 div 所以自然排除
-    const chars = lineEl.querySelectorAll(':scope > span .kc');
-    if (!chars.length) return;
-    const k = charAtMs(points, (position - lyric.time) * 1000);
-    const full = Math.floor(k);
-    for (let i = 0; i < chars.length; i++) {
-        const on = i < full;
-        if (chars[i].classList.contains('sung') !== on) chars[i].classList.toggle('sung', on);
-    }
-    // 注音跟著它蓋住的那幾個字一起填。rt 很短、不會換行,所以整塊用水平漸層是對的。
-    // 一行頂多幾顆 ruby,每幀全掃比記「哪顆變了」便宜
-    for (const r of lineEl.__rubies || []) {
-        const p = Math.max(0, Math.min(1, (k - r.start) / r.len));
-        r.rt.classList.toggle('rt-pending', p <= 0);
-        r.rt.classList.toggle('rt-now', p > 0 && p < 1);
-        r.rt.classList.toggle('rt-sung', p >= 1);
-        if (p > 0 && p < 1) r.rt.style.setProperty('--k', `${p * 100}%`);
-    }
-    // 正在唱的那一個字做局部漸層。單一個字不會換行,所以水平漸層在這裡是正確的
-    const cur = chars[full];
-    if (karaokeCurrent && karaokeCurrent !== cur) karaokeCurrent.classList.remove('kc-now');
-    karaokeCurrent = cur || null;
-    if (cur) {
-        cur.classList.add('kc-now');
-        cur.style.setProperty('--k', `${Math.max(0, Math.min(1, k - full)) * 100}%`);
-    }
+    // firstElementChild = 歌詞本體那顆 <span>,譯文/羅馬字是後面的 div 所以自然排除
+    karaokePaint(lineEl.firstElementChild, lyric.words, (position - lyric.time) * 1000);
 }
-let karaokeCurrent = null;
 
 function syncLyricsToTime(position) {
     if (parsedLyrics.length === 0 || isUnsyncedLyrics) return;
@@ -766,8 +682,7 @@ function syncLyricsToTime(position) {
             if (prevLine) {
                 prevLine.classList.remove('active');
                 // 換行時要把填色狀態一起收掉,不然唱過的那一行會整行留白
-                prevLine.querySelectorAll('.kc.sung, .kc.kc-now, rt.rt-pending, rt.rt-now, rt.rt-sung')
-                        .forEach((c) => c.classList.remove('sung', 'kc-now', 'rt-pending', 'rt-now', 'rt-sung'));
+                karaokeClear(prevLine);
             }
         }
 

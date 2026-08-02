@@ -76,6 +76,22 @@
   }
   .lyrics p.on { color: var(--text); opacity: 1; }
   .lyrics p.loop { background: rgba(29,185,84,.16); border-radius: 10px; }
+  /* 逐字卡拉OK填色 (../js/karaoke.js 掛的 class,三個端共用同一份實作)。
+     當前句本來就是亮的,所以是「還沒唱到的先暗下去」。沒有逐字資料的歌一個 class
+     都不會掛上,整句照舊一起變亮。.kc 不設 transition:逐字要銳利,補間會把「唱到哪」糊掉 */
+  .lyrics p.on .kc { color: var(--lyric-dim); }
+  .lyrics p.on .kc.sung { color: var(--text); }
+  .lyrics p.on .kc.kc-now {
+    background: linear-gradient(90deg, var(--text) var(--k, 0%), var(--lyric-dim) var(--k, 0%));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  /* 假名跟著它蓋住的那幾個字一起填。rt 很短不會換行,整塊套水平漸層是對的 */
+  .lyrics p.on rt.rt-pending { color: var(--lyric-dim); }
+  .lyrics p.on rt.rt-sung { color: var(--text); }
+  .lyrics p.on rt.rt-now {
+    background: linear-gradient(90deg, var(--text) var(--k, 0%), var(--lyric-dim) var(--k, 0%));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
   /* ruby 在 iOS Safari 預設會把行高撐開,自己壓一下讀音大小 */
   .lyrics rt { font-size: .5em; font-weight: 400; opacity: .75; }
   body.no-furigana rt { display: none; }
@@ -313,6 +329,8 @@
 <script src="playback.js"></script>
 <script src="lyrics.js"></script>
 <script src="color.js"></script>
+<!-- 逐字卡拉OK填色:與歌詞區、靈動島共用同一份實作 (刻意不複製進 mobile/) -->
+<script src="../js/karaoke.js"></script>
 <script>
 (() => {
   'use strict';
@@ -819,16 +837,24 @@
 
   /** 高亮 + 置中。只在換行時動,不然每幀寫 scrollTop 會把手動捲動整個吃掉 */
   function syncLyrics(posMs) {
-    const i = activeIndex(lines, posMs);
-    if (i === activeLine) return;
     const pane = $('lyrics');
-    const prev = pane.children[activeLine];
-    if (prev) prev.classList.remove('on');
-    activeLine = i;
-    const el = pane.children[i];
-    if (!el) return;
-    el.classList.add('on');
-    pane.scrollTo({ top: el.offsetTop - pane.clientHeight / 2 + el.offsetHeight / 2, behavior: 'smooth' });
+    const i = activeIndex(lines, posMs);
+    if (i !== activeLine) {
+      const prev = pane.children[activeLine];
+      if (prev) { prev.classList.remove('on'); karaokeClear(prev); }
+      activeLine = i;
+      const el = pane.children[i];
+      if (!el) return;
+      el.classList.add('on');
+      pane.scrollTo({ top: el.offsetTop - pane.clientHeight / 2 + el.offsetHeight / 2, behavior: 'smooth' });
+    }
+    // 卡拉OK填色**在換行判斷之外**:同一句的每一幀都要更新,那才是「逐字」的意思。
+    // 沒有逐字資料的歌 karaokePaint 自己早退,整句照舊一起變白。
+    // rejectSel 要把 .tr (譯文) 一起排除 —— 它是 <p> 的子元素,不像桌面是另一顆 div
+    const cur = lines[activeLine];
+    if (cur && cur.words) {
+      karaokePaint(pane.children[activeLine], cur.words, posMs - cur.ms, 'rt, .tr');
+    }
   }
 
   // --- 歌詞工具:微調時間軸 / 段落循環 / 重新載入 / 備選歌詞 ---------------------
