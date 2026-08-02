@@ -286,7 +286,7 @@
   <div class="srow"><span>歌詞來源</span><span id="lyrics-source">—</span></div>
   <div class="srow"><span>段落循環</span><span id="loop-val">未設定</span></div>
   <p class="hint">長按一句歌詞設起點,再長按另一句設終點,唱完會自動跳回去。
-     已經設好之後再長按任何一句 = 重選起點。</p>
+     已經設好之後再長按任何一句 = 重選起點,在反白的那幾句上連點兩下 = 取消。</p>
   <button id="loop-clear" class="btn ghost hidden">取消循環</button>
 
   <button id="opts-btn" class="btn ghost">搜尋備選歌詞</button>
@@ -559,11 +559,24 @@
       const resp = await fetch(`${API}/me/player/${path}`, {
         method, headers: { Authorization: `Bearer ${token}` },
       });
-      // 403 = 免費帳號或 scope 不對;404 = 沒有可控制的裝置 (Spotify app 沒開)
+      // **403 不是只有「要 Premium」一種**。Spotify 對「這個指令在目前狀態下不合法」也回 403
+      // (`Player command failed: Restriction violated`,reason 多半是 UNKNOWN) —— 例如已經暫停
+      // 了還送 pause、裝置剛好在切換的那一瞬間。舊版把所有 403 都當成免費帳號,整排控制鈕
+      // 就此收起來直到重新載入,症狀是「用著用著突然說要會員」。所以要看 reason/message,
+      // 只有真的是 Premium 才鎖;其餘吐一句就好,下一輪輪詢會自己校正回來。
       if (resp.status === 403) {
-        canControl = false;
-        $('ctrl').classList.add('hidden');
-        return setStatus('播放控制需要 Spotify Premium', true);
+        const body = await resp.json().catch(() => ({}));
+        const err = body.error || {};
+        if (err.reason === 'PREMIUM_REQUIRED' || /premium/i.test(err.message || '')) {
+          canControl = false;
+          $('ctrl').classList.add('hidden');
+          return setStatus('播放控制需要 Spotify Premium', true);
+        }
+        setStatus('Spotify 現在不接受這個指令,再試一次', true);
+        // 樂觀更新已經把本地狀態改掉了 (例如圖示變成暫停),指令沒生效就要靠這次校正扳回來
+        clearTimeout(pollTimer);
+        pollTimer = setTimeout(tick, 400);
+        return;
       }
       // 404 = 沒有活躍裝置。但「沒有活躍裝置」不等於「Spotify 沒在跑」 —— 暫停一陣子後
       // 裝置只是從活躍名單掉出去,app 還活著 (iOS 的控制中心那時仍留著播放狀態),
@@ -1118,10 +1131,21 @@
     // 與 CSS 的 -webkit-touch-callout/user-select 是一組的,少一件就會看到 iOS 的選取泡泡
     pane.addEventListener('contextmenu', (e) => e.preventDefault());
 
+    // 循環範圍內的那幾句連點兩下 = 取消循環。**自己判連點不要用 dblclick** ——
+    // iOS 的雙擊同時是縮放手勢,交給瀏覽器判會多一層不確定性。
+    // 第一下照舊會跳轉(那句本來就在循環段內,跳過去無害),第二下只取消、不再跳。
+    let lastTap = { i: -1, at: 0 };
     pane.addEventListener('click', (e) => {
       if (suppressClick) return;             // 剛剛那下是長按設循環點,不要順便跳轉
       const i = lineOf(e);
-      if (lines[i]) seek(lines[i].ms + offsetMs);
+      if (!lines[i]) return;
+      const now = performance.now();
+      if (pane.children[i].classList.contains('loop') && lastTap.i === i && now - lastTap.at < 300) {
+        lastTap = { i: -1, at: 0 };
+        return clearLoop();
+      }
+      lastTap = { i, at: now };
+      seek(lines[i].ms + offsetMs);
     });
 
     // 工具條
