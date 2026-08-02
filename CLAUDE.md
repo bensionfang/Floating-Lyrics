@@ -601,6 +601,16 @@ WebSocket 直接吃 `media_state` 廣播、不打 Spotify,角色跟靈動島一�
 - **磁碟是暫時的**:Render 免費方案重啟就清空,歌詞快取每次都要重抓。它本來就是快取。
 - **冷啟動 30~60 秒**(閒置 15 分鐘休眠)。前端等超過 3 秒會把狀態改成「喚醒伺服器中」,
   **刻意不加 timeout 中斷請求** —— 中斷了就永遠喚不醒。
+  - 使用者端的解法是 **iOS 捷徑的自動化**(零程式改動):「當我打開 Spotify」→ 立即執行 →
+    **「取得 URL 的內容」** 打 `https://<服務>.onrender.com/mobile/manifest.json?wake=1`。
+    挑歌那幾十秒剛好拿來讓 Render 起來,切到 Kanaric 時歌詞多半已經抓得到。
+    - **一定要選「立即執行」**(iOS 16.4+),否則 iOS 只推一則通知等使用者點,等於沒省到時間。
+    - 動作只有「取得 URL 的內容」能用:它是唯一「在捷徑內部真的送出 GET 又不把人踢出 Spotify」的。
+      「打開 URL」會跳去 Safari 顯示一坨 JSON;「URL」/「從輸入項目取得 URL」/「取得 URL 組件」
+      根本不連網(分別是常數、抽取、字串拆解);「展開 URL」是追短網址的 redirect,語意不對而且
+      `manifest.json` 沒有 redirect,行為不保證。
+    - **打靜態檔不打 `/api/lyrics`**,理由同 `index.html` 裡那段喚醒 ping 的註解:那支會查 DB、
+      spawn Python、對外打三家平台,拿它當喚醒可能害那台的 IP 被三家限流。
 
 部署檔:`Dockerfile`(node:20-bookworm-slim + venv;`requirements.txt` 現場 `grep -v '^winrt'`,
 **不維護第二份清單**,兩份一定會漂)、`.dockerignore`、`render.yaml`。
