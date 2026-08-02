@@ -150,7 +150,15 @@ class DatabaseManager:
             return {}
 
     def save_word_times(self, artist: str, title: str, word_times: dict) -> None:
-        """儲存逐字時間。空 dict 也要存,否則每次播這首歌都會重打一次網路"""
+        """
+        儲存逐字時間。空 dict 也要存,否則每次播這首歌都會重打一次網路。
+
+        但**負快取不准蓋掉已經抓到的實資料**:同一首歌會被重抓好幾次 (備選歌詞視窗、
+        ensureTranslations),而 QQ 的搜尋端點限流很兇 —— 某一次沒回就把整首歌的逐字
+        時間洗成 {},而且因為它是負快取、之後再也不會重試。實測踩過。
+        """
+        if not word_times and self.get_word_times(artist, title):
+            return
         self.cursor.execute(
             "INSERT OR REPLACE INTO word_times VALUES (?, ?, ?)",
             (artist, title, json.dumps(word_times, ensure_ascii=False))

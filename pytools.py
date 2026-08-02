@@ -53,6 +53,9 @@ def main():
         source = data.get("source", "auto")
         duration = data.get("duration") or None  # 秒;拿來擋同名歌/翻唱
 
+        # 哪幾家的歌詞檔本身帶逐字時間 (見 cn_music._qrc_flow)
+        WORD_TIME_SOURCES = {"QQMusic"}
+
         try:
             # 讀音提示與譯文都搭歌詞的便車存起來,之後就不用再打一次網路。
             # 兩者分開取第一個有東西的來源 —— 一家可能有羅馬字卻沒翻譯,反之亦然。
@@ -74,9 +77,12 @@ def main():
                         db.save_word_times(artist, title, r["word_times"])
                         break
                 else:
-                    # 逐字時間只有 QQ 給得出來,而 fetch() 拿到網易的歌詞就不會再問 QQ ——
-                    # 那時寫負快取等於把每一首歌都判成「沒有逐字」。只有真的三家都問過才寫。
-                    if tried_all:
+                    # 逐字時間**只有 QQ 給得出來**,所以負快取的條件是「QQ 真的回答了、
+                    # 而且那份沒有逐字」,不是「三家都呼叫過」:
+                    #  - fetch() 拿到網易的歌詞就不會再問 QQ (tried_all=False)
+                    #  - QQ 的搜尋端點限流很兇,被擋時它整個不出現在 results 裡 —— 那時寫 {}
+                    #    等於因為一次限流就把這首歌**永久**判成沒有逐字,而且不會再重試
+                    if tried_all and any(r.get("source") in WORD_TIME_SOURCES for r in results):
                         db.save_word_times(artist, title, {})
 
             if source == "all":
