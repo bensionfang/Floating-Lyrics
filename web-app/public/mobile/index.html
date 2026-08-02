@@ -513,6 +513,9 @@
 
   let track = null;      // playback.js 的快照,插值的基準
   let pollTimer = null;
+  // 最後一次「想開始播卻叫不動」的時間戳。schedule() 靠它把輪詢暫時加密 (見那裡的註解)。
+  // 宣告放在這裡而不是靠近使用點:poll() 與 control() 都會寫它,擺在它們後面就是 TDZ 陷阱
+  let wantPlaybackAt = -Infinity;
 
   /** 打一次 /me/player 並更新快照。回傳「下次輪詢要等多久」,回 null 表示照常 (pollDelay) */
   async function poll() {
@@ -530,6 +533,7 @@
         // 暫停一陣子後裝置會從 Spotify 的活躍名單消失,這一頁就再也抓不到東西。
         // 那顆按鈕是唯一的出路 (setTrack(null) 走的 render 不會把它藏起來)
         $('resume-btn').classList.remove('hidden');
+        wantPlaybackAt = performance.now();
         return null;
       }
       // 401 只要把記憶體的 token 丟掉,下一輪 getToken() 會自己拿 refresh_token 換新的
@@ -603,7 +607,10 @@
       if (resp.status === 404) {
         if (path !== 'pause' && await transferToDevice()) return;
         $('resume-btn').classList.remove('hidden');   // 裝置列表也空了 = app 真的被系統清掉
-        return setStatus(`找不到播放裝置${transferHint ? `(${transferHint})` : ''}`, true);
+        wantPlaybackAt = performance.now();           // 接下來一分鐘輪詢加密,人去控制中心按了就快點反應
+        schedule();                                   // 立刻重排 —— 不然要等既有那個 15 秒的計時器燒完才會變快
+        setStatus(`找不到播放裝置${transferHint ? `(${transferHint})` : ''}`, true);
+        return;
       }
       if (!resp.ok && resp.status !== 204) return setStatus(`控制失敗:${resp.status}`, true);
     } catch (e) {
@@ -648,7 +655,12 @@
       // is_restricted 的裝置不吃 Web API 的控制,挑了也是白挑
       const dev = list.find((d) => !d.is_restricted);
       if (!dev) {
-        transferHint = list.length ? `${list.length} 台裝置都不可控制` : 'Spotify 沒有登記任何裝置';
+        // 列表是空的 ≠ Spotify 沒在跑。iOS 把 app 凍結後它就跟 Spotify 後端斷線、從 Connect
+        // 註冊表上消失,但**控制中心仍然留著播放狀態** —— 那是 iOS 本機的 now-playing,
+        // 跟雲端那張表是兩回事 (2026-08-02 使用者實測:控制中心有,/devices 是空的)。
+        // 這個狀態下 Web API 真的動不了,只有系統遙控指令 (控制中心 / 捷徑) 能叫得動,
+        // 所以訊息要直接講「去控制中心按播放」,不要只報告一個查不下去的事實。
+        transferHint = list.length ? `${list.length} 台裝置都不可控制` : '請從控制中心按一次播放';
         return false;
       }
       setStatus('喚醒裝置中…');
@@ -979,7 +991,13 @@
   function schedule(overrideMs) {
     clearTimeout(pollTimer);
     if (document.hidden) return;
-    const wait = overrideMs != null ? overrideMs : pollDelay(track);
+    let wait = overrideMs != null ? overrideMs : pollDelay(track);
+    // 剛剛叫不動播放 = 使用者正在想辦法讓它開始播 (多半是去控制中心按播放,而**拉下控制中心
+    // 不算頁面隱藏**,visibilitychange 那條補不到)。暫停時的 15 秒在這個當下太久 —— 人按了
+    // 播放卻要等十幾秒畫面才動,會以為壞掉。這一分鐘內縮到 3 秒,平常的省電行為不變。
+    // **不要拿救援鈕的可見性當旗標** —— `render()` 只要收到 track 就把它藏起來 (「有歌在播就
+    // 不需要那顆」),而叫不動的當下 /me/player 照樣回得出一首暫停中的歌,條件永遠是 false。
+    if (wait !== Infinity && performance.now() - wantPlaybackAt < 60000) wait = Math.min(wait, 3000);
     if (wait === Infinity) return;
     pollTimer = setTimeout(tick, wait);
   }
