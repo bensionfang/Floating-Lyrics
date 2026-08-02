@@ -88,20 +88,33 @@ if (CLOUD) {
   const TOKEN = process.env.MOBILE_TOKEN || '';
   if (!TOKEN) console.error('[cloud] 未設定 MOBILE_TOKEN,/api/lyrics 會一律回 401');
 
-  const RATE_WINDOW_MS = 60000, RATE_MAX = 30;
-  const hits = new Map();
-  const rateLimit = (req, res, next) => {
-    const now = Date.now();
-    const recent = (hits.get(req.ip) || []).filter((t) => now - t < RATE_WINDOW_MS);
-    if (recent.length >= RATE_MAX) {
-      res.set('Retry-After', String(Math.ceil(RATE_WINDOW_MS / 1000)));
-      return res.status(429).json({ error: 'Too many requests' });
-    }
-    recent.push(now);
-    hits.set(req.ip, recent);
-    if (hits.size > 1000) for (const [ip, ts] of hits) if (!ts.some((t) => now - t < RATE_WINDOW_MS)) hits.delete(ip);
-    next();
+  const makeLimiter = (windowMs, max) => {
+    const hits = new Map();
+    return (req, res, next) => {
+      const now = Date.now();
+      const recent = (hits.get(req.ip) || []).filter((t) => now - t < windowMs);
+      if (recent.length >= max) {
+        res.set('Retry-After', String(Math.ceil(windowMs / 1000)));
+        return res.status(429).json({ error: 'Too many requests' });
+      }
+      recent.push(now);
+      hits.set(req.ip, recent);
+      if (hits.size > 1000) for (const [ip, ts] of hits) if (!ts.some((t) => now - t < windowMs)) hits.delete(ip);
+      next();
+    };
   };
+
+  // 需要 token 的 GET 端點 → 它的限流桶 (null = 不計入)。**用 Map 不用物件**:
+  // `'constructor' in obj` 是 true,拿物件當查表會讓幾個怪路徑意外通過 token 那關。
+  const GATED = new Map([
+    ['/api/lyrics', makeLimiter(60000, 30)],
+    // 一次注音,跟 /api/lyrics 同級 —— 但要自己一個桶,不然查歌詞會吃掉套用的額度
+    ['/api/lyrics/pick', makeLimiter(60000, 30)],
+    // 整台機器最貴的請求:spawn Python + 打三家平台,單次實測 25.7 秒
+    ['/api/lyrics/options', makeLimiter(300000, 5)],
+    // **不計入**:O(1) 的 Map 查詢,而一次搜尋要輪詢十幾次,算進 30/分那個桶會自己把自己擋掉
+    ['/api/lyrics/options/state', null],
+  ]);
 
   app.use((req, res, next) => {
     if (req.method !== 'GET' && req.method !== 'HEAD') return res.status(404).end();
@@ -111,9 +124,10 @@ if (CLOUD) {
     // 302 不是 301:301 會被瀏覽器硬快取,以後想改就改不動了。
     // /mobile (少了結尾斜線) 一起收 —— 它不符合下面的 startsWith('/mobile/'),不轉就是 404。
     if (req.path === '/' || req.path === '/mobile') return res.redirect('/mobile/');
-    if (req.path === '/api/lyrics') {
+    if (GATED.has(req.path)) {
       if (!TOKEN || req.get('X-Kanaric-Token') !== TOKEN) return res.status(401).end();
-      return rateLimit(req, res, next);
+      const limiter = GATED.get(req.path);
+      return limiter ? limiter(req, res, next) : next();
     }
     if (req.path.startsWith('/mobile/')) return next();
     return res.status(404).end();
@@ -927,7 +941,9 @@ const translationJobs = new Set();
  *
  * 負快取 (空 {}) 由 pytools 那邊寫入,所以「查過但沒翻譯」的歌不會每次播都重抓。
  */
-function ensureTranslations(artist, title) {
+// quiet:抓完不要 rebroadcast。行動版的 /api/lyrics 走這條 —— 那支端點刻意不廣播,
+// 手機查一首歌不該去動桌面與靈動島上顯示的內容。
+function ensureTranslations(artist, title, quiet) {
   const key = furiganaKey(artist, title);
   if (translationJobs.has(key)) return;
   translationJobs.add(key);
@@ -940,7 +956,7 @@ function ensureTranslations(artist, title) {
     .then(({ trueArtist, cleanTitle }) => fetchCnLyricsS2({
       title, artist, searchTitle: cleanTitle, searchArtist: trueArtist, source: 'all'
     }))
-    .then(() => rebroadcastLyrics(artist, title));
+    .then(() => { if (!quiet) rebroadcastLyrics(artist, title); });
 }
 
 /**
@@ -952,14 +968,19 @@ function wantsExtraLine(kind) {
   return s[kind === 'romaji' ? 'show_romaji' : 'show_translation'] === true || s.island_line2 === kind;
 }
 
-/** 注音完的 HTML 併上譯文。關閉設定時逐字原樣回傳,開啟但查無資料時觸發背景補抓。 */
-function applyTranslations(artist, title, html) {
-  if (!wantsExtraLine('translation')) return Promise.resolve(html);
+/**
+ * 注音完的 HTML 併上譯文。關閉設定時逐字原樣回傳,開啟但查無資料時觸發背景補抓。
+ *
+ * force:不看桌面的 `show_translation` 設定,一律併。行動版走這條 —— 雲端那台的
+ * settings.json 是預設值 (全關),而且手機有自己的顯示開關,譯文要不要畫由前端決定。
+ */
+function applyTranslations(artist, title, html, force) {
+  if (!force && !wantsExtraLine('translation')) return Promise.resolve(html);
   return new Promise((resolve) => {
     db.get('SELECT data FROM lyrics_translations WHERE artist = ? AND title = ?', [artist, title], (err, row) => {
       // 建表是非同步的,全新 DB 上這支 SELECT 可能先到 —— 有 callback 就不會炸成未捕捉例外
       if (err || !row) {
-        if (!err) ensureTranslations(artist, title);
+        if (!err) ensureTranslations(artist, title, force);
         return resolve(html);
       }
       try {
@@ -1560,7 +1581,11 @@ app.get('/api/lyrics', async (req, res) => {
       lyric = found.lyric;
       source = found.source;
     }
-    res.json({ ...meta, lyrics: await injectFurigana(a, t, lyric), source });
+    // 譯文一律併進來 (force),要不要畫由手機自己的開關決定 —— 這樣切換開關不必重打一次
+    // 端點,前端快取裡的那份也永遠是完整的。查無譯文時 ensureTranslations 會背景補抓,
+    // 但**不 rebroadcast** (quiet),手機查歌不該動到桌面顯示的內容。
+    const html = await injectFurigana(a, t, lyric);
+    res.json({ ...meta, lyrics: await applyTranslations(a, t, html, true), source });
   } catch (e) {
     console.error('行動版查歌詞失敗:', e.message);
     res.status(500).json({ error: e.message });
@@ -1579,6 +1604,9 @@ function startOptionsJob(q) {
 
   const job = { status: 'searching', options: [], startedAt: Date.now() };
   optionJobs.set(key, job);
+  // 這個 Map 本來只增不減,而每個 job 帶著五份完整歌詞。桌面開幾天沒事,雲端那台是
+  // 512MB 的公開端點,放著就是慢性漏。Map 的鍵有插入順序,丟最舊的就好。
+  while (optionJobs.size > 20) optionJobs.delete(optionJobs.keys().next().value);
   if (global.broadcast) global.broadcast({ type: 'lyrics_options_searching', title: q.title, artist: q.artist });
 
   // 外部來源 (lrclib / 網易 / 酷狗 / Python fallback) 偶爾會沒有回應,
@@ -1618,10 +1646,13 @@ function startOptionsJob(q) {
 
 // 查目前這首歌的搜尋狀態 (換頁後靠這支把按鈕狀態接回來)
 app.get('/api/lyrics/options/state', (req, res) => {
-  const { title, artist } = req.query;
+  const { title, artist, brief } = req.query;
   const job = optionJobs.get(jobKey(artist, title));
   if (!job) return res.json({ status: 'idle', options: [] });
-  res.json({ status: job.status, options: job.options });   // searching 中也給目前已完成來源的結果
+  // searching 中也給目前已完成來源的結果。brief=1 (行動版) 把歌詞本體拔掉:一次搜尋要輪詢
+  // 十幾次,每次都夾帶五份完整歌詞就是幾百 KB 的行動網路流量,而手機在按下去之前不需要內文。
+  const options = brief ? job.options.map(({ lyrics, ...o }) => o) : job.options;
+  res.json({ status: job.status, options });
 });
 
 app.get('/api/lyrics/options', async (req, res) => {
@@ -1633,6 +1664,31 @@ app.get('/api/lyrics/options', async (req, res) => {
   try {
     const options = await job.promise;
     res.json({ options });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// 行動版套用備選歌詞的入口。桌面走 POST /api/lyrics/custom (寫 cache + 廣播),手機不行:
+// 雲端那台是 GET-only,而且它的 DB 是暫時的、也不該被手機寫。所以這支只把記憶體裡那份選項
+// 算成「可以直接畫的 HTML」回去,**不寫 DB 也不廣播** —— 跟 /api/lyrics 同一條規矩,
+// 手機換歌詞不能動到桌面與靈動島上顯示的內容。持久化由手機寫進自己的 localStorage 快取。
+app.get('/api/lyrics/pick', async (req, res) => {
+  const { title, artist, index } = req.query;
+  if (!title || !artist) return res.status(400).json({ error: 'Title and artist are required' });
+
+  const job = optionJobs.get(jobKey(artist, title));
+  const opt = job && job.options[Number(index) || 0];
+  // 409 = 工作不見了 (server 重啟、或被上面那個 20 筆上限淘汰),手機看到就重跑一次搜尋
+  if (!opt) return res.status(409).json({ error: 'options expired' });
+
+  try {
+    // autoMarkTitleLines 重跑是安全的:已標過 #TITLE# 的行有 `already` 旗標擋著,不會標兩次。
+    // 刻意不加 [source:ManualEdit] 前綴 —— 那個標記是保護 cache 裡的歌詞不被自動重抓蓋掉,
+    // 這條路根本不寫 cache。
+    const lyric = autoMarkTitleLines(toTraditional(opt.lyrics), title);
+    const html = await injectFurigana(artist, title, lyric);
+    res.json({ title, artist, lyrics: await applyTranslations(artist, title, html, true), source: opt.provider });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

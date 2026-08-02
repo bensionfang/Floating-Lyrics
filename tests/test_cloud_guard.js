@@ -38,6 +38,8 @@ async function run() {
     ['GET /api/settings', 'GET', '/api/settings'],
     ['POST /api/settings (竄改 llm_base_url 的入口)', 'POST', '/api/settings'],
     ['POST /api/db-clear', 'POST', '/api/db-clear'],
+    // 備選歌詞的三支 GET 放行了,但桌面「套用」那條是 POST,在這台仍然不存在
+    ['POST /api/lyrics/custom', 'POST', '/api/lyrics/custom'],
     ['POST /api/restore', 'POST', '/api/restore'],
     ['GET /api/llm-key', 'GET', '/api/llm-key'],
     ['GET /island', 'GET', '/island'],
@@ -75,6 +77,36 @@ async function run() {
   // 有 token 但缺參數 → 400。用缺參數而不是真的查一首歌:**證明 token 過了,而且不打外部網路**
   const okToken = await fetch(`${BASE}/api/lyrics`, { headers: { 'X-Kanaric-Token': TOKEN } });
   check(okToken.status === 400, '/api/lyrics token 正確 (缺參數 → 400)', `${okToken.status} (expected 400)`);
+
+  // 備選歌詞那三支跟 /api/lyrics 同一道 token 閘門。**不打真的搜尋** ——
+  // options 缺參數就回 400 (證明 token 過了而且不對外打網路);pick 沒有工作可取,回 409
+  for (const [name, route, ok] of [
+    ['/api/lyrics/options', '/api/lyrics/options', 400],
+    ['/api/lyrics/options/state', '/api/lyrics/options/state?title=a&artist=b', 200],
+    ['/api/lyrics/pick', '/api/lyrics/pick?title=a&artist=b&index=0', 409],
+  ]) {
+    const no = await fetch(BASE + route);
+    check(no.status === 401, `${name} 沒帶 token`, `${no.status} (expected 401)`);
+    const yes = await fetch(BASE + route, { headers: { 'X-Kanaric-Token': TOKEN } });
+    check(yes.status === ok, `${name} 帶了 token`, `${yes.status} (expected ${ok})`);
+  }
+
+  // /options 是整台機器最貴的請求 (spawn Python + 打三家平台),所以是自己一個桶:5 / 5 分鐘。
+  // 缺參數的 400 也算一次 —— 限流在路由之前,不然故意送壞參數就能無限打
+  let optLimited = null;
+  for (let i = 0; i < 6; i++) {
+    const r = await fetch(`${BASE}/api/lyrics/options`, { headers: { 'X-Kanaric-Token': TOKEN } });
+    if (r.status === 429) { optLimited = r; break; }
+  }
+  check(!!optLimited, '/api/lyrics/options 連打 6 次觸發限流', optLimited ? '429' : '沒被擋');
+
+  // /options/state 不計入任何桶:一次搜尋要輪詢十幾次,算進去會把自己擋掉
+  let stateOk = true;
+  for (let i = 0; i < 40; i++) {
+    const r = await fetch(`${BASE}/api/lyrics/options/state?title=a&artist=b`, { headers: { 'X-Kanaric-Token': TOKEN } });
+    if (r.status === 429) { stateOk = false; break; }
+  }
+  check(stateOk, '/api/lyrics/options/state 連打 40 次不被限流');
 
   // 限流:每分鐘 30 次。第 31 次要被擋,而且要帶 Retry-After (前端的 poll() 靠它決定等多久)
   let limited = null;

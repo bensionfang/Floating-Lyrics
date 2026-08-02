@@ -70,12 +70,39 @@
     font-size: var(--lyric-fs); text-align: var(--lyric-align);
     color: var(--lyric-dim); font-weight: 600;
     transition: color .25s, opacity .25s; opacity: .85;
+    /* 長按是「設循環點」,iOS 預設會跳出選取/複製泡泡蓋在歌詞上。
+       **這兩行與 JS 那邊 preventDefault 掉 contextmenu 是一組的,少一件就會看到泡泡** */
+    -webkit-touch-callout: none; -webkit-user-select: none; user-select: none;
   }
   .lyrics p.on { color: var(--text); opacity: 1; }
+  .lyrics p.loop { background: rgba(29,185,84,.16); border-radius: 10px; }
   /* ruby 在 iOS Safari 預設會把行高撐開,自己壓一下讀音大小 */
   .lyrics rt { font-size: .5em; font-weight: 400; opacity: .75; }
   body.no-furigana rt { display: none; }
+  /* 譯文跟著歌詞本體走,只小一號、不斜體 —— 唱到那句一起反白 (顏色靠 .lyrics p 繼承) */
+  .tr { display: block; font-size: .62em; font-weight: 400; opacity: .8; margin-top: 2px; }
+  body.no-trans .tr { display: none; }
   .lyrics .empty { text-align: center; color: var(--lyric-dim); font-weight: 400; opacity: .8; }
+
+  /* --- 播放列上方的工具條 --- */
+  /* 微調時間軸要邊聽邊調,所以不放抽屜 (抽屜幾乎蓋滿螢幕,看不到歌詞就沒辦法對)。
+     用 keyframes 做滑出而不是 transition:display:none 的元素 transition 不會觸發,
+     而這條要進出 flex 排版,留著佔位又會擠掉歌詞 */
+  .tools {
+    flex-shrink: 0; margin: 0 16px 8px; padding: 6px 12px; border-radius: 14px;
+    background: rgba(255,255,255,.10); font-size: 13px;
+    animation: slideup .2s ease;
+  }
+  @keyframes slideup { from { opacity: 0; transform: translateY(12px); } }
+  .trow { display: flex; align-items: center; gap: 10px; padding: 4px 0; }
+  .trow > span:first-child { flex: 1; opacity: .7; }
+  .tdim { opacity: .7; font-variant-numeric: tabular-nums; }
+  .tbtn, .tval {
+    background: rgba(255,255,255,.14); border: 0; color: var(--text);
+    border-radius: 8px; padding: 6px 12px; font-size: 14px;
+    cursor: pointer; -webkit-appearance: none;
+  }
+  .tval { font-variant-numeric: tabular-nums; min-width: 64px; }
 
   /* --- 底部播放列 --- */
   /* 下緣只吃「safe area 減 28px」:整個 inset (iPhone 約 34px) 留白會讓控制列離底部太遠,
@@ -160,6 +187,13 @@
     cursor: pointer; -webkit-appearance: none;
   }
   .drawer .btn.ghost { background: transparent; color: var(--dim); border: 1px solid var(--border); }
+  /* 備選歌詞清單:順著抽屜往下長,不另開一層 */
+  .opt {
+    display: block; width: 100%; text-align: left; background: transparent;
+    border: 0; border-top: 1px solid var(--border); color: var(--text);
+    padding: 10px 0; font-size: 14px; cursor: pointer; -webkit-appearance: none;
+  }
+  .opt small { display: block; color: var(--dim); font-size: 11px; margin-top: 3px; }
   .hint { font-size: 11px; color: var(--dim); margin: 10px 0 0; word-break: break-all; }
   code { background: #000; padding: 2px 5px; border-radius: 4px; }
 </style>
@@ -176,11 +210,28 @@
     <p class="track-title" id="track-title">—</p>
     <p class="track-artist" id="track-artist">—</p>
   </div>
-  <!-- 右邊留一個等寬的空格,中間那欄才會真的置中 -->
-  <span></span>
+  <!-- 右欄本來是為了「讓中間真的置中」的空格,現在正好給工具條的開關用 (同寬) -->
+  <button id="tools-btn" class="icon-btn" aria-label="歌詞工具">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M4 6h10M18 6h2M4 12h2M10 12h10M4 18h10M18 18h2"/>
+      <circle cx="16" cy="6" r="2"/><circle cx="8" cy="12" r="2"/><circle cx="16" cy="18" r="2"/>
+    </svg>
+  </button>
 </div>
 
 <div id="lyrics" class="lyrics"></div>
+
+<div id="tools" class="tools hidden">
+  <div class="trow"><span>歌詞時間軸</span>
+    <button class="tbtn" id="off-minus" aria-label="歌詞提前">−</button>
+    <button class="tval" id="off-val" aria-label="歸零">0.0s</button>
+    <button class="tbtn" id="off-plus" aria-label="歌詞延後">＋</button>
+  </div>
+  <div class="trow"><span>段落循環</span>
+    <span class="tdim" id="loop-val">長按歌詞設起點</span>
+    <button class="tbtn hidden" id="loop-clear" aria-label="取消循環">✕</button>
+  </div>
+</div>
 
 <div id="playbar" class="playbar hidden">
   <p id="status" class="msg"></p>
@@ -233,7 +284,14 @@
   <div class="srow"><span>顯示日文假名</span>
     <input type="checkbox" id="set-furigana">
   </div>
+  <div class="srow"><span>顯示中文翻譯</span>
+    <input type="checkbox" id="set-trans">
+  </div>
   <div class="srow"><span>歌詞來源</span><span id="lyrics-source">—</span></div>
+
+  <button id="opts-btn" class="btn ghost">搜尋備選歌詞</button>
+  <button id="reload-btn" class="btn ghost">重新載入歌詞</button>
+  <div id="opts"></div>
 
   <label for="client-id">Spotify Client ID</label>
   <input id="client-id" type="text" autocomplete="off" autocapitalize="off"
@@ -271,6 +329,7 @@
   const LS_TOKEN   = 'kanaric.mobile.apiToken';   // 雲端 /api/lyrics 的 token
   const LS_SCOPE   = 'kanaric.mobile.scope';
   const LS_PREFS   = 'kanaric.mobile.prefs';      // 純顯示偏好,一個鍵存一個物件
+  const LS_OFFSETS = 'kanaric.mobile.offsets';    // 每首歌的歌詞時間偏移 (秒)
   const SS_VERIFIER = 'kanaric.mobile.verifier';
   const SS_STATE    = 'kanaric.mobile.state';
 
@@ -294,7 +353,7 @@
   // --- 顯示偏好 (純前端,不進 server) ---------------------------------------
 
   // fs 的預設 32 = 滑桿 (20~44) 的正中央,往兩邊都調得動。改這裡要一起改 CSS 的 --lyric-fs
-  const DEFAULT_PREFS = { fs: 32, align: 'left', furigana: true };
+  const DEFAULT_PREFS = { fs: 32, align: 'left', furigana: true, trans: true };
 
   function readPrefs() {
     try { return { ...DEFAULT_PREFS, ...JSON.parse(localStorage.getItem(LS_PREFS) || '{}') }; }
@@ -305,9 +364,11 @@
     document.documentElement.style.setProperty('--lyric-fs', `${p.fs}px`);
     document.documentElement.style.setProperty('--lyric-align', p.align);
     document.body.classList.toggle('no-furigana', !p.furigana);
+    document.body.classList.toggle('no-trans', !p.trans);
     $('set-fs').value = p.fs;
     $('set-fs-val').textContent = `${p.fs}px`;
     $('set-furigana').checked = p.furigana;
+    $('set-trans').checked = p.trans;
     for (const b of $('set-align').children) b.classList.toggle('on', b.dataset.align === p.align);
   }
 
@@ -528,27 +589,53 @@
    *      使用者自己按播放再切回來。**切回來不必做任何事** —— visibilitychange
    *      本來就會立刻補一次輪詢校正。
    */
-  async function resumeOnSpotify() {
+  let pendingWake = false;   // 剛把使用者送去 Spotify,回前景時要自己接手按播放
+
+  /** 找一台能控制的裝置並把播放轉移過去 (順便開始播)。成功回 true */
+  async function transferToDevice() {
     const token = await getToken();
-    if (!token) return;
+    if (!token) return false;
     try {
       const r = await fetch(`${API}/me/player/devices`, {
         headers: { Authorization: `Bearer ${token}` }, cache: 'no-store',
       });
+      // is_restricted 的裝置不吃 Web API 的控制,挑了也是白挑
       const dev = ((await r.json()).devices || []).find((d) => !d.is_restricted);
-      if (dev) {
-        setStatus('喚醒裝置中…');
-        await fetch(`${API}/me/player`, {
-          method: 'PUT',
-          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ device_ids: [dev.id], play: true }),
-        });
-        clearTimeout(pollTimer);
-        pollTimer = setTimeout(tick, 800);   // 轉移要一點時間才會反映到 /me/player
-        return;
-      }
-    } catch (e) { /* 查不到裝置就走下面那條,不用吵使用者 */ }
+      if (!dev) return false;
+      setStatus('喚醒裝置中…');
+      await fetch(`${API}/me/player`, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device_ids: [dev.id], play: true }),
+      });
+      clearTimeout(pollTimer);
+      pollTimer = setTimeout(tick, 800);   // 轉移要一點時間才會反映到 /me/player
+      return true;
+    } catch (e) {
+      return false;   // 查不到裝置就讓呼叫端決定下一步,不用吵使用者
+    }
+  }
+
+  async function resumeOnSpotify() {
+    if (await transferToDevice()) return;
+    // 一台都沒有 = Spotify app 根本沒在跑。**只能把它叫起來,沒有辦法自動跳回來** ——
+    // iOS 不讓網頁把自己帶回前景,那是平台限制。
+    // 但使用者在 Spotify 裡不必按任何東西:app 一被打開就會重新登記成活躍裝置,
+    // 等他自己切回來,下面 visibilitychange 那段會接手按播放。
+    pendingWake = true;
     location.href = 'spotify:';
+  }
+
+  /**
+   * 從 Spotify 切回來之後自己接手。要重試是因為**裝置登記有延遲** ——
+   * app 剛回前景時 /me/player/devices 常常還是空的,第一次一定查不到。
+   */
+  async function wakeAfterReturn() {
+    for (let i = 0; i < 4; i++) {
+      if (await transferToDevice()) return;
+      await new Promise((r) => setTimeout(r, 800));
+    }
+    setStatus('還是找不到裝置,請在 Spotify 裡按一次播放', true);
   }
 
   const togglePlay = () => (track && track.isPlaying)
@@ -565,6 +652,8 @@
   let lines = [];
   let activeLine = -1;
   let lyricsFor = null;    // 目前這份歌詞是哪個 track id 的 (慢回應蓋掉新歌的守門)
+  let lyricsMeta = null;   // server 還原後的 (title, artist) —— 備選歌詞那兩支端點的鍵是它,不是 Spotify 給的原字串
+  let gapMs = 0;           // 這首歌「一句多長」的中位數,段落循環的間奏防護要用
 
   const showEmpty = (text) => { $('lyrics').innerHTML = `<p class="empty">${escapeHtml(text)}</p>`; };
 
@@ -576,6 +665,11 @@
     lines = [];
     activeLine = -1;
     lyricsFor = t && t.id;
+    lyricsMeta = null;
+    clearLoop();            // 行號只對得上同一份歌詞
+    loadOffset(t && t.id);
+    clearInterval(optPoll); // 上一首的備選歌詞清單留著只會誤導
+    $('opts').innerHTML = '';
     $('lyrics').innerHTML = '';
     $('lyrics-source').textContent = t ? '查詢中…' : '—';
     if (!t) return;
@@ -646,10 +740,16 @@
 
   function showLyrics(data) {
     lines = parseLrc(data.lyrics);
+    gapMs = medianGap(lines);
+    // 備選歌詞的鍵要用 server 還原過的名字 (Spotify 給的是 Haru Dorobou / 魚韻),
+    // 那兩支端點查的是同一個 optionJobs 鍵。lrclib 備援沒有這兩欄,退回原字串
+    lyricsMeta = { title: data.title || (track && track.title), artist: data.artist || (track && track.artist) };
     $('lyrics-source').textContent = lines.length ? data.source : '找不到歌詞';
     if (!lines.length) return showEmpty('找不到這首歌的歌詞');
-    // 歌詞是 furigana_inject.py 逃逸過的 <ruby> HTML,可以直接 innerHTML
-    $('lyrics').innerHTML = lines.map((l) => `<p>${l.html || '♪'}</p>`).join('');
+    // 歌詞是 furigana_inject.py 逃逸過的 <ruby> HTML,譯文則由 translations.js 的
+    // escapeHtml 逃逸過 —— 兩邊都逃逸過了才敢直接 innerHTML
+    $('lyrics').innerHTML = lines.map((l) =>
+      `<p>${l.html || '♪'}${l.trans ? `<span class="tr">${l.trans}</span>` : ''}</p>`).join('');
   }
 
   /** 高亮 + 置中。只在換行時動,不然每幀寫 scrollTop 會把手動捲動整個吃掉 */
@@ -664,6 +764,162 @@
     if (!el) return;
     el.classList.add('on');
     pane.scrollTo({ top: el.offsetTop - pane.clientHeight / 2 + el.offsetHeight / 2, behavior: 'smooth' });
+  }
+
+  // --- 歌詞工具:微調時間軸 / 段落循環 / 重新載入 / 備選歌詞 ---------------------
+
+  // 偏移**不走桌面的 sync_offsets 表**:那要 POST,而雲端那台是 GET-only;何況手機與桌面的
+  // 視覺延遲本來就不同,共用一個值反而錯。一首一筆存在自己的 localStorage 裡。
+  let offsetMs = 0;
+  const OFFSET_MAX = 200;
+
+  const readOffsets = () => { try { return JSON.parse(localStorage.getItem(LS_OFFSETS) || '{}'); } catch (e) { return {}; } };
+
+  function loadOffset(id) {
+    offsetMs = (id && readOffsets()[id] || 0) * 1000;
+    renderTools();
+  }
+
+  /** delta 秒 (null = 歸零)。正值 = 歌詞延後 */
+  function bumpOffset(delta) {
+    if (!track) return;
+    const sec = delta === null ? 0 : Math.round((offsetMs / 1000 + delta) * 10) / 10;
+    offsetMs = sec * 1000;
+    const all = readOffsets();
+    if (sec) all[track.id] = sec; else delete all[track.id];
+    for (const k of Object.keys(all).slice(0, -OFFSET_MAX)) delete all[k];
+    try { localStorage.setItem(LS_OFFSETS, JSON.stringify(all)); } catch (e) { /* 配額滿了就這次不存 */ }
+    // 立刻重算高亮,不然要等下一句才看得到差別 —— activeLine 歸零前要自己把舊的 .on 拿掉
+    const cur = $('lyrics').querySelector('p.on');
+    if (cur) cur.classList.remove('on');
+    activeLine = -1;
+    renderTools();
+  }
+
+  // A、B 存的是**行號**不是秒 (與桌面 app.js 同一套心智模型)
+  let loopA = null, loopB = null, loopSeekUntil = 0;
+
+  function clearLoop() {
+    loopA = loopB = null;
+    paintLoop();
+    renderTools();
+  }
+
+  function paintLoop() {
+    const ps = $('lyrics').children;
+    for (const p of ps) p.classList.remove('loop');
+    if (loopA === null) return;
+    for (let i = loopA; i <= (loopB === null ? loopA : loopB); i++) if (ps[i]) ps[i].classList.add('loop');
+  }
+
+  function pickLoop(i) {
+    if (loopA === null || loopB !== null) {
+      loopA = i; loopB = null;      // 第一次長按,或已經選好一組要重選
+    } else {
+      loopB = i;                    // 再長按同一句 = 單句循環
+      if (loopB < loopA) { const tmp = loopA; loopA = loopB; loopB = tmp; }   // 由下往上選也算數
+      seek(lines[loopA].ms + offsetMs);
+    }
+    paintLoop();
+    renderTools();
+    $('tools').classList.remove('hidden');   // 讓使用者看得到目前設到哪、也才有地方取消
+  }
+
+  function renderTools() {
+    $('off-val').textContent = `${offsetMs > 0 ? '+' : ''}${(offsetMs / 1000).toFixed(1)}s`;
+    $('loop-val').textContent = loopA === null ? '長按歌詞設起點'
+      : loopB === null ? `起點第 ${loopA + 1} 句,長按終點`
+      : `第 ${loopA + 1} – ${loopB + 1} 句`;
+    $('loop-clear').classList.toggle('hidden', loopA === null);
+  }
+
+  /** 重新載入:丟掉這首的本地快取再抓一次。**不是強制上網重抓** —— 雲端 cache 裡若是一份
+      爛歌詞,重載還是它,那時要用的是備選歌詞 (語意與桌面 lyrics-tools.js 一致)。
+      偏移值不清,那是使用者調的 */
+  function reloadLyrics() {
+    if (!track) return;
+    let all;
+    try { all = JSON.parse(localStorage.getItem(CACHE_KEY) || '{}'); } catch (e) { all = {}; }
+    delete all[track.id];
+    try { localStorage.setItem(CACHE_KEY, JSON.stringify(all)); } catch (e) {}
+    closeSheet();
+    loadLyrics(track);
+  }
+
+  /** 帶 token 的 GET。錯誤帶上 status,呼叫端才分得出 409 (選項過期) 與其他失敗 */
+  async function apiGet(path) {
+    const resp = await fetch(path, {
+      cache: 'no-store',
+      headers: { 'X-Kanaric-Token': localStorage.getItem(LS_TOKEN) || '' },
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      const err = new Error(data.error || `server 回 ${resp.status}`);
+      err.status = resp.status;
+      throw err;
+    }
+    return data;
+  }
+
+  let optPoll = null;
+
+  function optQuery() {
+    return new URLSearchParams({ title: lyricsMeta.title, artist: lyricsMeta.artist });
+  }
+
+  /**
+   * 搜尋備選歌詞。**不 await 那支開工作的端點** —— 整輪實測 25.7 秒,等在那裡就沒辦法
+   * 中途換歌中止;進度改由 /options/state 每 2.5 秒問一次 (桌面是 1.5 秒,手機拉長省電)。
+   * state 帶 brief=1:輪詢十幾次,每次夾帶五份完整歌詞就是幾百 KB 的行動網路流量。
+   */
+  function findOptions() {
+    if (!lyricsMeta || !track) return;
+    const id = track.id;
+    const q = optQuery();
+    $('opts').innerHTML = '<p class="hint">搜尋中…(冷啟動時最多要一分鐘)</p>';
+    apiGet(`/api/lyrics/options?${q}`).catch(() => {});   // 失敗也不用管,state 那邊看得到
+    clearInterval(optPoll);
+    const started = Date.now();
+    optPoll = setInterval(async () => {
+      if (!track || track.id !== id) return clearInterval(optPoll);   // 換歌就中止
+      try {
+        const s = await apiGet(`/api/lyrics/options/state?${q}&brief=1`);
+        renderOptions(s.options);
+        // server 端的工作自己有 60 秒逾時,這裡多留 10 秒
+        if (s.status === 'done' || Date.now() - started > 70000) clearInterval(optPoll);
+      } catch (e) {
+        clearInterval(optPoll);
+        $('opts').innerHTML = `<p class="hint">搜尋失敗:${escapeHtml(e.message)}</p>`;
+      }
+    }, 2500);
+  }
+
+  function renderOptions(options) {
+    if (!options || !options.length) return;   // 還沒有結果就留著「搜尋中」那行
+    $('opts').innerHTML = options.map((o, i) =>
+      `<button class="opt" data-i="${i}">${escapeHtml(o.title)}` +
+      `<small>${escapeHtml(o.artist)} · ${escapeHtml(o.provider)} · ${o.isSynced ? 'LRC' : '純文字'}</small></button>`
+    ).join('');
+  }
+
+  async function pickOption(i) {
+    if (!lyricsMeta || !track) return;
+    const id = track.id;
+    $('opts').innerHTML = '<p class="hint">套用中…</p>';
+    try {
+      const data = await apiGet(`/api/lyrics/pick?${optQuery()}&index=${i}`);
+      if (!track || track.id !== id) return;
+      showLyrics(data);
+      clearLoop();
+      // 寫進自己的快取 = 持久化:它是 loadLyrics 的第一順位,所以「套用」會一直有效,
+      // 直到按重新載入 (server 那邊完全沒被寫過)
+      if (lines.length) writeCache(localStorage, id, data);
+      closeSheet();
+    } catch (e) {
+      // 409 = server 那份工作不見了 (重啟、或被 20 筆上限淘汰),重跑一次搜尋就好
+      if (e.status === 409) return findOptions();
+      $('opts').innerHTML = `<p class="hint">套用失敗:${escapeHtml(e.message)}</p>`;
+    }
   }
 
   /** 排下一次輪詢。分頁隱藏時不排 —— Safari 背景會凍結 timer,醒來也是靠 visibilitychange */
@@ -684,6 +940,8 @@
     if (document.hidden) return clearTimeout(pollTimer);
     if ($('playbar').classList.contains('hidden')) return;
     keepAwake();   // 分頁一隱藏 lock 就被系統釋放,回前景一定要重拿 (規格 §5.3 點名的坑)
+    // 剛從 Spotify 切回來:接手按播放,使用者在那邊什麼都不用按
+    if (pendingWake) { pendingWake = false; return wakeAfterReturn(); }
     tick();
   });
 
@@ -704,10 +962,22 @@
   // 進度條:rAF 每幀用 performance.now() 插值。分頁隱藏時瀏覽器自己會停掉 rAF,不必自己管
   function frame() {
     if (track) {
-      const pos = positionAt(track, performance.now());
+      const now = performance.now();
+      const pos = positionAt(track, now);
       $('bar-fill').style.width = track.durationMs ? `${(pos / track.durationMs) * 100}%` : '0';
       $('pos-fmt').textContent = formatTime(pos);
-      syncLyrics(pos);
+      // 偏移只調歌詞,**進度條與時間不能減** —— 那是真實的播放位置 (桌面也是只調歌詞)
+      syncLyrics(pos - offsetMs);
+      // 段落循環。那個 2 秒的窗是必要的,不是防禦性程式:seek() 是樂觀更新,本地位置立刻
+      // 跳回 A,但 400ms 後補的那次輪詢很可能拿到 Spotify 還沒跳完的舊位置 (≈B),
+      // setTrack 一寫回去下一幀又觸發一次,就變成每秒狂送 seek 打爆限流。
+      // 桌面用 pendingSeekTarget 擋同一件事 (app.js:70)。
+      // ponytail: 循環段短於 2 秒會漏一次觸發,實務上沒有那麼短的段落
+      if (loopB !== null && track.isPlaying && now > loopSeekUntil
+          && pos - offsetMs >= loopEndMs(lines, loopB, gapMs, track.durationMs)) {
+        loopSeekUntil = now + 2000;
+        seek(lines[loopA].ms + offsetMs);
+      }
     }
     requestAnimationFrame(frame);
   }
@@ -787,6 +1057,7 @@
     $('logout-btn').addEventListener('click', logout);
     $('set-fs').addEventListener('input', (e) => savePrefs({ fs: Number(e.target.value) }));
     $('set-furigana').addEventListener('change', (e) => savePrefs({ furigana: e.target.checked }));
+    $('set-trans').addEventListener('change', (e) => savePrefs({ trans: e.target.checked }));
     $('set-align').addEventListener('click', (e) => {
       const b = e.target.closest('button');
       if (b) savePrefs({ align: b.dataset.align });
@@ -808,12 +1079,58 @@
       seek(Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) * track.durationMs);
     });
 
-    // 點歌詞跳到那一句。時間戳本來就在 parseLrc 的結果裡,不必另外存
-    $('lyrics').addEventListener('click', (e) => {
+    // 點歌詞跳到那一句;長按 500ms 則是設段落循環的 A/B (不做模式開關)。
+    // 時間戳本來就在 parseLrc 的結果裡,不必另外存
+    const pane = $('lyrics');
+    let pressTimer = null, pressAt = null, suppressClick = false;
+    const lineOf = (e) => {
       const p = e.target.closest('p');
-      if (!p || p.classList.contains('empty')) return;
-      const i = [].indexOf.call($('lyrics').children, p);
-      if (lines[i]) seek(lines[i].ms);
+      if (!p || p.classList.contains('empty')) return -1;
+      return [].indexOf.call(pane.children, p);
+    };
+    const cancelPress = () => { clearTimeout(pressTimer); pressTimer = null; pressAt = null; };
+
+    pane.addEventListener('pointerdown', (e) => {
+      // 在 pointerdown 清旗標而不是在 click 消耗掉:長按之後不一定會有 click 事件,
+      // 留著 true 的話會吃掉下一次真正的點擊
+      suppressClick = false;
+      const i = lineOf(e);
+      if (i < 0 || !lines[i]) return;
+      pressAt = { x: e.clientX, y: e.clientY };
+      pressTimer = setTimeout(() => {
+        pressTimer = null;
+        suppressClick = true;
+        pickLoop(i);
+      }, 500);
+    });
+    pane.addEventListener('pointerup', cancelPress);
+    pane.addEventListener('pointercancel', cancelPress);
+    pane.addEventListener('pointermove', (e) => {
+      if (!pressAt) return;
+      if (Math.abs(e.clientX - pressAt.x) > 10 || Math.abs(e.clientY - pressAt.y) > 10) cancelPress();
+    });
+    // 與 CSS 的 -webkit-touch-callout/user-select 是一組的,少一件就會看到 iOS 的選取泡泡
+    pane.addEventListener('contextmenu', (e) => e.preventDefault());
+
+    pane.addEventListener('click', (e) => {
+      if (suppressClick) return;             // 剛剛那下是長按設循環點,不要順便跳轉
+      const i = lineOf(e);
+      if (lines[i]) seek(lines[i].ms + offsetMs);
+    });
+
+    // 工具條
+    $('tools-btn').addEventListener('click', () => $('tools').classList.toggle('hidden'));
+    $('off-minus').addEventListener('click', () => bumpOffset(-0.1));
+    $('off-plus').addEventListener('click', () => bumpOffset(0.1));
+    $('off-val').addEventListener('click', () => bumpOffset(null));
+    $('loop-clear').addEventListener('click', clearLoop);
+
+    // 抽屜裡的歌詞工具
+    $('reload-btn').addEventListener('click', reloadLyrics);
+    $('opts-btn').addEventListener('click', findOptions);
+    $('opts').addEventListener('click', (e) => {
+      const b = e.target.closest('.opt');
+      if (b) pickOption(Number(b.dataset.i));
     });
 
     requestAnimationFrame(frame);

@@ -501,9 +501,52 @@ Phase 3+4（同步歌詞 + 注音）、Phase 5（PWA 化）已完成:`web-app/pu
   `kanaric.mobile.prefs`,零 server 改動。**Client ID / Token 的 input 只有這一份** —— 未登入時
   自動把 sheet 打開,不再另外做一個 setup 卡片,免得兩個畫面各存各的。「連接 Spotify」與「登出」
   依 refresh token 在不在**互斥顯示**,同時出現只會讓人猶豫該按哪顆(要換 Client ID 就先登出再連接)。
-- 中文翻譯 / 羅馬拼音 / 片假名標平假名**還沒做**:`/api/lyrics` 只跑 `injectFurigana`,那三樣的資料
-  根本沒送到手機,要做得改 server 並讓雲端每首多跑一次譯文抓取。
+- **中文翻譯已經做了**:`/api/lyrics` 與 `/api/lyrics/pick` 都跑 `applyTranslations(..., force)` ——
+  **一律併進來,要不要畫由手機自己的開關 (`body.no-trans`) 決定**。這樣切換開關不必重打端點,
+  前端快取裡的那份也永遠是完整的。`parseLrc` 把 `#TRANS#` 掛回同一個時間戳的那句、不自成一行。
+  **羅馬拼音 / 片假名標平假名還沒做**(`#ROMAJI#` 行照舊整行吃掉)。
 - 回歸測試 `node tests/test_mobile_color.js`。
+
+**四個歌詞工具 (2026-08-02)**:微調時間軸、段落循環、重新載入在抽屜/工具條,備選歌詞另外加一支端點。
+搬法的總則是 **雲端那台的 B1 允許清單是 GET-only**,所以桌面用 POST 寫 DB 的一律改成寫手機自己的
+localStorage —— 不是偷懶,雲端本來就刻意不帶使用者手打的資料,而且手機與桌面的視覺延遲不同,
+共用一個偏移值反而錯。
+
+- **微調時間軸**存 `kanaric.mobile.offsets`(`{trackId: 秒}`,上限 200),±0.1 秒一格。
+  **套用點只有 `syncLyrics(pos - offsetMs)`,進度條與時間顯示不能減** —— 那是真實播放位置(桌面同理)。
+  連帶地點歌詞跳轉與循環跳回都要 `lines[i].ms + offsetMs`,不加就會跳到偏移前的位置。
+  改完要自己把舊的 `.on` 拿掉再把 `activeLine` 設 -1,不然高亮要等下一句才更新。
+- **段落循環**是長按歌詞 500ms 設 A/B(不做模式開關,短按仍然是跳轉)。A、B 存的是**行號**不是秒。
+  - **`suppressClick` 要在 pointerdown 清掉而不是在 click 裡消耗** —— 長按之後不保證會有 click,
+    留著 true 就會吃掉下一次真正的點擊。
+  - iOS 的選取泡泡要**兩件一起**才擋得住:`.lyrics p` 的 `-webkit-touch-callout/user-select`
+    加上歌詞區 `preventDefault` 掉 `contextmenu`,少一件就會看到泡泡蓋在歌詞上。
+  - **跳回時那個 2 秒的 `loopSeekUntil` 窗是必要的**:`seek()` 是樂觀更新,本地位置立刻回到 A,
+    但 400ms 後補的那次輪詢很可能拿到 Spotify 還沒跳完的舊位置(≈B),`setTrack` 一寫回去下一幀
+    又觸發,就變成每秒狂送 seek 打爆限流。桌面用 `pendingSeekTarget` 擋同一件事。
+  - 終點算在 `lyrics.js` 的 `loopEndMs()`(純函式,理由同 `parseLrc`),數學照桌面的 `loopEndTime()`:
+    B 的下一句開頭,離太遠(尾段間奏)就提早在 `B + 一句長 × 1.6`。「一句長」= `medianGap()`,
+    取**中位數**不是平均(平均會被尾段間奏拉爆),且只算正的間隔(副歌重複行的差是 0)。
+  - 換歌 / 重新載入 / 套用備選歌詞都 `clearLoop()`,行號只對得上同一份歌詞。**不做跨頁記憶**。
+- **重新載入**只刪 `kanaric.mobile.lyrics` 裡這首的鍵再 `loadLyrics()`,**不是強制上網重抓**
+  (語意與桌面 `lyrics-tools.js` 一致):雲端 cache 裡若是一份爛歌詞,重載還是它,那時要用備選歌詞。
+  偏移值不清,那是使用者調的。
+- **備選歌詞**多一支 **`GET /api/lyrics/pick?title&artist&index=N`**:從記憶體的 `optionJobs` 取第 N 個,
+  跑 `toTraditional` → `autoMarkTitleLines` → `injectFurigana` → `applyTranslations`,回**與
+  `/api/lyrics` 完全相同的形狀**。
+  - **不寫 DB、不廣播**(同 `/api/lyrics` 的規矩:手機換歌詞不能動到桌面與靈動島)。持久化是手機把回應
+    寫進自己的 localStorage 快取 —— 那是 `loadLyrics` 的第一順位,所以「套用」自然是永久的,直到重新載入。
+  - 找不到 job 回 **409**,前端看到就自己重跑一次搜尋。
+  - 端點的鍵是 **server 還原後的 (title, artist)**,不是 Spotify 給的原字串 —— 所以前端記 `lyricsMeta`
+    (`/api/lyrics` 回應裡的那兩欄),用它去打 options/state/pick。
+  - `optionJobs` 加了 **20 筆上限**:那個 Map 本來只增不減,每個 job 帶著五份完整歌詞,
+    在雲端那台(512MB、公開端點)就是慢性漏。
+  - `/api/lyrics/options/state` 多吃 **`brief=1`**(拔掉歌詞本體):一次搜尋要輪詢十幾次,
+    每次夾帶五份完整歌詞就是幾百 KB 的行動網路流量,而手機在按下去之前不需要內文。
+  - **B1 允許清單多放行這三支 GET,限流各自分桶**:`options` 5/5 分鐘(最貴,實測 25.7 秒)、
+    `options/state` **不計入**(不然輪詢會把自己擋掉)、`pick` 沿用 30/分。
+    `/api/lyrics/custom` 這類寫入路由**維持 404**。
+  - 回歸測試 `node tests/test_cloud_guard.js`(三支的 token 閘門 + 分桶限流 + 寫入路由仍是 404)。
 
 **做過又移除的:鏡像模式** (2026-07-28,commit `8bef724` 加入、同日移除)。手機連 server 的
 WebSocket 直接吃 `media_state` 廣播、不打 Spotify,角色跟靈動島一樣。**移除的理由不是它不好用,

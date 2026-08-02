@@ -7,22 +7,31 @@
  */
 
 /**
- * LRC → [{ ms, html }],依時間排序。一行可以掛多個時間戳 (副歌重複),各自展開成一句。
- * 行動版只畫歌詞本體:製作人員列與譯文/羅馬字都吃掉 —— 那三種在桌面版各有開關,
- * 手機上沒有開關,而 server 是否併入它們取決於桌面的設定,照單全收會突然多出兩行。
+ * LRC → [{ ms, html, trans }],依時間排序。一行可以掛多個時間戳 (副歌重複),各自展開成一句。
+ *
+ * `#TRANS#` 是 mergeTranslations 插進來的譯文行,時間戳與它要翻的那句**完全相同**,
+ * 所以用時間當鍵掛回去、不自成一句。`#TITLE#` (製作人員列) 與 `#ROMAJI#` (羅馬拼音)
+ * 仍然整行吃掉:前者不是歌詞,後者手機上沒有對應的顯示開關。
  */
 function parseLrc(text) {
   const out = [];
+  const trans = new Map();
   for (const line of String(text || '').split('\n')) {
     const m = line.match(/^((?:\[\d+:\d+(?:\.\d+)?\])+)(.*)$/);
     if (!m) continue;
     const html = m[2].trim();
-    if (/^#(TITLE|TRANS|ROMAJI)#/.test(html)) continue;
+    if (/^#(TITLE|ROMAJI)#/.test(html)) continue;
+    const isTrans = html.startsWith('#TRANS#');
     for (const tag of m[1].match(/\[\d+:\d+(?:\.\d+)?\]/g) || []) {
       const [mm, ss] = tag.slice(1, -1).split(':');
-      out.push({ ms: (parseInt(mm, 10) * 60 + parseFloat(ss)) * 1000, html });
+      const ms = (parseInt(mm, 10) * 60 + parseFloat(ss)) * 1000;
+      if (isTrans) trans.set(ms, html.slice(7));
+      else out.push({ ms, html });
     }
   }
+  // 掛譯文要等整份掃完 —— 譯文行在歌詞行後面,邊掃邊掛也可以,但同一個時間戳可能
+  // 先出現譯文再出現歌詞 (來源沒有保證順序),掃完再掛才不會漏
+  for (const l of out) if (trans.has(l.ms)) l.trans = trans.get(l.ms);
   return out.sort((a, b) => a.ms - b.ms);
 }
 
@@ -34,6 +43,34 @@ function activeIndex(lines, posMs) {
     i = k;
   }
   return i;
+}
+
+/**
+ * 「一句多長」= 全曲相鄰時間戳的**中位數**。平均值會被尾段間奏 (最後一句到歌末) 拉爆,
+ * 中位數不會。只算正的間隔:同一時間戳的重複行 (副歌) 差是 0,算進去會把中位數壓到 0。
+ */
+function medianGap(lines) {
+  const gaps = [];
+  for (let i = 1; i < lines.length; i++) {
+    const d = lines[i].ms - lines[i - 1].ms;
+    if (d > 0) gaps.push(d);
+  }
+  if (!gaps.length) return 0;
+  gaps.sort((a, b) => a - b);
+  return gaps[Math.floor(gaps.length / 2)];
+}
+
+/**
+ * 循環到哪裡:B 唱完 = 下一句開頭;B 已是最後一句就唱到歌曲結束。
+ * 間奏防護:B 到下一句若遠超「一句長 × 1.6」(= 尾段間奏),提早在那裡跳回,
+ * 不讓整段間奏跟著循環。數學照桌面的 loopEndTime() (app.js)。
+ */
+const LOOP_TAIL_FACTOR = 1.6;
+function loopEndMs(lines, b, gapMs, durationMs) {
+  const next = lines[b + 1];
+  const hardEnd = next ? next.ms : (durationMs > 0 ? durationMs : Infinity);
+  const cap = lines[b].ms + gapMs * LOOP_TAIL_FACTOR;
+  return hardEnd > cap ? cap : hardEnd;
 }
 
 /**
@@ -78,5 +115,5 @@ function writeCache(store, id, data) {
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { parseLrc, activeIndex, escapeHtml, readCache, writeCache, CACHE_KEY, CACHE_MAX };
+  module.exports = { parseLrc, activeIndex, medianGap, loopEndMs, escapeHtml, readCache, writeCache, CACHE_KEY, CACHE_MAX };
 }
