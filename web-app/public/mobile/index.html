@@ -284,6 +284,7 @@
     <input type="checkbox" id="set-trans">
   </div>
   <div class="srow"><span>歌詞來源</span><span id="lyrics-source">—</span></div>
+  <div class="srow"><span>版本</span><span id="shell-ver">—</span></div>
   <div class="srow"><span>段落循環</span><span id="loop-val">未設定</span></div>
   <p class="hint">長按一句歌詞設起點,再長按另一句設終點,唱完會自動跳回去。
      已經設好之後再長按任何一句 = 重選起點,在反白的那幾句上連點兩下 = 取消。</p>
@@ -380,7 +381,22 @@
 
   // --- 設定面板 -------------------------------------------------------------
 
+  /**
+   * 抽屜裡顯示目前這份 shell 的版本。**直接問 Service Worker 的快取名字,不要另外維護一個常數**
+   * —— 兩個地方各寫一次一定會漂,而「使用者到底跑在哪一版」正是最需要可信的資訊
+   * (改了 sw.js 的 CACHE 之後,沒重整的裝置會一直吃舊 shell,症狀是新功能像沒做)。
+   */
+  async function showShellVersion() {
+    try {
+      const name = (await caches.keys()).find((k) => k.startsWith('kanaric-mobile-'));
+      $('shell-ver').textContent = name ? name.replace('kanaric-mobile-', '') : '未快取';
+    } catch (e) {
+      $('shell-ver').textContent = '—';
+    }
+  }
+
   function openSheet() {
+    showShellVersion();
     $('client-id').value = clientId();
     $('api-token').value = localStorage.getItem(LS_TOKEN) || '';
     // 「連接 Spotify」與「登出」是互斥的,同時出現只會讓人猶豫該按哪顆。
@@ -587,7 +603,7 @@
       if (resp.status === 404) {
         if (path !== 'pause' && await transferToDevice()) return;
         $('resume-btn').classList.remove('hidden');   // 裝置列表也空了 = app 真的被系統清掉
-        return setStatus('找不到播放裝置', true);
+        return setStatus(`找不到播放裝置${transferHint ? `(${transferHint})` : ''}`, true);
       }
       if (!resp.ok && resp.status !== 204) return setStatus(`控制失敗:${resp.status}`, true);
     } catch (e) {
@@ -610,28 +626,46 @@
    */
   let pendingWake = false;   // 剛把使用者送去 Spotify,回前景時要自己接手按播放
 
-  /** 找一台能控制的裝置並把播放轉移過去 (順便開始播)。成功回 true */
+  /**
+   * 找一台能控制的裝置並把播放轉移過去 (順便開始播)。成功回 true。
+   *
+   * 失敗的原因記在 `transferHint` 給呼叫端的錯誤訊息用 —— 手機上沒有 devtools,
+   * 「列表是空的」「只有受限裝置」「查詢失敗」「轉移被拒」全吐同一句「找不到播放裝置」
+   * 的話,使用者與我們都查不出是哪一種。
+   */
+  let transferHint = '';
+
   async function transferToDevice() {
+    transferHint = '';
     const token = await getToken();
     if (!token) return false;
     try {
       const r = await fetch(`${API}/me/player/devices`, {
         headers: { Authorization: `Bearer ${token}` }, cache: 'no-store',
       });
+      if (!r.ok) { transferHint = `查詢裝置回 ${r.status}`; return false; }
+      const list = (await r.json()).devices || [];
       // is_restricted 的裝置不吃 Web API 的控制,挑了也是白挑
-      const dev = ((await r.json()).devices || []).find((d) => !d.is_restricted);
-      if (!dev) return false;
+      const dev = list.find((d) => !d.is_restricted);
+      if (!dev) {
+        transferHint = list.length ? `${list.length} 台裝置都不可控制` : 'Spotify 沒有登記任何裝置';
+        return false;
+      }
       setStatus('喚醒裝置中…');
-      await fetch(`${API}/me/player`, {
+      // **這個回應一定要檢查**:轉移照樣可能被拒 (404 裝置剛消失、403 非 Premium),
+      // 不看的話會回報成功而畫面什麼都沒發生,使用者完全不知道卡在哪
+      const t = await fetch(`${API}/me/player`, {
         method: 'PUT',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ device_ids: [dev.id], play: true }),
       });
+      if (!t.ok && t.status !== 204) { transferHint = `轉移被拒 ${t.status}`; return false; }
       clearTimeout(pollTimer);
       pollTimer = setTimeout(tick, 800);   // 轉移要一點時間才會反映到 /me/player
       return true;
     } catch (e) {
-      return false;   // 查不到裝置就讓呼叫端決定下一步,不用吵使用者
+      transferHint = e.message;
+      return false;
     }
   }
 
@@ -654,7 +688,7 @@
       if (await transferToDevice()) return;
       await new Promise((r) => setTimeout(r, 800));
     }
-    setStatus('還是找不到裝置,請在 Spotify 裡按一次播放', true);
+    setStatus(`還是找不到裝置,請在 Spotify 裡按一次播放${transferHint ? `(${transferHint})` : ''}`, true);
   }
 
   const togglePlay = () => (track && track.isPlaying)
