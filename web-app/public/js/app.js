@@ -672,20 +672,25 @@ function splitLineChars(lineEl) {
     });
     const texts = [];
     while (walker.nextNode()) texts.push(walker.currentNode);
+    // 注音也要逐字填,所以記下每顆 <ruby> 蓋住的字元範圍 —— 唱到範圍的幾成,
+    // 上面的假名就填幾成。存成物件屬性而不是 data-*:每幀都會讀,不必多做 DOM 屬性存取
+    const rubies = [];
+    let idx = 0;
     for (const node of texts) {
         const frag = document.createDocumentFragment();
-        // 注音要跟著它的漢字一起亮,所以記下所屬的 <ruby> (多半是一個字一顆)。
-        // 存成物件屬性而不是 data-*:每幀都會讀,不必為它多做一次 DOM 屬性寫入
         const ruby = node.parentElement.closest('ruby');
+        const rt = ruby && ruby.querySelector('rt');
+        if (rt && rt.textContent) rubies.push({ rt, start: idx, len: node.data.length });
         for (const ch of node.data) {
             const s = document.createElement('span');
             s.className = 'kc';
             s.textContent = ch;
-            s.__ruby = ruby;
             frag.appendChild(s);
+            idx++;
         }
         node.parentNode.replaceChild(frag, node);
     }
+    lineEl.__rubies = rubies;
 }
 
 /**
@@ -718,9 +723,15 @@ function karaokeFill(lineEl, lyric, position, nextTime) {
     const full = Math.floor(k);
     for (let i = 0; i < chars.length; i++) {
         const on = i < full;
-        if (chars[i].classList.contains('sung') === on) continue;
-        chars[i].classList.toggle('sung', on);
-        if (chars[i].__ruby) chars[i].__ruby.classList.toggle('ruby-sung', on);
+        if (chars[i].classList.contains('sung') !== on) chars[i].classList.toggle('sung', on);
+    }
+    // 注音跟著它蓋住的那幾個字一起填。rt 很短、不會換行,所以整塊用水平漸層是對的。
+    // 一行頂多幾顆 ruby,每幀全掃比記「哪顆變了」便宜
+    for (const r of lineEl.__rubies || []) {
+        const p = Math.max(0, Math.min(1, (k - r.start) / r.len));
+        r.rt.classList.toggle('rt-sung', p >= 1);
+        r.rt.classList.toggle('rt-now', p > 0 && p < 1);
+        if (p > 0 && p < 1) r.rt.style.setProperty('--k', `${p * 100}%`);
     }
     // 正在唱的那一個字做局部漸層。單一個字不會換行,所以水平漸層在這裡是正確的
     const cur = chars[full];
@@ -752,8 +763,8 @@ function syncLyricsToTime(position) {
             if (prevLine) {
                 prevLine.classList.remove('active');
                 // 換行時要把填色狀態一起收掉,不然唱過的那一行會整行留白
-                prevLine.querySelectorAll('.kc.sung, .kc.kc-now, ruby.ruby-sung')
-                        .forEach((c) => c.classList.remove('sung', 'kc-now', 'ruby-sung'));
+                prevLine.querySelectorAll('.kc.sung, .kc.kc-now, rt.rt-sung, rt.rt-now')
+                        .forEach((c) => c.classList.remove('sung', 'kc-now', 'rt-sung', 'rt-now'));
             }
         }
 
