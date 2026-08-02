@@ -342,25 +342,33 @@ def _fetch_qqmusic(artist: str, title: str, duration=None) -> dict:
 
     注意:搜尋端點 (u.y.qq.com) 限流很兇,連打幾次就開始回空結果。QQ 排在來源清單最後,
     被限流時就當作沒找到、自然降級,不必特別處理。
+
+    **module 是 DoSearchForQQMusicMobile 不是 ...Desktop。** Desktop 那支已經對任何字串都
+    回 0 筆 (code 仍然是 0,不報錯,就是空 list) —— 純中文歌 `晴天 周杰伦` 也一樣,所以不是
+    限流也不是日文的問題。它靜默死掉的期間 QQ 這一家等於整個不存在:歌詞快取裡 QQ 佔 0 首,
+    羅馬字讀音提示也少了唯一把 `私` 讀對的來源。Mobile 那支同一句回 10 筆,結果放在
+    `req.data.body.item_song` (欄位是 title 不是 name),其餘欄位形狀相同。
     """
     body = {
-        "comm": {"ct": 24, "cv": 0},  # 少了這塊會被回 code 2001
-        "req_1": {
-            "method": "DoSearchForQQMusicDesktop",
+        "comm": {"ct": 19, "cv": 1859, "uin": "0"},  # 少了這塊會被回 code 2001
+        "req": {
+            "method": "DoSearchForQQMusicMobile",
             "module": "music.search.SearchCgiService",
-            "param": {"num_per_page": 20, "page_num": 1, "query": f"{title} {artist}", "search_type": 0},
+            "param": {"num_per_page": 20, "page_num": 1, "query": f"{title} {artist}",
+                      "search_type": 0, "grp": 1},
         },
     }
     found = requests.post(
         "https://u.y.qq.com/cgi-bin/musicu.fcg", json=body,
         headers={"User-Agent": UA, "Referer": "https://y.qq.com/"}, timeout=TIMEOUT,
     ).json()
-    songs = (((found.get("req_1") or {}).get("data") or {}).get("body") or {}).get("song", {}).get("list") or []
+    data = (((found.get("req") or {}).get("data") or {}).get("body") or {})
+    songs = data.get("item_song") or (data.get("song") or {}).get("list") or []
     cands = [
-        (s, s.get("name", ""),
+        (s, s.get("title") or s.get("name", ""),
          '/'.join(a.get("name", "") for a in (s.get("singer") or [])),
          float(s.get("interval") or 0))  # interval 單位是秒
-        for s in songs if _title_matches(title, s.get("name", ""))
+        for s in songs if _title_matches(title, s.get("title") or s.get("name", ""))
     ]
     song = _pick_song(cands, artist, duration)
     if not song:
