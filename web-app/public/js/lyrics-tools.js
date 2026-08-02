@@ -238,6 +238,20 @@ document.addEventListener('mouseover', (e) => {
 
 // 把備選歌詞畫進視窗的清單。searching=true 時 (server 還在問剩下的來源) 尾巴加一行提示,
 // 讓「已有的結果先看」跟「還在補」分得出來。
+/**
+ * 這一份候選歌詞是什麼格式。三種:
+ *   逐字 —— 帶每個字的起唱時間 (只有 QQ 的 QRC 有),卡拉OK填色最準
+ *   LRC  —— 只有每一行的時間
+ *   TXT  —— 沒有時間軸,整份純文字
+ * 標的是**這份檔案本身**的格式。選了非逐字的那份不代表就沒有卡拉OK ——
+ * 逐字時間是整首歌一份、跨來源比對回來的 (見 web-app/word-times.js)。
+ */
+function optFormat(opt) {
+    if (opt.hasWords) return { cls: 'word', label: '逐字', hint: '每個字都有時間,卡拉OK填色最準' };
+    if (opt.isSynced) return { cls: 'synced', label: 'LRC', hint: '每一行有時間' };
+    return { cls: 'plain', label: 'TXT', hint: '純文字,沒有時間軸' };
+}
+
 function renderOptionsList(options, searching = false) {
     const listEl = document.getElementById('lyrics-options-list');
     if (!listEl) return;
@@ -254,7 +268,7 @@ function renderOptionsList(options, searching = false) {
                 <div class="opt-sub opt-scroll"><span>${opt.artist}${opt.album ? ' [' + opt.album + ']' : ''}</span></div>
             </div>
             <div class="opt-tags">
-                <div class="opt-badge ${opt.isSynced ? 'synced' : 'plain'}">${opt.isSynced ? 'LRC' : 'TXT'}</div>
+                <div class="opt-badge ${optFormat(opt).cls}" title="${optFormat(opt).hint}">${optFormat(opt).label}</div>
                 <div class="opt-provider">${opt.provider || 'Unknown'}</div>
             </div>
         </div>

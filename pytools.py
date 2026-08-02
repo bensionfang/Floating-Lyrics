@@ -84,7 +84,10 @@ def main():
                 _stash(results, True)
                 print(json.dumps({
                     "success": True,
-                    "results": [{"lyrics": r["lyrics"], "source": r["source"]} for r in results]
+                    # word:這一份本身帶不帶逐字時間 (只有 QQ 的 QRC 有)。備選歌詞視窗
+                    # 要標出格式,所以旗標得跟著每一筆走,不能只看有沒有 stash 進 DB
+                    "results": [{"lyrics": r["lyrics"], "source": r["source"],
+                                 "word": bool(r.get("word_times"))} for r in results]
                 }, ensure_ascii=False))
             else:
                 r = cn_music.fetch(q_artist, q_title, source, duration)

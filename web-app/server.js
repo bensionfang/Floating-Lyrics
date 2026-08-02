@@ -1752,6 +1752,9 @@ async function searchOptions({ title, artist, searchTitle, searchArtist }, onPro
             duration: 0,
             lyrics: autoMarkTitleLines(`[source:${cn.source}]\n${cn.lyrics}`, title),
             isSynced: /\[\d{2}:\d{2}/.test(cn.lyrics),
+            // 這一份原始檔帶不帶逐字時間 (只有 QQ 的 QRC 有)。標的是**這份候選的格式**,
+            // 不是「選了它就有卡拉OK」—— 逐字時間是整首歌一份、跨來源比對回來的
+            hasWords: !!cn.word,
             provider: cn.source,
             score: 1500
           });
@@ -1857,7 +1860,8 @@ function finalizeOptions(valid_lyrics, cleanTitle, artist, originalTitle = '') {
       lyrics: x.lyrics,
       score: x.score,
       provider: x.provider,
-      isSynced: x.isSynced
+      isSynced: x.isSynced,
+      hasWords: !!x.hasWords
     }));
   }
 }

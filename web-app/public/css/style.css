@@ -2110,6 +2110,12 @@ body.window-maximized .fullscreen-btn .icon-compress { display: inline !importan
     color: #9e9e9e;
 }
 
+/* 逐字 (QQ 的 QRC):比一般 LRC 更好,所以顏色要比綠色更亮眼一階 */
+.opt-badge.word {
+    background: rgba(255, 193, 7, 0.18);
+    color: #ffc107;
+}
+
 .opt-provider {
     font-size: 10px;
     color: var(--text-secondary);

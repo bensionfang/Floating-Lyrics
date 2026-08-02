@@ -110,6 +110,7 @@ One Node.js backend, multiple thin clients, with Python scripts as helpers spawn
     - **沒有開關,有逐字就套。** 這跟 `show_romaji`/`show_translation` 不是同一類東西:那兩個是「多顯示一行資訊」,卡拉OK填色只是同一行歌詞的高亮方式,有逐字就逐字亮、沒有就整句勻速亮,使用者沒有理由要去選。**不要為它加設定。**
     - 舊的 `.lyrics-line.active rt { color:#fff }` 已經拿掉:當前句的注音改成跟著它的漢字逐字亮,不再一次全白。
     - **島與行動版的 `parseLrc` 各要吃掉 `#WORDS#`**(同 `#ROMAJI#` 的理由):三個客戶端吃的是同一份廣播字串,不丟就會多出一行數字閃過去。
+    - 備選歌詞視窗的格式標籤有三種:**逐字** (黃,QQ 的 QRC) / **LRC** (綠,只有行級時間) / **TXT** (灰,沒有時間軸)。旗標 `hasWords` 由 `pytools cnlyrics` 的 `source:'all'` 逐筆帶出來 —— **不能只看 DB 有沒有 stash**,那是整首歌一份、只記第一個有的來源,分不出是哪一筆候選。標的是**那份檔案本身的格式**,不是「選了它才有卡拉OK」:逐字時間是跨來源比對回來的,選 NetEase 那份照樣會填。
     - 回歸測試 `node tests/test_word_times.js`。
   - **`_fetch_qqmusic` 的搜尋 module 是 `DoSearchForQQMusicMobile` 不是 `...Desktop`。** Desktop 那支已經對任何字串都回 0 筆 (`code` 仍然是 0、空 list,不報錯),純中文歌 `晴天 周杰伦` 也一樣 —— 不是限流也不是日文的問題。它靜默死掉的期間 QQ 這一家等於整個不存在:歌詞快取 378 首裡 QQ 佔 0 首,羅馬字提示也少了唯一把 `私` 讀對的來源。Mobile 那支的結果在 `req.data.body.item_song`,欄位是 `title` 不是 `name`,其餘形狀相同。
   - **瀏覽器 (YouTube) 來源的三道處理都以 `web-app/browser-query.js` 的 `isMusicAppSource()` 為閘門** (`MUSIC_APPS` 是 `media_monitor.py` 那份的手動鏡射;未知來源保守當音樂 app)。
