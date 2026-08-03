@@ -148,7 +148,10 @@
     // Load data when page displays
     document.addEventListener('DOMContentLoaded', () => {
         loadStatsData(false);
-        setInterval(() => { loadStatsData(false); }, 5000);
+        // 30 秒而不是 5 秒:一筆聆聽紀錄最快也要播滿 30 秒才寫得進去 (server.js 的 logListen),
+        // 5 秒問一次只是把四張 Chart 重建一遍。分頁在背景時整個不問,切回前景立刻補一次校正。
+        setInterval(() => { if (!document.hidden) loadStatsData(false); }, 30000);
+        document.addEventListener('visibilitychange', () => { if (!document.hidden) loadStatsData(false); });
     });
 
     async function loadStatsData(manual = false) {

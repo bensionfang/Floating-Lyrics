@@ -159,10 +159,12 @@
     document.addEventListener('DOMContentLoaded', () => {
         loadLeaderboard();
         
-        // Auto refresh every 10 seconds to avoid lagging when in active use
+        // 30 秒而不是 10 秒:一筆聆聽紀錄最快也要播滿 30 秒才寫得進去 (server.js 的 logListen)。
+        // 分頁在背景時整個不問,切回前景立刻補一次校正 (同 stats.ejs)。
         setInterval(() => {
-            loadLeaderboard(false);
-        }, 10000);
+            if (!document.hidden) loadLeaderboard(false);
+        }, 30000);
+        document.addEventListener('visibilitychange', () => { if (!document.hidden) loadLeaderboard(false); });
     });
 
     function changeType(type) {
