@@ -62,8 +62,9 @@ class DatabaseManager:
         self.cursor.execute('''CREATE TABLE IF NOT EXISTS artist_aliases (alias TEXT PRIMARY KEY, true_name TEXT)''')
         # 建立羅馬字讀音提示快取表 (data 為 JSON: {歌詞行: 平假名})
         self.cursor.execute('''CREATE TABLE IF NOT EXISTS romaji_hints (artist TEXT, title TEXT, data TEXT, PRIMARY KEY (artist, title))''')
-        # LLM 讀音提示快取,獨立於 romaji_hints (保住其 {} 負快取語意;這張只存成功結果)
-        self.cursor.execute('''CREATE TABLE IF NOT EXISTS llm_hints (artist TEXT, title TEXT, data TEXT, PRIMARY KEY (artist, title))''')
+        # utaten 的人工注音提示 (data 為 JSON: {正規化後的歌詞行: 整行平假名})。
+        # 形狀同 romaji_hints,空 {} 是負快取 (查過了,utaten 沒這首)
+        self.cursor.execute('''CREATE TABLE IF NOT EXISTS utaten_hints (artist TEXT, title TEXT, data TEXT, PRIMARY KEY (artist, title))''')
         # 中文譯文快取 (data 為 JSON: {正規化後的日文行: 譯文})。定義同時寫在 server.js,改一邊要改兩邊
         self.cursor.execute('''CREATE TABLE IF NOT EXISTS lyrics_translations (artist TEXT, title TEXT, data TEXT, PRIMARY KEY (artist, title))''')
         # 逐字時間快取 (data 為 JSON: {"flow": 整首歌的正規化字元流, "ms": [每個字元的絕對毫秒]})。
@@ -165,21 +166,21 @@ class DatabaseManager:
         )
         self.conn.commit()
 
-    def get_llm_hints(self, artist: str, title: str) -> Optional[dict]:
-        """取得快取的 LLM 讀音提示。None = 沒跑過 (失敗不進快取,所以不會有空 dict)"""
-        self.cursor.execute("SELECT data FROM llm_hints WHERE artist=? AND title=?", (artist, title))
+    def get_utaten_hints(self, artist: str, title: str) -> Optional[dict]:
+        """取得快取的 utaten 注音提示。None = 沒查過,{} = 查過但 utaten 沒這首 (負快取)"""
+        self.cursor.execute("SELECT data FROM utaten_hints WHERE artist=? AND title=?", (artist, title))
         row = self.cursor.fetchone()
         if not row:
             return None
         try:
             return json.loads(row[0])
         except (ValueError, TypeError):
-            return None
+            return {}
 
-    def save_llm_hints(self, artist: str, title: str, hints: dict) -> None:
-        """儲存 LLM 讀音提示 (只在成功時呼叫;魔杖強制重跑時覆寫)"""
+    def save_utaten_hints(self, artist: str, title: str, hints: dict) -> None:
+        """儲存 utaten 注音提示。空 dict 也要存,當作負快取避免每次播都重爬"""
         self.cursor.execute(
-            "INSERT OR REPLACE INTO llm_hints VALUES (?, ?, ?)",
+            "INSERT OR REPLACE INTO utaten_hints VALUES (?, ?, ?)",
             (artist, title, json.dumps(hints, ensure_ascii=False))
         )
         self.conn.commit()

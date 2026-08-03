@@ -4,7 +4,13 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # repo 根,才 import 得到受測模組
 
+import furigana_inject
 from furigana_inject import apply_hint
+
+# process_lrc 會去問外部來源 (cn_music 的羅馬字、utaten 的注音)。這支是離線單元測試,
+# hint 一律由各案例自己明確給,所以把整條抓取路徑短路掉 —— 不然跑測試會打網路,
+# 而且結果會隨那兩家當下有沒有資料而飄。
+furigana_inject.get_hints = lambda *a, **k: ({}, {})
 
 def hira_of(words, orig):
     return next(w['hira'] for w in words if w['orig'] == orig)
@@ -85,11 +91,11 @@ print('OK')
 # 8. unidic 把「名詞 + 君」黏成罕見詞條時,兩個字會同時標錯 (道君 ドウクン、中君 ナカノキミ)。
 #    羅馬字來源也跟著錯,所以拆詞要在 apply_hint 之後才生效。
 mq = build_ruby_html('新しい道君と進むだけ', 'muque', 'bestie',
-                     [('あたらしいどうくんとすすむだけ', False)])
+                     ['あたらしいどうくんとすすむだけ'])
 assert "data-orig='道' data-hira='みち'" in mq, mq
 assert "data-orig='君' data-hira='きみ'" in mq, mq
 ak = build_ruby_html('光の中君を愛すよ', 'AKASAKI', '夏実',
-                     [('ひかりのちゅうくんをあいすよ', False)])
+                     ['ひかりのちゅうくんをあいすよ'])
 assert "data-orig='中' data-hira='なか'" in ak, ak
 assert "data-orig='君' data-hira='きみ'" in ak, ak
 # 通則會誤殺的真詞:詞性跟 道君/中君 完全一樣,所以 _SPLIT_WORD 只能是列表不能是規則
@@ -103,7 +109,7 @@ print('OK')
 assert '<rt>い</rt>' in build_ruby_html('食み出せば好いさ', 'NOMELON NOLEMON', 'SUGAR')
 # hint 說 よい 也要被壓過去 (_COMMON_READING 在 apply_hint 之上)
 ant = build_ruby_html('良いから一緒に堕ちろよ', 'Chevon', 'antlion',
-                      [('よいからいっしょにおちろよ', False)])
+                      ['よいからいっしょにおちろよ'])
 assert "data-orig='良' data-hira='い'" in ant, ant
 # 誤殺守門:活用形與複合詞照舊 よ
 assert "data-hira='よ'" in build_ruby_html('良くない', 'x', 'y')
@@ -111,7 +117,7 @@ assert '<rt>なかよ</rt>' in build_ruby_html('仲良くしよう', 'x', 'y')
 
 print('OK')
 
-# 9. hint 比預測「多字」時不可以硬切:その他 的 fugashi 預測是 そのた,LLM 給 そのほか,
+# 9. hint 比預測「多字」時不可以硬切:その他 的 fugashi 預測是 そのた,hint 給 そのほか,
 #    舊版會把 他 標成單一個「か」(長度相同、是假名、沒有送り仮名可比,三道關卡都攔不住)。
 #    破綻在左邊的 その 這時對到「そのほ」—— 對不上自己就代表這一帶對歪了,整個跳過。
 words = [{'orig': 'その', 'hira': 'その'}, {'orig': '他', 'hira': 'た'},
@@ -127,19 +133,12 @@ assert hira_of(words, '君') == 'きみ', hira_of(words, '君')
 
 print('OK')
 
-# 10. LLM 層 (mark=True) 只接受與原讀音等長的候選:apply_hint 是按「預測讀音長度」切 hint 的
-#     字串,一旦切歪就會截斷 (本性 ほんしょう(5) 被切成 4 字的「ほんしょ」)。羅馬字層 (mark=False)
-#     不受影響 —— 那邊的長度差異另有成因 (づ/ず、長音),收緊會誤殺。
-words = [{'orig': '本性', 'hira': 'ほんしょう', 'is_space': False}]
-apply_hint(words, 'ほんしょ', mark=True)
-assert hira_of(words, '本性') == 'ほんしょう', hira_of(words, '本性')  # 長度不對,不採用
-words = [{'orig': '本性', 'hira': 'ほんしょう', 'is_space': False}]
-apply_hint(words, 'ほんしょ', mark=False)
-assert hira_of(words, '本性') == 'ほんしょ'  # 羅馬字層照舊不設長度門檻
-
-# 等長的修正,mark=True 照樣要能套用 (官能 かんおう→かんのう,兩邊都是 4 字)
-words = [{'orig': '官能', 'hira': 'かんおう', 'is_space': False}]
-apply_hint(words, 'かんのう', mark=True)
-assert hira_of(words, '官能') == 'かんのう', hira_of(words, '官能')
+# 10. utaten 的人工注音**不設長度門檻**:它給的是完整假名,長度變化本身就是正解的一部分
+#     (花人局 的 夜 = よる → よ 就是變短而且是對的)。這條擋的是「哪天有人想加一道
+#     『候選必須與原讀音等長』的門檻」—— 加了就會把這類正確修正一起砍掉。
+words = [{'orig': '夜', 'hira': 'よる', 'is_space': False},
+         {'orig': 'が', 'hira': 'が', 'is_space': False}]
+apply_hint(words, 'よが')
+assert hira_of(words, '夜') == 'よ', hira_of(words, '夜')
 
 print('OK')

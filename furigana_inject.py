@@ -16,8 +16,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 import fugashi
 from db import db
 from cn_music import fetch_hints, normalize_line
-import llm_furigana
-from llm_furigana import get_llm_hints
+import utaten
 
 tagger = fugashi.Tagger()
 
@@ -87,7 +86,7 @@ def _keeps_okurigana(orig, candidate):
             return False
     return True
 
-def apply_hint(words, hint, mark=False):
+def apply_hint(words, hint):
     """
     用羅馬字來源的整行假名 (hint) 校正 fugashi 的分詞讀音。
 
@@ -159,11 +158,7 @@ def apply_hint(words, hint, mark=False):
             continue  # 只是羅馬字轉換的等價差異,不動
         if not _keeps_okurigana(w['orig'], candidate):
             continue  # 對齊歪掉了,見 _keeps_okurigana
-        if mark and len(candidate) != len(w['hira']):
-            continue  # LLM 層長度對不上原讀音 = 切歪被截斷,不採用 (羅馬字層不設此門檻)
 
-        if mark:
-            w['llm_prev'] = w['hira']  # LLM 蓋掉前的讀音,前端標記「AI 改了這個」用
         w['hira'] = candidate
 
 _KANA_SEG = re.compile(r'[぀-ヿ]+|[^぀-ヿ]+')
@@ -213,18 +208,19 @@ def split_internal_kana(orig_chunk, hira_chunk, full_orig, full_hira, h_off=0):
             out.append(_ruby(seg, hira_chunk[s:e], full_orig, full_hira, h_off + s))
     return ''.join(out)
 
-def build_ruby_html(text, artist, title, hints=(), kata_ruby=False):
+def build_ruby_html(text, artist, title, hints=(), kata_ruby=False, uta_words=None):
     """
     將單行純文字歌詞轉換為包含 <ruby> 標籤的 HTML。
-    hints 為該行的正解假名候選,依序套用 (羅馬字 hint 先、LLM hint 後,後者蓋前者)。
+    hints 為該行的正解假名候選,依序套用 (羅馬字 hint 先、utaten 的整行注音後,後者蓋前者)。
+    uta_words 是 utaten 的**逐詞**讀音表,補行對齊救不回來的詞 (見下面套用處)。
     kata_ruby 開啟時,純片假名的詞也標上平假名讀音 (給讀不了片假名的使用者)。
     """
     if not text.strip():
         return text
 
     # 歌詞是外部來源的字串,而前端是 innerHTML 畫出來的 —— 不逃逸的話,網易/QQ/酷狗上
-    # 任何人上傳一份帶 <img onerror=…> 的歌詞就能在同源執行腳本 (改 llm_base_url 再觸發
-    # LLM 校正,BYOK 的 key 就送出去了)。逃逸放在分詞「之前」是刻意的:之後才逃逸會把
+    # 任何人上傳一份帶 <img onerror=…> 的歌詞就能在同源執行腳本 (跨站改設定再觸發需要它的
+    # 端點)。逃逸放在分詞「之前」是刻意的:之後才逃逸會把
     # 自己產生的 <ruby> 標籤一起吃掉。實體字串 (&lt; 這種) 對 fugashi 只是符號,原樣通過;
     # data-orig 帶實體字串也沒差,前端讀 dataset 時瀏覽器會自動解碼回原字。
     # hints 是呼叫端用「未逃逸」的原文算好的,所以要放在函式參數之後、分詞之前。
@@ -250,10 +246,10 @@ def build_ruby_html(text, artist, title, hints=(), kata_ruby=False):
     if pos < len(text):
         words.append({'orig': text[pos:], 'hira': text[pos:], 'is_space': True})
 
-    # 用羅馬字/LLM 來源的假名校正小辭典挑錯的讀音 (依序疊加,各自過 apply_hint 的 guard)
-    # hints 元素為 (整行假名, 是否為 LLM 層);只有 LLM 層要留下修改標記
-    for hint, mark in hints:
-        apply_hint(words, hint, mark)
+    # 用外部來源的假名校正字典挑錯的讀音 (依序疊加,各自過 apply_hint 的 guard):
+    # 羅馬字 hint 先、utaten 的人工注音後,後者蓋前者
+    for hint in hints:
+        apply_hint(words, hint)
 
     # 黏成一個詞條的「X君」拆回兩個詞,兩個字才各自標對 (見 _SPLIT_WORD)。
     # 要在 apply_hint 之後:羅馬字 hint 是整行對齊的,先拆會讓它把錯讀音貼回來。
@@ -267,19 +263,14 @@ def build_ruby_html(text, artist, title, hints=(), kata_ruby=False):
     words = expanded
 
     # 連羅馬字來源也一起錯的字,用預設表壓過去 (見 _COMMON_READING)
-    # 這層蓋掉 LLM 的值時標記要一起收回,不然會把預設表的讀音掛名給 AI
     for w in words:
         if not w.get('is_space') and w['orig'] in _COMMON_READING:
-            if w['hira'] != _COMMON_READING[w['orig']]:
-                w.pop('llm_prev', None)
             w['hira'] = _COMMON_READING[w['orig']]
 
     # 親族呼稱接敬稱時改用暱稱讀音 (兄さん = にいさん,而非字典的 あにさん)
     non_space = [w for w in words if not w.get('is_space')]
     for a, b in zip(non_space, non_space[1:]):
         if a['orig'] in _KINSHIP_READING and b['orig'] in _HONORIFIC:
-            if a['hira'] != _KINSHIP_READING[a['orig']]:
-                a.pop('llm_prev', None)
             a['hira'] = _KINSHIP_READING[a['orig']]
 
     html_parts = []
@@ -327,11 +318,25 @@ def build_ruby_html(text, artist, title, hints=(), kata_ruby=False):
         root_orig = orig[k:i+1]
         root_hira = hira[m:j+1]
 
-        # 查詢資料庫，檢查是否有使用者自訂的修正發音 (蓋掉 LLM 的話標記一起收回)
+        # utaten 的逐詞讀音。**套用點在這裡而不是上面的 token 迴圈**:utaten 的 <rb> 只有漢字
+        # 核心 (静寂、覚),而 fugashi 的 token 常常連著送り仮名 (覚束ぬ),比 token 就對不上;
+        # root_orig 正是削掉前後綴之後的漢字核心,也就是 word_corrections 的同一把鍵。
+        #
+        # 這一層補的是 apply_hint 的先天限制:它按「fugashi 預測的讀音長度」去切整行 hint,
+        # 兩邊長度差太多時 (静寂:せいじゃく 5 字 vs しじま 3 字) 守門會整個放棄 —— 而那正是
+        # 最需要修的那種詞。實測這一層讓命中從 29/39 再往上走。
+        #
+        # **`_COMMON_READING` 仍然在它之上**:那四筆是使用者驗證過的,而 utaten 是爬回來的,
+        # 沒有理由讓爬蟲蓋掉手工結論 (而且那四個詞 utaten 給的多半一樣,蓋不蓋沒有差)。
+        if uta_words and item['orig'] not in _COMMON_READING:
+            uta_hira = uta_words.get(root_orig)
+            if uta_hira:
+                root_hira = uta_hira
+
+        # 查詢資料庫，檢查是否有使用者自訂的修正發音 (使用者永遠最上層)
         db_hira = db.get_word_correction(artist, title, root_orig)
         if db_hira is not None:
             root_hira = db_hira
-            item.pop('llm_prev', None)
 
         if not root_orig:
             # 讀音 = 原文 (unidic 查不到的字,中文歌整行都是這種),前後綴一削就沒東西剩。
@@ -346,20 +351,20 @@ def build_ruby_html(text, artist, title, hints=(), kata_ruby=False):
         else:
             # 處理可能還有內部假名的複雜組合
             part_html = f"{prefix}{split_internal_kana(root_orig, root_hira, root_orig, root_hira)}{suffix}"
-            # LLM 改過的詞:每顆 ruby 加標記 class + 整詞原讀音 (編輯模式亮綠、懸停看原讀音)
-            if item.get('llm_prev'):
-                part_html = part_html.replace(
-                    "class='editable-ruby'",
-                    f"class='editable-ruby llm-ruby' data-llm-prev='{html.escape(item['llm_prev'])}'")
             html_parts.append(part_html)
             
     return "".join(html_parts)
 
-def get_hints(artist, title, lrc_text, force_llm=False):
+def get_hints(artist, title, lrc_text):
     """
-    取得整首歌的讀音提示:(羅馬字 hint, LLM hint) 兩層,後者套在前者之上。
+    取得整首歌的讀音提示:(羅馬字 hint, utaten hint) 兩層,後者套在前者之上。
     只有含漢字的歌詞才值得抓,英文歌直接跳過以免多打一次網路請求。
-    force_llm 由前端魔杖觸發:無視模式強制重跑 LLM 並覆寫其快取。
+
+    **utaten 在上面是因為它是人標的,羅馬字是機器產的。** 量測 (2026-08-04,使用者手改的
+    word_corrections 當標準答案,5 首歌 16 個詞):字典 9/16 → ＋羅馬字 10/16 → ＋utaten 15/16。
+    唯一沒中的是「那個詞在 utaten 頁面上沒標注音」,不是標錯。
+    羅馬字那層留著:utaten 只涵蓋約 7 成的歌,而且找到的歌也只有約 7 成的行有注音,
+    沒被 utaten 蓋到的地方仍然靠它。
     """
     if not re.search(r'[一-龯々]', lrc_text):
         return {}, {}
@@ -372,14 +377,18 @@ def get_hints(artist, title, lrc_text, force_llm=False):
     except Exception as e:
         print(f"[furigana] romaji hints unavailable: {e}", file=sys.stderr)
         romaji = {}
-    llm = {}
+    uta = {}
     try:
-        llm = get_llm_hints(artist, title, lrc_text, has_romaji=bool(romaji), force=force_llm)
+        uta = db.get_utaten_hints(artist, title)
+        if uta is None:
+            uta = utaten.fetch_hints(artist, title, lrc_text)
+            db.save_utaten_hints(artist, title, uta)
     except Exception as e:
-        print(f"[furigana] llm hints unavailable: {e}", file=sys.stderr)
-    return romaji, llm
+        print(f"[furigana] utaten hints unavailable: {e}", file=sys.stderr)
+        uta = {}
+    return romaji, uta
 
-def process_lrc(artist, title, lrc_text, force_llm=False, kata_ruby=False):
+def process_lrc(artist, title, lrc_text, kata_ruby=False):
     """
     處理整份 LRC 格式的歌詞檔案，逐行轉換為 ruby HTML 格式
     並保留原始的時間標籤。
@@ -390,10 +399,11 @@ def process_lrc(artist, title, lrc_text, force_llm=False, kata_ruby=False):
     if not re.search(r'[぀-ヿ]', lrc_text):
         # 沒經過 build_ruby_html 就直接回去,逃逸要自己做一次 (見那邊的說明)
         return html.escape(lrc_text)
-    romaji, llm = get_hints(artist, title, lrc_text, force_llm=force_llm)
+    romaji, uta = get_hints(artist, title, lrc_text)
+    uta_lines, uta_words = utaten.split_hints(uta)
     def line_hints(text):
         k = normalize_line(text)
-        return [(h, is_llm) for h, is_llm in ((romaji.get(k), False), (llm.get(k), True)) if h]
+        return [h for h in (romaji.get(k), uta_lines.get(k)) if h]
     lines = lrc_text.split('\n')
     new_lines = []
     for line in lines:
@@ -411,7 +421,7 @@ def process_lrc(artist, title, lrc_text, force_llm=False, kata_ruby=False):
             if text.startswith("#TITLE#"):
                 ruby_text = "#TITLE#" + html.escape(text[len("#TITLE#"):])
             else:
-                ruby_text = build_ruby_html(text, artist, title, line_hints(text), kata_ruby)
+                ruby_text = build_ruby_html(text, artist, title, line_hints(text), kata_ruby, uta_words)
             new_lines.append(f"{tags}{ruby_text}")
         elif re.match(r'^\[[a-zA-Z]+:.*\]$', line):
             # 保留 LRC 檔案頭部的 Meta 標籤 (如 [ar:Artist])
@@ -421,7 +431,7 @@ def process_lrc(artist, title, lrc_text, force_llm=False, kata_ruby=False):
             if line.startswith("#TITLE#"):
                 ruby_text = "#TITLE#" + html.escape(line[len("#TITLE#"):])
             else:
-                ruby_text = build_ruby_html(line, artist, title, line_hints(line), kata_ruby)
+                ruby_text = build_ruby_html(line, artist, title, line_hints(line), kata_ruby, uta_words)
             new_lines.append(ruby_text)
             
     return '\n'.join(new_lines)
@@ -437,13 +447,8 @@ def main():
         
         if lyrics:
             injected_lyrics = process_lrc(artist, title, lyrics,
-                                          force_llm=data.get("force_llm", False),
                                           kata_ruby=data.get("katakana_ruby", False))
-            result = {"success": True, "lyrics": injected_lyrics}
-            # 魔杖強制重跑時把 LLM 失敗原因帶回去,server 才不會把「請求失敗」報成「校正完成」
-            if data.get("force_llm") and llm_furigana.LAST_ERROR:
-                result["llm_error"] = llm_furigana.LAST_ERROR
-            print(json.dumps(result, ensure_ascii=False))
+            print(json.dumps({"success": True, "lyrics": injected_lyrics}, ensure_ascii=False))
         else:
             print(json.dumps({"success": False, "error": "No lyrics provided"}))
     except Exception as e:
