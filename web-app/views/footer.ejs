@@ -1113,6 +1113,40 @@
             }
         });
 
+        // ───────────────────────────────────────────────────────────────
+        // 播放狀態的**唯一**連線。footer 每一頁都會載入,所以 socket 開在這裡,首頁的
+        // app.js 靠 window.onMediaMessage 掛上去 (它自己不再 new WebSocket)。
+        //
+        // **這段必須在下面那個 `if (!lyrics-scroll)` 之外** —— 那個判斷是「非首頁」,
+        // 包進去的話首頁就沒有 onMediaMessage,app.js 一呼叫就是 TypeError,整支腳本死掉。
+        //
+        // **也不要退回輪詢 /api/current-media。** 那支回的是整份 currentMediaState —— 含
+        // base64 封面,一則約 171 KB。播放列以前是**每 1 秒**打一次、而且每一頁都在跑
+        // (統計、排行榜、編輯器…),等於常態 171 KB/s;首頁還要再加 app.js 自己那條 100ms 的。
+        // server 的 broadcastMediaState 早就節流過 (1 秒一次、封面沒變就不送那個鍵)。
+        // ───────────────────────────────────────────────────────────────
+        window.__mediaHandlers = [];
+        window.onMediaMessage = (fn) => window.__mediaHandlers.push(fn);
+        // 連線活著時保底輪詢整個不要打 —— 那支回的是整份狀態,問一次就是 171 KB,
+        // 「反正只有 2 秒一次」仍然是常態 85 KB/s。兩個輪詢 (這裡與 app.js) 都看這個旗標。
+        window.__mediaSocketAlive = false;
+        (function connectMediaSocket() {
+            const connect = () => {
+                let ws;
+                try { ws = new WebSocket(`ws://${location.host}`); } catch (e) { return setTimeout(connect, 3000); }
+                ws.onopen = () => { window.__mediaSocketAlive = true; };
+                ws.onmessage = (ev) => {
+                    let msg;
+                    try { msg = JSON.parse(ev.data); } catch (e) { return; }
+                    // 一個 handler 丟例外不能害其他 handler 收不到訊息
+                    window.__mediaHandlers.forEach((fn) => { try { fn(msg); } catch (e) {} });
+                };
+                ws.onclose = () => { window.__mediaSocketAlive = false; setTimeout(connect, 3000); };
+                ws.onerror = () => { try { ws.close(); } catch (e) {} };
+            };
+            connect();
+        })();
+
         // ── 非首頁:同步下方播放列(歌曲資訊/播放狀態/進度/靈動島狀態) ──
         // 首頁由 app.js 全權處理;這裡只給其他頁面輕量版
         if (!document.getElementById('lyrics-scroll')) {
@@ -1152,11 +1186,20 @@
 
             const fmtTime = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
             let barTitle = window.__initialMedia.title || '';   // server 已經渲染好了,別再重寫一次同樣的內容
+            let barThumb;   // 已經套用的封面 (undefined = 還沒收到過),同 app.js 的 lastThumbnail
+
+            // WS 斷線時的保底輪詢,正常情況是 applyPlayerBar 被廣播叫起來的
             async function syncPlayerBar() {
+                if (window.__mediaSocketAlive) return;
                 try {
                     const r = await fetch('/api/current-media', { cache: 'no-store' });
                     if (!r.ok) return;
-                    const d = await r.json();
+                    applyPlayerBar(await r.json());
+                } catch (e) {}
+            }
+
+            function applyPlayerBar(d) {
+                try {
                     const ppIcon = document.getElementById('play-pause-icon');
                     if (ppIcon) ppIcon.className = 'fa-solid ' + (d.is_playing ? 'fa-pause' : 'fa-play');
 
@@ -1172,11 +1215,19 @@
 
                     // lyrics-tools.js (備選歌詞 / 重新載入) 從這裡讀現在在播什麼
                     window.currentSongInfo = { title: d.title || '', artist: d.artist || '' };
+                    // 封面自己比對前後值,**不掛在換歌分支底下** (同 app.js 的 lastThumbnail):
+                    // 廣播在封面沒變時整個不送 thumbnail 這個鍵,而封面也可能比歌名晚幾則才到 ——
+                    // 掛在換歌分支裡的話那首歌會一直顯示上一首的封面
+                    if (d.thumbnail !== undefined && d.thumbnail !== barThumb) {
+                        barThumb = d.thumbnail;
+                        const cov = document.getElementById('album-cover');
+                        if (cov && d.thumbnail) cov.src = 'data:image/jpeg;base64,' + d.thumbnail;
+                    }
+
                     if (d.title !== barTitle) {
                         barTitle = d.title || '';
                         setMarqueeText(document.getElementById('current-title'), d.title || '--');
                         setMarqueeText(document.getElementById('current-artist'), d.title ? (d.artist || 'Unknown Artist') : '--');
-                        if (d.thumbnail) document.getElementById('album-cover').src = 'data:image/jpeg;base64,' + d.thumbnail;
                         // 換歌 = 上一首的備選歌詞失效;新歌若在 server 上搜過/搜尋中,把狀態接回來
                         window._lyricsOptions = [];
                         resetLyricsOptBtn();
@@ -1221,8 +1272,12 @@
             // 換頁載入:把 server 渲染的曲名/歌手包成 span 並開啟 hover 捲動 (不自動捲,換頁不算換歌)
             setMarqueeText(document.getElementById('current-title'), (window.__initialMedia.title || '--'), false);
             setMarqueeText(document.getElementById('current-artist'), (window.__initialMedia.title ? (window.__initialMedia.artist || 'Unknown Artist') : '--'), false);
+            // 播放狀態走上面那條 socket;輪詢只是 WS 斷線時的保底,所以是 2 秒不是 1 秒
+            window.onMediaMessage((msg) => {
+                if ((msg.type === 'media_state' || msg.type === 'init') && msg.state) applyPlayerBar(msg.state);
+            });
             syncPlayerBar();
-            setInterval(syncPlayerBar, 1000);
+            setInterval(syncPlayerBar, 2000);
             // 播放列的歌名由 server 渲染,上面的「換歌」分支不會在載入時觸發,
             // 所以備選歌詞的按鈕狀態 (綠色打勾/搜尋中) 要自己接回來。
             // lyrics-tools.js 是 defer 載入的,這支行內 script 跑的時候它還不存在 → 等 DOMContentLoaded

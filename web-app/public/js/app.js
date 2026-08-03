@@ -47,9 +47,11 @@ document.addEventListener('DOMContentLoaded', () => {
         isCurrentlyPlaying = !!m0.is_playing;
     }
 
-    // Start polling the system media every 100ms for smooth updates
-    setInterval(pollSystemMedia, 100);
-    connectLyricsSocket();   // 另聽 lyrics_updated,讓同一首歌的歌詞變動 (背景重查等) 即時上畫面
+    // 播放狀態主要走 WebSocket 廣播 (connectLyricsSocket → applyMediaState);這支輪詢只是
+    // WS 斷線時的保底,所以是 2 秒不是 100ms。位置的平滑度不靠它 —— 下面的 rAF 迴圈自己內插。
+    setInterval(pollSystemMedia, 2000);
+    pollSystemMedia();   // 別讓第一份狀態等 2 秒 (WS 的 init 通常更快,但連不上時就靠這次)
+    connectLyricsSocket();   // 同一條連線也吃 lyrics_updated,歌詞在背景變動時即時上畫面
     
     // High-frequency rAF loop for smooth lyrics interpolation
     function syncLoop() {
@@ -204,33 +206,86 @@ function resumeSync() {
 }// -------------------------------------------------------------
 // Live Sync Logic
 // -------------------------------------------------------------
-// 網頁靠輪詢 /api/current-media 更新,平常換歌才抓歌詞。但「無歌詞背景重查自動套用」
-// 這種同一首歌的歌詞變動不會換歌 —— 輪詢不會重抓。所以另開一條 WebSocket 專聽 server 的
-// lyrics_updated:是目前顯示這首、且內容非空,就即時重畫 (跟靈動島同一個廣播)。
+// 兩件事都吃 server 的廣播:
+//   media_state / init —— 播放狀態 (換歌、暫停、位置、封面),取代以前每 100ms 打一次
+//                          /api/current-media 的輪詢 (那支回整份狀態含 base64 封面)。
+//   lyrics_updated    —— 同一首歌的歌詞在背景變動 (無歌詞重查自動套用、魔杖跑完)。那不會
+//                          換歌,所以靠輪詢是抓不到的,只能等廣播 (跟靈動島同一條)。
+//
+// **連線本身在 footer.ejs**,那支每一頁都會載入,開一條就夠 —— 這裡只掛 handler,
+// 不要退回自己 new WebSocket (index.ejs 一定會 include footer,見那邊的註解)。
 function connectLyricsSocket() {
-    let ws;
-    const connect = () => {
-        try { ws = new WebSocket(`ws://${location.host}`); } catch (e) { setTimeout(connect, 3000); return; }
-        ws.onmessage = (ev) => {
-            let msg;
-            try { msg = JSON.parse(ev.data); } catch (e) { return; }
-            if (msg.type !== 'lyrics_updated' || !msg.lyrics) return;   // 空的交給既有抓取流程,不在這清畫面
-            if (msg.title !== lastMediaTitle || msg.artist !== lastMediaArtist) return;   // 只認目前顯示的那首
-            parseLrcLyrics(msg.lyrics);
-            renderLyrics();
-        };
-        ws.onclose = () => setTimeout(connect, 3000);
-        ws.onerror = () => { try { ws.close(); } catch (e) {} };
-    };
-    connect();
+    window.onMediaMessage((msg) => {
+        if (msg.type === 'media_state' || msg.type === 'init') {
+            if (msg.state) applyMediaState(msg.state);
+            return;
+        }
+        if (msg.type !== 'lyrics_updated' || !msg.lyrics) return;   // 空的交給既有抓取流程,不在這清畫面
+        if (msg.title !== lastMediaTitle || msg.artist !== lastMediaArtist) return;   // 只認目前顯示的那首
+        parseLrcLyrics(msg.lyrics);
+        renderLyrics();
+    });
 }
 
+const DEFAULT_COVER = 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?q=80&w=300&auto=format&fit=crop';
+let lastThumbnail;   // 已經套用在畫面上的封面 (undefined = 還沒收到過任何一份)
+
+// 封面主色 → 歌詞區底色。行動版的 public/mobile/color.js 是同一套數學,改了要一起改。
+function applyCoverColor(coverImg) {
+    try {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = coverImg.width || 56;
+        canvas.height = coverImg.height || 56;
+        ctx.drawImage(coverImg, 0, 0, canvas.width, canvas.height);
+
+        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+        let r = 0, g = 0, b = 0;
+        for (let i = 0; i < imgData.length; i += 4) {
+            r += imgData[i];
+            g += imgData[i+1];
+            b += imgData[i+2];
+        }
+        const count = imgData.length / 4;
+        r = Math.floor(r / count);
+        g = Math.floor(g / count);
+        b = Math.floor(b / count);
+
+        // Darken to ~65% brightness for Spotify-like vibrant background
+        const bgR = Math.floor(r * 0.65);
+        const bgG = Math.floor(g * 0.65);
+        const bgB = Math.floor(b * 0.65);
+
+        // Luminance check for text contrast
+        const luminance = (0.299*bgR + 0.587*bgG + 0.114*bgB);
+        const inactiveColor = luminance > 80 ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.5)';
+
+        document.documentElement.style.setProperty('--lyrics-bg', `rgb(${bgR}, ${bgG}, ${bgB})`);
+        document.documentElement.style.setProperty('--lyrics-inactive', inactiveColor);
+    } catch(e) {
+        document.documentElement.style.setProperty('--lyrics-bg', '#121212');
+        document.documentElement.style.setProperty('--lyrics-inactive', 'rgba(255, 255, 255, 0.5)');
+    }
+}
+
+// WebSocket 斷線時的保底輪詢,正常情況資料是走 media_state 廣播進 applyMediaState 的。
+// 這支以前是 100ms 一次,而 /api/current-media 回的是**整份** currentMediaState —— 含
+// base64 封面,實測一則約 171 KB,等於每秒在 loopback 上搬 1.7 MB 並 parse 十次 base64 PNG。
+// 廣播那條路早就節流過 (1 秒一次、封面沒變就不送那個鍵),只是網頁前端一直沒接上去。
 async function pollSystemMedia() {
+    // 連線活著就完全不打:那支回的是整份狀態,問一次 171 KB,2 秒一次仍是常態 85 KB/s
+    if (window.__mediaSocketAlive) return;
     try {
         const resp = await fetch('/api/current-media', { cache: 'no-store' });
         if (!resp.ok) return;
-        const data = await resp.json();
-        
+        applyMediaState(await resp.json());
+    } catch (err) {
+        // Ignore polling errors
+    }
+}
+
+function applyMediaState(data) {
+    try {
         const vd = document.getElementById('vinyl-disc');
         const ppIcon = document.getElementById('play-pause-icon');
         if (data.is_playing) {
@@ -295,52 +350,6 @@ async function pollSystemMedia() {
             setMarqueeText(document.getElementById('current-title'), data.title);
             setMarqueeText(document.getElementById('current-artist'), data.artist || 'Unknown Artist');
             
-            const coverImg = document.getElementById('album-cover');
-            // Extract dominant color from cover image once loaded
-            coverImg.onload = function() {
-                try {
-                    const canvas = document.createElement('canvas');
-                    const ctx = canvas.getContext('2d');
-                    canvas.width = coverImg.width || 56;
-                    canvas.height = coverImg.height || 56;
-                    ctx.drawImage(coverImg, 0, 0, canvas.width, canvas.height);
-                    
-                    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-                    let r = 0, g = 0, b = 0;
-                    for (let i = 0; i < imgData.length; i += 4) {
-                        r += imgData[i];
-                        g += imgData[i+1];
-                        b += imgData[i+2];
-                    }
-                    const count = imgData.length / 4;
-                    r = Math.floor(r / count);
-                    g = Math.floor(g / count);
-                    b = Math.floor(b / count);
-                    
-                    // Darken to ~65% brightness for Spotify-like vibrant background
-                    const bgR = Math.floor(r * 0.65);
-                    const bgG = Math.floor(g * 0.65);
-                    const bgB = Math.floor(b * 0.65);
-                    
-                    // Luminance check for text contrast
-                    const luminance = (0.299*bgR + 0.587*bgG + 0.114*bgB);
-                    const inactiveColor = luminance > 80 ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.5)';
-                    
-                    document.documentElement.style.setProperty('--lyrics-bg', `rgb(${bgR}, ${bgG}, ${bgB})`);
-                    document.documentElement.style.setProperty('--lyrics-inactive', inactiveColor);
-                } catch(e) {
-                    document.documentElement.style.setProperty('--lyrics-bg', '#121212');
-                    document.documentElement.style.setProperty('--lyrics-inactive', 'rgba(255, 255, 255, 0.5)');
-                }
-            };
-            
-            if (data.thumbnail) {
-                coverImg.src = 'data:image/jpeg;base64,' + data.thumbnail;
-            } else {
-                coverImg.src = 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?q=80&w=300&auto=format&fit=crop';
-            }
-
-
             fetch('/api/lyrics/offset?title=' + encodeURIComponent(data.title) + '&artist=' + encodeURIComponent(data.artist || ''))
                 .then(r => r.json())
                 .then(d => {
@@ -384,6 +393,22 @@ async function pollSystemMedia() {
             renderLyrics();
             lastLyricsKey = "";
             displayedTrackId = "";
+        }
+
+        // 封面**不掛在換歌分支底下**,自己比對前後值。兩個理由:
+        //   1. 廣播在封面沒變時會「整個不送 thumbnail 這個鍵」(server.js broadcastMediaState),
+        //      所以只有 !== undefined 才動 —— 用 truthy 判斷會在沒送的那幾則把封面打回預設圖。
+        //   2. 順帶修掉一個舊洞:封面比歌名晚幾百毫秒才到的話,掛在換歌分支裡的更新早就跑完了,
+        //      那首歌會一直顯示上一首的封面直到下次換歌。
+        if (data.thumbnail !== undefined && data.thumbnail !== lastThumbnail) {
+            lastThumbnail = data.thumbnail;
+            const coverImg = document.getElementById('album-cover');
+            if (coverImg) {
+                coverImg.onload = () => applyCoverColor(coverImg);
+                coverImg.src = data.thumbnail
+                    ? 'data:image/jpeg;base64,' + data.thumbnail
+                    : DEFAULT_COVER;
+            }
         }
 
         // 名字定案 (resolving=false) 才抓歌詞,而且同一個 (歌名, 歌手) 只抓一次。
