@@ -1740,18 +1740,27 @@ async function searchOptions({ title, artist, searchTitle, searchArtist }, onPro
     const { qTitle, qArtist, trueArtist, cleanTitle } = await buildSearchQuery(title, artist, searchTitle, searchArtist);
     const searchUrl = `https://lrclib.net/api/search?q=${encodeURIComponent(cleanTitle + ' ' + trueArtist)}`;
 
-    let valid_lyrics = [];
+    // 三家**並行**問,不要改回依序 await。這支跟 searchBestLyric 不一樣:那邊抓到好歌詞就早退,
+    // 依序是省請求;這邊要收集全部候選、沒有早退,依序就只是把延遲加起來 —— 實測 25.7 秒,
+    // 並行後 ≈ 最慢那家。代價是 cn 與 fallback 兩個 spawnPy 會同時存在 (桌面無感;雲端那台
+    // 這支端點本來就限流 5 次/5 分鐘)。
+    //
+    // 各家收在自己的桶子裡、最後**依固定順序**串起來:finalizeOptions 的排序遇到同分是穩定的
+    // (網易/酷狗與大部分 fallback 都是 1500),照完成先後 push 的話前 5 筆會每次跑都不一樣。
+    const cnBucket = [], fbBucket = [], lrcBucket = [];
+    const collected = () => [...cnBucket, ...fbBucket, ...lrcBucket];
     // 每問完一家就回報目前累積的結果 (已排序/去重過),不必等三家都問完
-    const report = () => { if (onProgress) onProgress(finalizeOptions([...valid_lyrics], cleanTitle, artist, title)); };
+    const report = () => { if (onProgress) onProgress(finalizeOptions(collected(), cleanTitle, artist, title)); };
 
     // 網易 / 酷狗 (自家 client,不經過 syncedlyrics)
+    const cnTask = (async () => {
     try {
       const cnResults = await fetchCnLyricsS2({
         title, artist, searchTitle: cleanTitle, searchArtist: trueArtist, source: 'all'
       });
       if (Array.isArray(cnResults)) {
         for (const cn of cnResults) {
-          valid_lyrics.push({
+          cnBucket.push({
             title: qTitle,
             artist: qArtist,
             album: '',
@@ -1768,13 +1777,15 @@ async function searchOptions({ title, artist, searchTitle, searchArtist }, onPro
       }
     } catch(e) {}
     report();
+    })();
 
     // Fetch from all fallback options
+    const fbTask = (async () => {
     try {
       const fbResults = await fetchFallback(qTitle, qArtist, true);
       if (fbResults && Array.isArray(fbResults)) {
         for (const fb of fbResults) {
-            valid_lyrics.push({
+            fbBucket.push({
               title: qTitle,
               artist: qArtist,
               album: '',
@@ -1788,8 +1799,10 @@ async function searchOptions({ title, artist, searchTitle, searchArtist }, onPro
       }
     } catch(e) {}
     report();
+    })();
 
     // Lrclib 掛掉/沒回應時,別把前面幾個來源已經找到的結果一起賠掉
+    const lrcTask = (async () => {
     let data = [];
     try {
       const resp = await fetch(searchUrl, { signal: AbortSignal.timeout(15000) });
@@ -1799,7 +1812,7 @@ async function searchOptions({ title, artist, searchTitle, searchArtist }, onPro
     for (const t of data) {
       const best = t.syncedLyrics || t.plainLyrics;
       if (best) {
-        valid_lyrics.push({
+        lrcBucket.push({
           title: t.trackName || '',
           artist: t.artistName || '',
           album: t.albumName || '',
@@ -1810,8 +1823,14 @@ async function searchOptions({ title, artist, searchTitle, searchArtist }, onPro
         });
       }
     }
-    
-    return finalizeOptions(valid_lyrics, cleanTitle, artist, title);
+    report();
+    })();
+
+    // 三個 task 各自把例外吞在裡面了,但 allSettled 比 all 保險 —— 哪天有人在 task 裡
+    // 加了一段沒包 try 的程式碼,用 all 會讓整支搜尋連同已經找到的結果一起賠掉
+    await Promise.allSettled([cnTask, fbTask, lrcTask]);
+
+    return finalizeOptions(collected(), cleanTitle, artist, title);
   }
 }
 

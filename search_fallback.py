@@ -9,6 +9,7 @@ import json
 import logging
 import syncedlyrics
 import requests
+from concurrent.futures import ThreadPoolExecutor
 
 # 平假名/片假名 (日文獨有)。iTunes 日區還原只在結果含假名時才採用,
 # 中文歌正確名沒假名,避免被日區隨便一個 hit 帶偏。
@@ -23,6 +24,32 @@ def fetch_single_provider(query, provider):
         return syncedlyrics.search(query, providers=[provider])
     except:
         return None
+
+
+def gather_providers(providers, queries):
+    """
+    每一家 provider 問到第一個命中的 query 變體為止,回 {provider: 歌詞或 None}。
+
+    **四家是並行的,不要改回依序 for。** 它們互不相依,而 `--all` 這條路要收集全部候選、
+    沒有早退,依序就只是把延遲加起來 —— 實測整支備選歌詞搜尋 15.6 秒裡有 11 秒全在這裡
+    (而且那一次四家一筆都沒回)。內層的 query 變體迴圈**維持依序**:那是有優先度的
+    (原名 → 羅馬字 → …),第一個命中就該收。
+
+    回傳是 dict 而不是 list,呼叫端一律照 `providers` 的順序重組 —— source 名稱會顯示在
+    UI 的來源標示上,照完成先後收就是每次跑排出來不一樣 (同 server.js searchOptions 的桶子)。
+    """
+    def first_hit(p):
+        for q_title, q_artist in queries:
+            lyric = fetch_single_provider(f"{q_title} {q_artist}", p)
+            if lyric:
+                return lyric
+        return None
+
+    if not providers:
+        return {}
+    # fetch_single_provider 自己把例外吞掉了,所以 pool.map 不會炸出來
+    with ThreadPoolExecutor(max_workers=len(providers)) as pool:
+        return dict(zip(providers, pool.map(first_hit, providers)))
 
 from utils import text_to_romaji_query, romaji_to_hiragana
 from db import db
@@ -107,17 +134,10 @@ def main():
             providers.append(p)
     
     if return_all:
-        # 獲取所有可能的備用歌詞列表
-        results = []
-        queries = generate_queries(title, artist)
-        for p in providers:
-            for q_title, q_artist in queries:
-                query = f"{q_title} {q_artist}"
-                lyric = fetch_single_provider(query, p)
-                if lyric:
-                    results.append({"lyrics": lyric, "source": p})
-                    break # 找到該平台的一個結果即可，跳出 query 迴圈
-                    
+        # 獲取所有可能的備用歌詞列表 (四家並行,見 gather_providers)
+        hits = gather_providers(providers, generate_queries(title, artist))
+        results = [{"lyrics": hits[p], "source": p} for p in providers if hits[p]]
+
         if len(results) == 0:
             try:
                 itunes_url = "https://itunes.apple.com/search"
@@ -129,17 +149,12 @@ def main():
                         jp_title = it_results[0].get("trackName", title)
                         jp_artist = it_results[0].get("artistName", artist)
                         if (jp_title != title or jp_artist != artist) and (_has_kana(jp_title) or _has_kana(jp_artist)):
-                            it_queries = generate_queries(jp_title, jp_artist)
-                            for p in providers:
-                                for q_title, q_artist in it_queries:
-                                    query = f"{q_title} {q_artist}"
-                                    lyric = fetch_single_provider(query, p)
-                                    if lyric:
-                                        results.append({"lyrics": lyric, "source": f"iTunes_Fallback({p})"})
-                                        break
+                            it_hits = gather_providers(providers, generate_queries(jp_title, jp_artist))
+                            results = [{"lyrics": it_hits[p], "source": f"iTunes_Fallback({p})"}
+                                       for p in providers if it_hits[p]]
             except:
                 pass
-                
+
         print(json.dumps({"success": True, "results": results}))
         return
 
