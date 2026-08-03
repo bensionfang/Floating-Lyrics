@@ -115,6 +115,23 @@ One Node.js backend, multiple thin clients, with Python scripts as helpers spawn
     - 行動版的 `rejectSel` 要傳 `'rt, .tr'`:譯文在手機上是 `<p>` 的子 `<span class="tr">`,不像桌面是另一顆 div,不排除就會被切成字元、跟著填色。
     - 備選歌詞視窗的格式標籤有三種:**逐字** (黃,QQ 的 QRC) / **LRC** (綠,只有行級時間) / **TXT** (灰,沒有時間軸)。旗標 `hasWords` 由 `pytools cnlyrics` 的 `source:'all'` 逐筆帶出來 —— **不能只看 DB 有沒有 stash**,那是整首歌一份、只記第一個有的來源,分不出是哪一筆候選。標的是**那份檔案本身的格式**,不是「選了它才有卡拉OK」:逐字時間是跨來源比對回來的,選 NetEase 那份照樣會填。
     - 回歸測試 `node tests/test_word_times.js`。
+  - **`searchOptions` (備選歌詞) 的三家是並行的,不要改回依序 `await`。** 它跟 `searchBestLyric` 不同:
+    那邊抓到好歌詞就早退,依序是省請求;這邊要收集**全部**候選、沒有早退,依序就只是把延遲加起來。
+    實測同一首歌 (`ヨルシカ / 春泥棒`,真實網路):**依序 27.2 秒 → 並行 18.0 秒**,剩下的時間是最慢
+    那一家 (`search_fallback.py` 內部自己還在依序問 syncedlyrics 的幾家 provider)。
+    - **各家收在自己的桶子裡,最後依固定順序 (cn → fallback → lrclib) 串起來**,不要照完成先後 push:
+      `finalizeOptions` 遇到同分是穩定排序,照完成順序會讓前 5 筆每次跑都不一樣。
+    - 代價是 cn 與 fallback 兩個 `spawnPy` 會同時存在。桌面無感;雲端那台這支端點本來就限流 5 次/5 分鐘。
+    - **`search_fallback.py` 內部的四家 provider 也是並行的** (`gather_providers`,`ThreadPoolExecutor`),
+      同樣不要改回依序 `for`。它是那 18 秒剩下的主因:實測 `YOASOBI / 夜に駆ける` 的備選歌詞搜尋,
+      有用的候選 4.7 秒就到齊,之後**整整 11 秒**都在等這四家依序跑完(而且那一次一筆都沒回)。
+      並行後整支 15.6 秒 → **9.3 秒**;`ヨルシカ / 春泥棒` 27.2 → 18.0 → **13.0 秒**。
+      - **內層的 query 變體迴圈維持依序**:那是有優先度的 (原名 → 羅馬字 → …),第一個命中就該停。
+      - `gather_providers` 回 dict 而不是 list,**呼叫端一律照 `providers` 的順序重組** —— `source`
+        名稱會顯示在 UI 的來源標示上,照完成先後收就是每次跑排出來不一樣。
+      - `--all` 以外那條路 (主歌詞抓取) **刻意維持依序**:它抓到就早退,並行等於白打三家的請求。
+      - 回歸測試 `venv\Scripts\python.exe tests/test_fallback_parallel.py` (把
+        `fetch_single_provider` 換成會睡覺的假貨,不打真的網路)。
   - **`_fetch_qqmusic` 的搜尋 module 是 `DoSearchForQQMusicMobile` 不是 `...Desktop`。** Desktop 那支已經對任何字串都回 0 筆 (`code` 仍然是 0、空 list,不報錯),純中文歌 `晴天 周杰伦` 也一樣 —— 不是限流也不是日文的問題。它靜默死掉的期間 QQ 這一家等於整個不存在:歌詞快取 378 首裡 QQ 佔 0 首,羅馬字提示也少了唯一把 `私` 讀對的來源。Mobile 那支的結果在 `req.data.body.item_song`,欄位是 `title` 不是 `name`,其餘形狀相同。
   - **瀏覽器 (YouTube) 來源的三道處理都以 `web-app/browser-query.js` 的 `isMusicAppSource()` 為閘門** (`MUSIC_APPS` 是 `media_monitor.py` 那份的手動鏡射;未知來源保守當音樂 app)。
     - 歌名去噪 `cleanBrowserQuery()`:含噪音關鍵字的整塊括號、`「」`/`『』`/`【】` 內文優先當歌名、無括號的尾綴噪音 (Official Music Video / MV / 中文字幕…)、尾段確實等於歌手時的 `歌名／歌手`、開頭確實等於歌手時的 `歌手 - 歌名` (YouTube 最常見的形狀,不剝的話快取鍵是「ヨルシカ - 春泥棒」,跟 Spotify 聽的「春泥棒」分裂成兩筆)、歌手的 `- Topic`/`VEVO` 尾綴。全部剝光時退回原始標題。`歌名／歌手` 與 `歌手 - 歌名` 用同一條判準 (正規化後互相包含),對不上就原樣留著 —— 所以歌名本身帶連字號的 (`怪獣の花唄 - replica -`) 不受影響。
@@ -203,8 +220,27 @@ GitHub repo 也已改名 `bensionfang/Kanaric`,`server.js` 的 `GITHUB_REPO` 跟
      本機看不出來,**遠端客戶端走行動網路就是每分鐘 90 MB**。
    - 規則兩條:**只有 `position` 在動時降到 1 秒一次**(島、猜歌、行動版都自己內插,不靠廣播密度);
      **`position` 以外的欄位一變就立刻送**(暫停圖示、換歌不能延遲一秒)。
-   - **封面沒變就整個不送那個鍵**。三個消費端都判斷 `thumbnail !== undefined` 才動封面,漏送不會清掉畫面。
+   - **封面沒變就整個不送那個鍵**。四個消費端都判斷 `thumbnail !== undefined` 才動封面,漏送不會清掉畫面。
      新連上的客戶端拿的是 `init`,那份仍然是完整狀態。
+   - **網頁端也吃這條廣播,不要改回輪詢 `/api/current-media`** (2026-08-04 才接上去)。那支回的是
+     **整份** `currentMediaState`——含 base64 封面,實測一則 **246 KB**。改之前有**兩個**輪詢:
+     `app.js` 的 `pollSystemMedia` 每 **100ms**(只有首頁),與 `footer.ejs` 的 `syncPlayerBar` 每 **1 秒**
+     (**每一頁**都跑,統計/排行榜/編輯器都在內)。實測 8 秒內的 `/api/current-media` 流量:
+     首頁 **82 次 / 20.2 MB**,其餘每頁 **9 次 / 2.2 MB**;改完是每頁 **1 次 / 246 KB**(那一次是
+     socket 連上之前的開場)。節流那段本來就寫好了,只是網頁端一直沒接。
+     - **連線開在 `footer.ejs`,每一頁只有一條。** 它暴露 `window.onMediaMessage(fn)` 讓各頁掛 handler;
+       `app.js` 的 `connectLyricsSocket` 只是去登記,**不要退回自己 `new WebSocket`**。
+       **那段 socket 程式碼必須放在 `if (!document.getElementById('lyrics-scroll'))` 之外** ——
+       那個判斷是「非首頁」,包進去的話首頁沒有 `onMediaMessage`,`app.js` 一呼叫就 TypeError、整支死掉
+       (實作時真的踩到)。
+     - **`window.__mediaSocketAlive` 是必要的,不是防禦性程式**:兩個保底輪詢都要看它才早退。
+       只把間隔從 100ms 改成 2 秒的話,每 2 秒仍然要拉 246 KB = 常態 123 KB/s,問題只是變小不是消失。
+     - **封面的更新因此搬出「換歌」分支,自己比對前後值**(`app.js` 的 `lastThumbnail`、`footer.ejs`
+       的 `barThumb`)。掛在換歌分支裡有兩個洞:廣播沒送 `thumbnail` 那幾則會走 `else` 把封面打回
+       預設圖(舊判斷是 truthy 不是 `!== undefined`);而封面比歌名晚幾則才到時,換歌分支早就跑完了,
+       那首歌會一直顯示上一首的封面。
+     - 驗法:Playwright 換掉 `window.WebSocket` 直接餵 `media_state`——真的 ws 物件關在
+       `connectMediaSocket` 的閉包裡,頁面外拿不到。流量則用 `page.on('response')` 累加真實 bytes。
 2. Lyrics are lazy-loaded: the **web frontend** reacts to the broadcast by calling `GET /api/lyrics/fetch`; the server checks the SQLite cache, applies artist aliases, fetches externally on miss, runs furigana injection, then broadcasts the result — the C# island never fetches on its own.
    - **iTunes 查詢「失敗」與「查過了,確定不用還原」不能混為一談。** `getResolvedMetadata` 的失敗路徑寫的是 `{ ..., failedAt }`,`cachedResolution()` 會把過了 `ITUNES_RETRY_MS` (預設 60 秒) 的失敗當成沒查過。舊版失敗也寫成一般結果,一次 3 秒逾時就讓那首歌**整個 process 生命週期**都不再嘗試還原,期間抓的歌詞用未還原的名字寫進 `cache` 與 `listening_history`,永久分裂 (實測 TUYU / ツユ 底下各存了同樣四首歌,排行榜也跟著錯)。冷卻**不能設成 0** —— 媒體監控每 0.1 秒更新一次,不擋就是請求風暴,而且永遠不定案。回歸測試 `node tests/test_itunes_resolving.js` 有一組驗這個 (用 `ITUNES_RETRY_MS` 縮短等待)。
    - **iTunes JP 給的「歌手名」要另外把關,不能沿用「含假名就收」** —— 它會把西洋歌手音譯成純片假名 (`Coldplay` → `コールドプレイ`、`Juice WRLD` → `ジュース・ワールド`),而片假名也算假名,舊版因此會把整批西洋歌改名寫進 `cache` 的鍵與排行榜。判準在 `acceptsItunesArtist()`,三條依序:(1) 原歌手名帶 CJK = 被翻譯過,結果一定是還原 (`魚韻` → `サカナクション`,曲風是「ロック」也照收);(2) 結果帶平假名或漢字 (`なとり`、`藤井 風`) —— **音譯永遠是純片假名**,帶平假名漢字就不可能是音譯;(3) 純片假名 + 原名純 ASCII 才看 `primaryGenreName`,`J-Pop`/`アニメ` 才收 (`レトロリロン` ✅ / `コールドプレイ` ❌)。
