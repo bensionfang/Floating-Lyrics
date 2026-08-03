@@ -68,13 +68,21 @@
   .lyrics p {
     margin: 0; padding: 12px 0; line-height: 1.85;
     font-size: var(--lyric-fs); text-align: var(--lyric-align);
-    color: var(--lyric-dim); font-weight: 600;
+    color: var(--text); font-weight: 600;
     transition: color .25s, opacity .25s; opacity: .85;
     /* 長按是「設循環點」,iOS 預設會跳出選取/複製泡泡蓋在歌詞上。
        **這兩行與 JS 那邊 preventDefault 掉 contextmenu 是一組的,少一件就會看到泡泡** */
     -webkit-touch-callout: none; -webkit-user-select: none; user-select: none;
   }
-  .lyrics p.on { color: var(--text); opacity: 1; }
+  .lyrics p.on { opacity: 1; }
+  /* **唱過的留白、還沒唱到的才暗** (Spotify 全螢幕歌詞那種)。預設色因此是亮的,
+     由兄弟選擇器把「當前句後面的」壓暗 —— 不必在 syncLyrics 裡逐句掛 class,
+     那要每次換句掃全部 <p>,seek 往回時還得掃回來。
+     `.before-start` 是「還沒唱到第一句」(前奏 / seek 回開頭):那時沒有任何 .on,
+     只靠上一條會整頁全白,所以由 syncLyrics 掛在容器上。**不要改用 `:not(:has(p.on))`**
+     —— 實測動態移掉 .on 時 Chromium 不重算,前面幾句會停在白的。 */
+  .lyrics p.on ~ p { color: var(--lyric-dim); }
+  .lyrics.before-start p { color: var(--lyric-dim); }
   .lyrics p.loop { background: rgba(29,185,84,.16); border-radius: 10px; }
   /* 逐字卡拉OK填色 (../js/karaoke.js 掛的 class,三個端共用同一份實作)。
      當前句本來就是亮的,所以是「還沒唱到的先暗下去」。沒有逐字資料的歌一個 class
@@ -843,6 +851,9 @@
       const prev = pane.children[activeLine];
       if (prev) { prev.classList.remove('on'); karaokeClear(prev); }
       activeLine = i;
+      // 還沒唱到第一句 (i = -1:前奏,或 seek 回開頭)。「唱過的留白」是靠預設色亮 +
+      // `p.on ~ p` 壓暗做的,那時整份沒有 .on,不掛這個 class 就會整頁全白
+      pane.classList.toggle('before-start', i < 0);
       const el = pane.children[i];
       if (!el) return;
       el.classList.add('on');
