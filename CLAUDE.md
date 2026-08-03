@@ -179,7 +179,7 @@ One Node.js backend, multiple thin clients, with Python scripts as helpers spawn
     - 連帶的坑:譯文的比對鍵是 python 用**未逃逸**的原文算的,所以 `stripRuby()` 要把實體字串解回來 —— 不解的話 `Don't` → `Don&#x27;t` → 正規化成 `Donx27t`,含 `'` 或 `&` 的行永遠對不上譯文,而且是靜默失效。
     - 回歸測試:`python tests/test_furigana_hint.py` 第 7 組、`node tests/test_translations.js`。
 - **`web-app/views/*.ejs` + `web-app/public/`** — web frontend (lyrics editor, leaderboard, stats).
-- **`lyrics_data.db`** (repo root, SQLite, WAL mode): tables `cache` (lyrics keyed by artist+title), `listening_history`, `sync_offsets`, `word_corrections` (user furigana overrides), `artist_aliases` (maps Spotify's translated artist names back to originals, e.g. 魚韻 → サカナクション), `romaji_hints` (per-song reading hints from `cn_music`; an empty `{}` is a negative-cache entry meaning "already looked, no source has it"), `word_times` (逐字卡拉OK的時間資料,見上面那節). Path configurable via `DB_PATH` env var. The .db file is gitignored (`*.db`),每台機器各自初始化。
+- **`lyrics_data.db`** (repo root, SQLite, WAL mode): tables `cache` (lyrics keyed by artist+title), `listening_history`, `sync_offsets`, `word_corrections` (user furigana overrides), `utaten_hints` (utaten 的人工注音,見下), `artist_aliases` (maps Spotify's translated artist names back to originals, e.g. 魚韻 → サカナクション), `romaji_hints` (per-song reading hints from `cn_music`; an empty `{}` is a negative-cache entry meaning "already looked, no source has it"), `word_times` (逐字卡拉OK的時間資料,見上面那節). Path configurable via `DB_PATH` env var. The .db file is gitignored (`*.db`),每台機器各自初始化。
   - **歌手名收斂在 `handleMediaUpdate` 做,只此一處。** 每張表的鍵都是 (artist, title),而不同播放 app 對同一位歌手給不同寫法 (Spotify 給「魚韻」、YouTube 給「サカナクション」),同一首歌就會分裂成兩筆。解法是進 `handleMediaUpdate` 時就用 `artistAliases` Map (開機載入 `artist_aliases` 全表,`/api/aliases` 增刪後同步更新;`handleMediaUpdate` 是同步的,不能在那等 `db.get`) 把名字換成正規名,下游的 cache、listening_history、Python 端讀音提示全部自動一致。**不要在各處寫入點各包一次,也不要為了「分開不同來源」把 source 加進主鍵** —— 實測重複全來自 metadata 字串,加 source 一列都修不掉,反而讓五張表都要改鍵。舊資料用 `scripts/merge_aliases.py` 一次性收斂 (預設 dry-run,`--apply` 才寫入並自動備份)。
   - `listening_history` 另有 `base_title` (virtual generated column,剝掉第一個括號起的尾綴):統計/排行榜一律 GROUP BY 它,讓 `(Live)`/`(feat. …)` 算同一首。**歌詞類的表刻意不加這欄** —— Live 版歌詞本來就不同,必須分開快取。定義同時寫在 server.js 建表處與 `db.py`,改一邊要改兩邊。
   - **`track_history` 設定 (預設 true) 的閘門只在 `global.logListen`,不要在別處再判斷一次。** `listening_history` 只有這一個寫入點 (換新歌、暫停後續播兩條計時器路徑共用);判斷刻意放在計時器「觸發時」而非排程時,使用者播到一半關掉就真的不會被記錄。關閉時側欄的統計數據/排行榜也一起隱藏 (`.nav-stats-item`,SSR 靠 `res.locals.settings` 決定,不然會閃一下才隱藏),但**路由保留** —— 關掉是「不記錄 / 不礙眼」,不是鎖起來。舊的 `/api/play-event` 是雲端同步時代的遺留、沒有任何呼叫者,已刪除,不要為了「外部 agent 也能回報」加回來。
@@ -404,32 +404,73 @@ Reading errors are **not** a tokenizer problem, and swapping dictionaries is a d
 
 Don't re-run this. The errors that remain are mostly single-kanji on'yomi/kun'yomi coin-flips (談 はなし/だん, 角 かど/かく, 相 あい/そう) that no dictionary can settle without context. The two levers that *do* work are **better source data** (adding QQ's romaji track fixed 私, which fugashi and Kugou both got wrong) and, if ever needed, an **LLM pass for homograph disambiguation** — designed below, not yet implemented.
 
-### LLM 同形詞消歧 (BYOK, 已實作 2026-07)
+### utaten 的人工注音 (讀音提示的第三層,2026-08-04)
 
-實作:`llm_furigana.py` (請求/解析/模式與快取決策)、`db.py` 的 `llm_hints` 表、`furigana_inject.py` 的 `get_hints()` 回傳 (羅馬字, LLM) 兩層、server.js 的 `/api/llm-key` 與 `/api/llm-furigana/run`、header.ejs「AI 讀音校正」小節、footer.ejs 魔杖按鈕。以下設計說明即現行行為。
+`utaten.py` — 爬 utaten.com 的 ふりがな 歌詞。它是**人標的**,而且伺服器端就渲染成
+`<span class="ruby"><span class="rb">漢字</span><span class="rt">かな</span></span>`,不必跑 JS。
 
-**資料流**
-- 掛在 `furigana_inject.py get_hints()`,羅馬字 hint 解析完之後。模式 `llm_furigana`: `off` (預設) / `fallback` (羅馬字 hint 全空才自動觸發,另有介面手動按鈕) / `always` (每首都跑,當第四層蓋在羅馬字 hint 之後)。
-- 一首歌一次請求:送 歌名+歌手+全部歌詞行 (去時間標籤),要求回傳每行完整平假名讀音 (JSON、temperature 0,提示詞點名同形詞要看語境)。回傳轉成 `{normalize_line(行): 假名}` —— 與羅馬字 hint 同格式,直接走現成 `apply_hint()` 及其安全 guard,下游零改動;`_COMMON_READING` 與 `word_corrections` 仍在其上。
-- API 用 **OpenAI 相容格式** (可設定 base URL + model + key),一條路徑通吃 DeepSeek/OpenAI/Ollama (本機零隱私)/Anthropic 相容端點。HTTP 用既有 requests,timeout 30s,失敗記 stderr、視同無 hint。
-- 快取:**新表 `llm_hints` (artist, title, data)**,不塞 `romaji_hints` (保住其負快取 `{}` 語意)。只快取成功結果,錯誤不進快取。手動按鈕強制重跑並覆寫快取,完成走 `rebroadcastLyrics()`。
+拿使用者手改的 `word_corrections` 當標準答案量過 (39 個詞 / 25 首歌,`scripts/measure_hints.py`):
 
-**Key 安全 (BYOK,實作時不可省)**
-- key **絕不放 `settings.json`** —— `GET /api/settings` 會整份吐回。獨立存 `DATA_DIR/secrets.json`,打包版用 Electron `safeStorage` (DPAPI) 加密,dev 模式明文 + stderr 警告。
-- key 端點只寫不讀:`POST /api/llm-key` 設定/清除,GET 只回 `{set, last4}`;UI 用 password 欄位。
-- key 不進 log、不進 URL query,只走 Authorization header;傳給 Python 走 `spawnPy` 環境變數 (`LLM_API_KEY` 等)。`llm_base_url`/`llm_model`/`llm_furigana` 不敏感,照常放 `settings.json`。
-- 功能預設關,設定開關旁註明「啟用後會將歌名與歌詞送至你設定的 LLM 服務」。
+| 層 | 命中 |
+|---|---|
+| L0 只有 fugashi 字典 | 26/39 (67%) |
+| L1 ＋羅馬字 hint | **25/39 (64%)** ← 淨負 |
+| L2 ＋utaten | **34/39 (87%)** |
 
-**成本與模型選擇** (估算 2026-07)
-- 一首歌一次請求 ≈ 2k in / 2k out tokens。DeepSeek V4 Flash ($0.14/$0.28 per M) ≈ $0.0008/首;Claude Haiku 4.5 ($1/$5) ≈ $0.012/首。加 per-song 快取後成本可忽略 (重度使用一年 < US$1)。
-- 免費路線:Gemini free tier 有 OpenAI 相容端點,直接吃 BYOK 設計;Ollama 本機零成本零隱私,但 8B 級日文讀音品質要實測 (定位為隱私優先選項)。
-- flash 級雲端模型準確率足夠:參考專案用 DeepSeek 做同一件事;輸出過 `apply_hint()` 既有 guard,爛輸出退回 fugashi 不會更糟;`word_corrections` 永遠最上層。推薦文案:DeepSeek 或 Gemini 免費端點,Ollama 為本機選項。
+`静寂=しじま`、`談=はなし`、`外=はず`、`逸=はぐ`、`退=ど` 這種字典全滅的特殊唸法它都對。
+**羅馬字那層仍然留著** —— 它在這批樣本是淨負,但 utaten 只涵蓋約 78% 的歌,沒被蓋到的地方靠它;
+真要拔掉得先量「utaten 有的歌」與「羅馬字唯一救到的詞」的交集,不要憑這張表就砍。
 
-**UI (與使用者定案 2026-07)**
-- 設定入口:⋯ 設定選單新增「AI 讀音校正」可折疊小節,套自訂快捷鍵同款 pattern (`menu-sub` + chevron,header.ejs)。內容:模式 [關閉(預設)/自動(=fallback)/總是]、Base URL、Model (存 settings.json)、API Key password 欄 (只寫不讀,顯示「已設定 •••後四碼」),底部一行隱私揭露。
-- 手動觸發:播放列魔杖 ✨ 按鈕,與編輯假名筆按鈕並排。已設定 key 才顯示;狀態 平常可按 → 執行中轉圈 → 完成亮起;完成後再按 = 強制重跑 (覆寫 `llm_hints`)。同時是 fallback 模式的手動入口;不做歌詞區 inline 提示句。
+- **存兩份:`lines` 與 `words`,兩份都必要。**
+  - `lines` = `{normalize_line(行): 整行假名}`,格式與 `cn_music.fetch_hints` 完全相同,直接餵
+    `apply_hint()`,位置對齊 (同一個字在不同句可能不同讀音)。
+  - `words` = utaten 原生的逐詞讀音,**套用點在 `build_ruby_html` 的 `root_orig` 那一層**
+    (不是 token 迴圈:utaten 的 `<rb>` 只有漢字核心 `静寂`,而 fugashi 的 token 常常連著送り仮名
+    `覚束ぬ`,比 token 對不上;`root_orig` 正是削掉前後綴後的漢字核心,也就是 `word_corrections`
+    的同一把鍵)。**這一層讓命中從 29/39 跳到 34/39** —— `apply_hint` 是按「fugashi 預測的讀音長度」
+    去切整行 hint 的,兩邊長度差太多時 (せいじゃく 5 字 vs しじま 3 字) 它的守門會整個放棄,
+    而那正是最需要修的那種詞。
+  - `words` **只收整首歌讀音唯一的詞**:同一個漢字在不同句唸法不同時 (花人局 的 夜 = よ/よる)
+    沒有前後文可判斷,硬套會把對的那句改錯,那種留給 `lines` 處理。
+  - `_COMMON_READING` 仍然在 `words` 之上 (那四筆是使用者驗證過的,不該被爬蟲蓋掉);
+    `word_corrections` 永遠最上層。
+- **搜尋只用歌名,歌手當排序訊號不當條件** —— utaten 用日文歌手名 (`SPITZ` 在那邊叫 `スピッツ`),
+  把歌手塞進查詢字串會直接查不到。
+- **搜不到時 utaten 回的是一頁推薦清單,裡面照樣有幾十個 `/lyric/` 連結** —— 所以**不能只看有沒有
+  `/lyric/`**,要看有沒有 `<table class="searchResult">`。這條踩過,害覆蓋率量成 100%。
+- **驗證順序:歌手＋歌名都對得上就採用;對不上才退回行重疊率 (`MIN_OVERLAP` 0.30)。**
+  **不要把重疊率變成無條件的門檻** —— 它分不出「不同首歌」與「同一首但斷句不同」:實測
+  `サカナクション / アイデンティティ` 只有 8%、`Vaundy / 花占い` 28%,兩首都是對的歌,
+  只是 utaten 那份的斷句與標注範圍不同。修掉這條之後覆蓋率 67% → 77%。
+  歌手名兩邊寫法常常不同 (`SPITZ` / `スピッツ`),所以歌手對不上時仍然需要重疊率當退路。
+- 原名查不到才用 `clean_title()` 去掉 `(feat. …)` / `(… LIVE …)` 尾綴重試一次,成功路徑零額外請求。
+- 快取表 `utaten_hints`,形狀同 `romaji_hints`,**空 `{}` 是負快取**(查過了,utaten 沒這首)。
+  平常播到那首歌時順手抓一次;`scripts/backfill_utaten.py` 是一次性補全 (每首之間睡 1 秒,
+  這是別人家的網站)。
+- **`apply_hint` 不可以加「候選必須與原讀音等長」的門檻。** 那道閘門是 LLM 時代為了擋截斷加的,
+  utaten 給的是完整假名,長度變化本身就是正解 (`夜 よる → よ`)。回歸測試 `test_furigana_hint.py`
+  第 10 組釘住這條。
+- 涵蓋率實測 **77%**(30 首隨機日文歌);找到的歌大約 7 成的行有注音。
+  剩下的落空有一半是**歌名還沒還原成日文** (`Could I be yours?`、`HEIAN`) —— 那是
+  ROADMAP 的人工確認清單,不是 utaten 的問題;其餘是 utaten 真的沒收 (獨立樂團、新歌)。
+- **沒有第二個注音來源可用** (2026-08-04 探過)。uta-net、petitlyrics 的歌曲頁都沒有 ruby;
+  kasi-time 網域已死、utamap 連不上;j-lyric / kashinavi 本來就沒有注音功能。
+  **要提升覆蓋率,施力點是歌名還原,不是再找一家。**
+- 回歸測試 `venv\Scripts\python.exe tests/test_utaten.py` (不打網路);
+  `python utaten.py` 是打真站的自我檢查,動到解析或搜尋時跑它。
 
-**驗證狀態**:mock OpenAI 端點整合測試通過 (hint 套用/快取命中零呼叫/force 重跑/off 不呼叫);`GET /api/settings` 不含 key、dev 模式明文警告、清除 key 會刪 secrets.json 均已驗。**未做**:真實端點 (Ollama/DeepSeek) 全流程、word_corrections 48 條 ground truth 量測 —— 需使用者提供端點後執行。
+### LLM 讀音校正 — 已移除 (2026-08-04)
+
+**量過,淨零,拆掉。不要重新提案。** BYOK 的整套 (`llm_furigana.py`、`llm_hints` 表、
+`/api/llm-key`、`/api/llm-furigana/run`、`/api/llm-models`、`secrets.json` + Electron safeStorage、
+設定選單的「AI 讀音校正」小節、播放列的魔杖鈕、`apply_hint` 的 `mark` 參數與長度閘門) 全部刪除。
+
+最後一次量測 (5 首歌 16 個詞):字典 9/16 → ＋羅馬字 10/16 → **＋LLM 10/16**。長度閘門確實把它從
+淨負 (9/16) 拉回淨零,但也就是淨零。它實際動到的 15 個詞裡約 6 對 8 錯,而且錯的都是它應該要贏的
+地方:`無難 ぶなん→ぶかん` (fugashi 本來是對的)、`局 もたせ→きょく` (歌名 `花人局` 就在 prompt
+第一行)、`鍵 かぎ→くぎ`。**全曲上下文沒有幫上忙** —— prompt 本來就送整首歌 + 歌名 + 歌手。
+
+順帶消失的是全 app 最敏感的表面:不再有 API key 要保管,`spawnPy` 也不再往環境變數塞任何祕密。
 
 ### Credit / title lines
 
