@@ -49,8 +49,13 @@ async function run() {
     check(r.status === 404, `${name} → 不存在`, `${r.status} (expected 404)`);
   }
 
-  // 行動版的靜態頁是公開的:它是頂層導覽,沒有地方可以帶 header
-  for (const p of ['/mobile/', '/mobile/index.html', '/mobile/lyrics.js', '/mobile/sw.js', '/mobile/manifest.json']) {
+  // 行動版的靜態頁是公開的:它是頂層導覽,沒有地方可以帶 header。
+  // **`/js/karaoke.js` 是 shell 裡唯一不在 /mobile/ 底下的檔案** (逐字填色三端共用一份,
+  // 刻意不複製進 /mobile/),漏放行的話 <script> 404 → karaokePaint 未定義 →
+  // frame() 的 rAF 迴圈第一次換句就丟例外死掉,整頁凍住;sw.js 的 caches.addAll
+  // 也會整批 reject,SW 從此裝不起來。兩個都是靜默失敗,所以要有這條測試。
+  for (const p of ['/mobile/', '/mobile/index.html', '/mobile/lyrics.js', '/mobile/sw.js',
+                   '/mobile/manifest.json', '/js/karaoke.js']) {
     const r = await fetch(BASE + p);
     check(r.ok, `靜態頁放行 ${p}`, String(r.status));
   }

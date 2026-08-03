@@ -130,7 +130,13 @@ if (CLOUD) {
       const limiter = GATED.get(req.path);
       return limiter ? limiter(req, res, next) : next();
     }
-    if (req.path.startsWith('/mobile/')) return next();
+    // 行動版的 shell 有唯一一支不在 /mobile/ 底下的檔案:逐字填色 (public/js/karaoke.js)
+    // 是歌詞區/靈動島/行動版共用的一份,刻意不複製進 /mobile/。這裡漏放行是**兩個靜默失敗**:
+    // <script> 404 → karaokePaint 未定義 → frame() 的 rAF 迴圈一碰到就丟例外,而
+    // requestAnimationFrame 在函式最後一行,例外一丟就再也沒有下一幀 (整頁凍住);
+    // 同時 sw.js 的 caches.addAll(SHELL) 遇 404 會整批 reject,SW 從此裝不起來。
+    // 這條清單與 sw.js 的 SHELL_EXTRA 是同一份,加檔案時兩邊一起改。
+    if (req.path.startsWith('/mobile/') || req.path === '/js/karaoke.js') return next();
     return res.status(404).end();
   });
 }
