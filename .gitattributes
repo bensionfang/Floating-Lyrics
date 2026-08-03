@@ -1,0 +1,7 @@
+# 批次檔一定要 CRLF:cmd.exe 的 `^` 行接續在 LF-only 的檔案上會解析錯誤 ——
+# 續行被拆散,後面的 REM 註解片段就當成指令執行,而真正要跑的 `call npm run app` 根本到不了。
+# 實測 dev.bat 從 2026-08-02 加入 PowerShell 清理段 (帶 ^ 續行) 後就是這樣壞掉的,
+# 症狀是 exit 255 加三行「'xxx' 不是內部或外部命令」。core.autocrlf 靠不住:
+# 直接被寫出來的檔案不經過 checkout 的 smudge,索引與工作區會一直是 lf。
+*.bat text eol=crlf
+*.cmd text eol=crlf
