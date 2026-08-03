@@ -4,9 +4,9 @@
  *   node test_origin_guard.js
  *
  * 自己帶起一份 server (獨立 port + 暫存 DB/settings),測完關掉。
- * 這道守門擋的是:使用者開著 Kanaric 時瀏覽任一網頁,那個網頁把 llm_base_url 改成
- * 攻擊者的位址、再觸發 /api/llm-models,BYOK 的 API key 就送出去了。綁 127.0.0.1
- * 擋不住這件事,所以守門壞掉等於 key 外洩,值得留一個測試。
+ * 這道守門擋的是:使用者開著 Kanaric 時瀏覽任一網頁,那個網頁就能打這裡的 API ——
+ * 跨站 POST /api/settings 改掉設定、/api/db-clear 砍掉聆聽紀錄,都不需要使用者做任何事。
+ * 綁 127.0.0.1 擋不住這件事 (那擋的是別台機器),所以守門壞掉等於資料任人改,值得留測試。
  */
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -23,8 +23,8 @@ const CASES = [
   ['後台自己 (同源 fetch)',               '/api/settings',   { Origin: BASE, 'Sec-Fetch-Site': 'same-origin' }, 200],
   ['網址列直接開 (Sec-Fetch-Site: none)',  '/api/settings',   { 'Sec-Fetch-Site': 'none' },                      200],
   ['惡意網站 fetch (Origin 是別人)',       '/api/settings',   { Origin: 'https://evil.example' },                403],
-  ['惡意網站 <script src> (只有 SFS)',     '/api/llm-models', { 'Sec-Fetch-Site': 'cross-site' },                403],
-  ['同機另一個 port 的頁面 (same-site)',   '/api/llm-models', { 'Sec-Fetch-Site': 'same-site' },                 403],
+  ['惡意網站 <script src> (只有 SFS)',     '/api/db-usage', { 'Sec-Fetch-Site': 'cross-site' },                403],
+  ['同機另一個 port 的頁面 (same-site)',   '/api/db-usage', { 'Sec-Fetch-Site': 'same-site' },                 403],
   // 從別的頁面點連結進來 = 跨站的頂層導覽。擋掉只會讓使用者看到一行 JSON 錯誤,
   // 而放行不開洞:跨站 form POST 的 dest 也是 document,但方法是 POST (下一條)
   ['別的網站點連結進來 (頂層導覽 GET)',    '/',               { 'Sec-Fetch-Site': 'cross-site',
@@ -34,7 +34,7 @@ const CASES = [
                                                                'Sec-Fetch-Dest': 'iframe' },                     403],
 ];
 
-const EVIL = 'https://evil.example/v1';
+const EVIL = 'https://evil.example';
 
 async function waitForServer(deadlineMs = 20000) {
   const until = Date.now() + deadlineMs;
@@ -61,18 +61,18 @@ async function run() {
     check(r.status === want, name, `${r.status} (expected ${want})`);
   }
 
-  // 完整攻擊鏈第一步:跨站竄改 llm_base_url。JSON 版本 (會觸發 preflight) 與
+  // 完整攻擊鏈第一步:跨站竄改設定。JSON 版本 (會觸發 preflight) 與
   // form 版本 (simple request,不觸發 preflight —— 光拿掉 cors() 擋不住這個) 都要試。
   for (const [label, contentType, body] of [
-    ['JSON', 'application/json', JSON.stringify({ llm_base_url: EVIL })],
-    ['form (無 preflight)', 'application/x-www-form-urlencoded', `llm_base_url=${EVIL}`],
+    ['JSON', 'application/json', JSON.stringify({ mobile_origin: EVIL })],
+    ['form (無 preflight)', 'application/x-www-form-urlencoded', `mobile_origin=${EVIL}`],
   ]) {
     const r = await fetch(BASE + '/api/settings', {
       method: 'POST',
       headers: { 'Content-Type': contentType, Origin: 'https://evil.example' },
       body,
     });
-    check(r.status === 403, `攻擊鏈:跨站 POST 竄改 llm_base_url (${label})`, `${r.status} (expected 403)`);
+    check(r.status === 403, `攻擊鏈:跨站 POST 竄改設定 (${label})`, `${r.status} (expected 403)`);
   }
 
   // 放行頂層導覽的代價要釘住:跨站 <form> 送出去的 dest 也是 document,只有方法不同
@@ -82,12 +82,12 @@ async function run() {
       'Content-Type': 'application/x-www-form-urlencoded',
       'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Dest': 'document',
     },
-    body: `llm_base_url=${EVIL}`,
+    body: `mobile_origin=${EVIL}`,
   });
   check(formNav.status === 403, '跨站 form 導覽 POST 仍被擋', `${formNav.status} (expected 403)`);
 
   const settings = await (await fetch(BASE + '/api/settings')).json();
-  check(settings.llm_base_url !== EVIL, 'settings.json 未被竄改', JSON.stringify(settings.llm_base_url));
+  check(settings.mobile_origin !== EVIL, 'settings.json 未被竄改', JSON.stringify(settings.mobile_origin));
 
   // /api/db-clear 會刪資料且不可復原 —— 跨站呼叫等於任一網頁都能砍掉使用者的聆聽紀錄。
   // form 版本同樣是 simple request,不觸發 preflight。

@@ -266,9 +266,6 @@ button.menu-action {
 
 #hotkeys-toggle.open .hotkeys-chevron,
 #source-toggle.open .hotkeys-chevron,
-#llm-toggle.open .hotkeys-chevron {
-    transform: rotate(90deg);
-}
 
 /* 音訊來源:整列可點的 radio,第二行小字顯示該來源正在放什麼 */
 .src-row {
@@ -314,22 +311,17 @@ button.menu-action {
 }
 
 /* AI 讀音校正:標籤旁的問號 + 展開的說明文字 */
-.llm-help-btn {
+.menu-help-btn {
     margin-left: 4px;
     color: var(--text-secondary);
     cursor: pointer;
 }
 
-.llm-help-btn:hover {
+.menu-help-btn:hover {
     color: var(--text-primary);
 }
 
 /* AI 讀音校正的子選單只有四列,直接放大到夠裝,不出現捲軸 */
-#llm-section {
-    width: 320px;
-    max-height: none;
-    overflow-y: visible;
-}
 
 .menu-hotkeys.show {
     display: block;
@@ -362,7 +354,7 @@ button.menu-action {
     font-size: 11px;
 }
 
-/* 只有快捷鍵區改三欄 grid (llm-section 也用 .hk-row,不能動全域):
+/* 只有快捷鍵區改三欄 grid (別的小節也用 .hk-row,不能動全域):
    名稱 / 眼睛 / 輸入框,每列三欄固定,輸入框起點永遠對齊 */
 #hotkeys-section {
     width: 280px;   /* 放得下最長標籤 (純文字上一句),1fr 才不會被撐開 */
@@ -414,11 +406,6 @@ button.menu-action {
 }
 
 /* AI 讀音校正的文字欄位:比快捷鍵欄寬、靠左、可打字 */
-.llm-input {
-    width: 210px;
-    text-align: left;
-    cursor: text;
-}
 
 /* 自己畫的下拉清單 (select-menu.js)。原生 select 的彈窗是瀏覽器畫的,選項 hover 的藍底
    在 Chromium 130 沒有任何 CSS 改得到,所以整個彈窗自己來,hover 才會是專案的綠色。 */
@@ -459,10 +446,6 @@ button.menu-action {
 }
 
 /* 模式/供應商/模型下拉與文字欄同寬,左緣對齊 */
-#llm-mode, #llm-preset, #llm-model {
-    width: 210px;
-    max-width: none;
-}
 
 .hk-input:focus {
     outline: none;
@@ -981,10 +964,6 @@ body.ruby-edit-mode .lyrics-line ruby.editable-ruby:hover rt {
     cursor: pointer;
 }
 
-/* 編輯模式下,LLM 改過的讀音亮綠色 (平常外觀不變;懸停 title 顯示原讀音) */
-body.ruby-edit-mode .lyrics-line ruby.llm-ruby rt {
-    color: var(--accent-main, #1db954);
-}
 
 /* 段落循環:選 A/B 兩句。hover 用綠底取代「點了會跳轉」的白字+底線 */
 body.loop-mode .lyrics-line:not(.active):hover {

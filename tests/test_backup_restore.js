@@ -8,7 +8,7 @@
  *     備份存在的唯一理由就是它們;漏了等於備份沒用。
  *  2. 還原之前會先驗證檔案。隨便一個 .db (或根本不是 db) 都不該蓋掉現有資料 ——
  *     還原是不可逆的,守門壞掉會直接毀掉使用者的資料。
- *  3. settings.json 跟著備份走,而 secrets.json (LLM API key) 絕對不跟。
+ *  3. settings.json 跟著備份走。
  *     備份檔會被隨手複製、傳送,key 混進去就是外洩。
  *
  * 還原成功那條路徑會 db.close() 並換掉 DB 檔,之後這支 server 就不能用了,所以
@@ -98,7 +98,6 @@ async function run_() {
 
   // secrets.json 是獨立檔案,備份是單一 .db —— 結構上就帶不到,這裡確認它真的沒被塞進去
   const raw = fs.readFileSync(backupPath, 'utf8').replace(/\0/g, '');
-  check(!raw.includes('llm_api_key'), 'API key 沒有出現在備份檔內容裡');
 
   // ── 2. 還原的守門 ──
   const post = (body) => fetch(BASE + '/api/restore', {

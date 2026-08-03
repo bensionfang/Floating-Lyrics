@@ -5,7 +5,7 @@
  *
  * 自己帶起一份 server (CLOUD_MODE=1 + 獨立 port + 暫存 DB),測完關掉。
  * 這道清單是那台機器**唯一**的防線:沒有帳號系統,靠的就是「寫入路由根本不存在」。
- * 破了的話 /api/settings 可以被任何人改 llm_base_url、/api/restore 可以蓋掉整顆 DB。
+ * 破了的話 /api/settings 可以被任何人改、/api/restore 可以蓋掉整顆 DB。
  */
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -36,12 +36,11 @@ async function run() {
   // 桌面版的路由在這台一律不存在。**不是 403 而是 404** —— 連「有這條路但你沒權限」都不透露
   for (const [name, method, route] of [
     ['GET /api/settings', 'GET', '/api/settings'],
-    ['POST /api/settings (竄改 llm_base_url 的入口)', 'POST', '/api/settings'],
+    ['POST /api/settings (竄改設定的入口)', 'POST', '/api/settings'],
     ['POST /api/db-clear', 'POST', '/api/db-clear'],
     // 備選歌詞的三支 GET 放行了,但桌面「套用」那條是 POST,在這台仍然不存在
     ['POST /api/lyrics/custom', 'POST', '/api/lyrics/custom'],
     ['POST /api/restore', 'POST', '/api/restore'],
-    ['GET /api/llm-key', 'GET', '/api/llm-key'],
     ['GET /island', 'GET', '/island'],
     ['GET /api/media', 'GET', '/api/media'],
   ]) {

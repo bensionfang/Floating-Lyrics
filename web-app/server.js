@@ -48,8 +48,8 @@ let currentMediaState = {
 // 這台伺服器綁 127.0.0.1、沒有任何 auth,所有正當客戶端都是同源的 (網頁後台) 或
 // 根本不是瀏覽器 (C# 靈動島用 HttpClient)。所以不開 CORS,而且主動擋掉任何從別的
 // 網站發過來的請求 —— 綁 localhost 擋不住這種攻擊:使用者只要在開著 Kanaric 時瀏覽
-// 任一網頁,那個網頁就能打這裡的 API (把 llm_base_url 改成攻擊者的位址,再觸發
-// /api/llm-models,BYOK 的 API key 就送出去了)。
+// 任一網頁,那個網頁就能打這裡的 API —— 跨站 POST /api/settings 改設定、
+// /api/db-clear 砍掉聆聽紀錄,都不需要使用者做任何事。
 //
 // 兩層都要,少一層就有破口:
 //   Origin        —— fetch/XHR 一定帶;但 <script src>/<img> 這類不帶。
@@ -75,7 +75,7 @@ const normOrigin = (v) => { try { return v ? new URL(v).origin : ''; } catch (e)
 const isAllowedOrigin = (o) => ALLOWED_ORIGINS.has(o) || (!!mobileOrigin && o === mobileOrigin);
 
 // B1:雲端唯讀模式的允許清單。**這是整台機器的攻擊面** —— /api/settings、/api/restore、
-// /api/db-clear、/api/llm-key 在這裡直接變成 404,連被試探的機會都沒有,不必為此做帳號系統。
+// /api/db-clear、/api/restore 在這裡直接變成 404,連被試探的機會都沒有,不必為此做帳號系統。
 // 放在同源守門之前:先判「這條路存不存在」再判「你是誰」。
 if (CLOUD) {
   app.set('trust proxy', true);   // Render 在前面,req.ip 要從 X-Forwarded-For 取才不是同一個內網位址
@@ -174,54 +174,10 @@ const DATA_DIR = process.env.DATA_DIR || PARENT_DIR;
 const venvPythonPath = path.join(PARENT_DIR, 'venv', 'Scripts', 'python.exe');
 const pythonCmd = fs.existsSync(venvPythonPath) ? venvPythonPath : 'python';
 
-// --- LLM API key (BYOK) ---
-// key 絕不放 settings.json (GET /api/settings 會整份吐回)。獨立存 DATA_DIR/secrets.json,
-// 打包版經 Electron safeStorage (DPAPI) 加密;dev 模式 (純 node) 明文 + 警告。
-// 只透過 spawnPy 的環境變數傳給 Python,不進 log、不進 URL。
-const SECRETS_FILE = path.join(DATA_DIR, 'secrets.json');
-let safeStorage = null;
-try {
-  const electron = require('electron');
-  if (electron && electron.safeStorage) safeStorage = electron.safeStorage;
-} catch (e) {}
-
-function canEncrypt() {
-  try { return !!(safeStorage && safeStorage.isEncryptionAvailable()); } catch (e) { return false; }
-}
-
-function loadLlmKey() {
-  try {
-    const s = JSON.parse(fs.readFileSync(SECRETS_FILE, 'utf8'));
-    if (s.llm_api_key_enc && canEncrypt()) {
-      return safeStorage.decryptString(Buffer.from(s.llm_api_key_enc, 'base64'));
-    }
-    if (s.llm_api_key) return s.llm_api_key;
-  } catch (e) {}
-  return '';
-}
-let llmApiKey = loadLlmKey();
-
-function saveLlmKey(key) {
-  llmApiKey = key || '';
-  if (!llmApiKey) {
-    try { fs.unlinkSync(SECRETS_FILE); } catch (e) {}
-    return;
-  }
-  let payload;
-  if (canEncrypt()) {
-    payload = { llm_api_key_enc: safeStorage.encryptString(llmApiKey).toString('base64') };
-  } else {
-    console.warn('[llm] safeStorage 不可用,API key 以明文寫入 secrets.json (dev 模式)');
-    payload = { llm_api_key: llmApiKey };
-  }
-  fs.writeFileSync(SECRETS_FILE, JSON.stringify(payload), 'utf8');
-}
-
 // 打包模式下改用 PyInstaller 產出的 pytools.exe;開發模式用 python pytools.py
 const PYTOOLS_EXE = process.env.PYTOOLS_EXE || '';
 function spawnPy(args, opts = {}) {
   const env = { ...process.env, PYTHONIOENCODING: 'utf-8' };
-  if (llmApiKey) env.LLM_API_KEY = llmApiKey;
   const base = { env, windowsHide: true, ...opts };
   if (PYTOOLS_EXE) {
     return spawn(PYTOOLS_EXE, args, { cwd: path.dirname(PYTOOLS_EXE), ...base });
@@ -635,8 +591,6 @@ app.use((req, res, next) => {
   };
   // 側欄要靠 track_history 決定顯不顯示統計/排行榜,等前端問完 API 才隱藏會閃一下
   res.locals.settings = readSettings();
-  // 魔杖鈕只在設好 API key 時出現;交給前端問 /api/llm-key 再隱藏會先閃一下
-  res.locals.llmKeySet = !!llmApiKey;
   // 備選歌詞按鈕的狀態也一起渲染,否則會先畫成未搜尋、等前端問完 server 才變綠 (閃一下)
   const job = optionJobs.get(jobKey(m.artist, m.title));
   res.locals.optState = {
@@ -742,101 +696,6 @@ app.post('/api/settings', (req, res) => {
   }
 });
 
-// LLM key 端點只寫不讀:POST 設定/清除,GET 只回有沒有設定 + 後四碼
-app.get('/api/llm-key', (req, res) => {
-  res.json({ set: !!llmApiKey, last4: llmApiKey ? llmApiKey.slice(-4) : '' });
-});
-
-// 依 key 前綴猜供應商,再實際拿 key 驗證。長前綴排前面 (sk-ant-/sk-or- 也符合 sk-)。
-// 驗證端點預設 /models;OpenRouter 的 /models 是公開端點 (不帶 key 也回 200,亂打的
-// key 會被誤判有效),所以它改用需要認證的 /auth/key。
-// prefer 撞不到時退回模型清單裡第一個,所以供應商改版模型名也不會壞。
-const LLM_PROVIDERS = [
-  { name: 'Anthropic',  base: 'https://api.anthropic.com/v1',  prefer: 'claude-haiku-4-5',        match: k => k.startsWith('sk-ant-') },
-  { name: 'OpenRouter', base: 'https://openrouter.ai/api/v1',  prefer: 'deepseek/deepseek-chat',  match: k => k.startsWith('sk-or-'),
-    auth: 'https://openrouter.ai/api/v1/auth/key' },
-  { name: 'Groq',       base: 'https://api.groq.com/openai/v1', prefer: 'llama-3.3-70b-versatile', match: k => k.startsWith('gsk_') },
-  { name: 'Gemini',     base: 'https://generativelanguage.googleapis.com/v1beta/openai', prefer: 'gemini-2.5-flash', match: k => k.startsWith('AIza') },
-  { name: 'DeepSeek',   base: 'https://api.deepseek.com/v1',   prefer: 'deepseek-chat',           match: k => k.startsWith('sk-') },
-  { name: 'OpenAI',     base: 'https://api.openai.com/v1',     prefer: 'gpt-4o-mini',             match: k => k.startsWith('sk-') },
-];
-
-// Anthropic 的 /v1/models 不吃 Bearer,要 x-api-key + anthropic-version —— 用 Bearer 一律 401,
-// 而兩個呼叫端都把失敗吞掉,症狀是「模型清單永遠空白、貼了 sk-ant- 也偵測不出供應商」。
-function llmAuthHeaders(baseUrl, key) {
-  if (!key) return {};
-  if (/(^|\/\/)api\.anthropic\.com/.test(baseUrl)) {
-    return { 'x-api-key': key, 'anthropic-version': '2023-06-01' };
-  }
-  return { Authorization: `Bearer ${key}` };
-}
-
-// 前綴認不出來就**不猜**:BYOK 的前提是 key 只會去使用者指定的地方。舊版認不出時會拿
-// 整份清單依序試,等於把自架端點 / 公司 gateway 的 key 送給 Anthropic、OpenRouter、
-// Groq、Gemini、OpenAI 各一次。認不出來回 null,讓使用者自己填 Base URL 就好。
-async function detectLlmProvider(key) {
-  const matched = LLM_PROVIDERS.filter(p => p.match(key));
-  if (!matched.length) return null;
-  for (const p of matched) {
-    try {
-      const headers = llmAuthHeaders(p.base, key);
-      const auth = await fetch(p.auth || (p.base + '/models'), { headers, signal: AbortSignal.timeout(6000) });
-      if (!auth.ok) continue;
-      // key 驗過了,再抓模型清單挑 model (抓不到就用 prefer)
-      let ids = [];
-      try {
-        const r = await fetch(p.base + '/models', { headers, signal: AbortSignal.timeout(6000) });
-        const data = r.ok ? await r.json() : null;
-        if (data && Array.isArray(data.data)) ids = data.data.map(m => m.id);
-      } catch (e) {}
-      const model = ids.find(id => id === p.prefer) || ids.find(id => id.includes(p.prefer)) || ids[0] || p.prefer;
-      return { name: p.name, base_url: p.base, model };
-    } catch (e) {}
-  }
-  return null;
-}
-
-// /models 會把整個帳號看得到的東西都倒出來 (embedding、影像、語音、審核…),那些選了只會在
-// /chat/completions 回錯。這張表是「一定不是對話模型」的關鍵字,寧可漏擋也不要擋掉真的能用的。
-const NON_CHAT_MODEL = /embed|imagen|veo|aqa|tts|whisper|dall-?e|moderation|rerank|bison|gecko|davinci|babbage|-vision|image-gen/i;
-
-// 供應商的 /models **不標「已淘汰」**,所以沒辦法真的濾掉舊模型 (Gemini 會一路回到 1.0)。
-// 能做的是排序:同一系列擺在一起、系列內新版在前,舊的自然沉到底。
-//   family = 第一個數字之前那段 (gemini-2.5-flash → gemini、claude-haiku-4-5 → claude-haiku)
-//   version = 第一串數字,`4-5` 這種連字號寫法算 4.5
-// **跨系列比數字沒有意義** (gemma-3 不比 gemini-2.5 新),所以系列先照字母分群再比版本。
-// `(?!b)` 是為了別把參數量當版本:gemma-3-4b-it 的版本是 3,不是 3.4。
-function modelFamily(id) {
-  return id.split(/\d/)[0].replace(/[-_.\s]+$/, '');
-}
-function modelVersion(id) {
-  const m = id.match(/(\d+(?:[.-]\d+(?!b))?)/i);
-  return m ? parseFloat(m[1].replace('-', '.')) : 0;
-}
-
-// Model 欄的 datalist 建議清單:用現設 Base URL + 已存 key 打 /models (key 不出 server)。
-// 沒 key 也試 (Ollama 不用 key);失敗回空陣列,前端 datalist 空著、輸入框照常手打。
-app.get('/api/llm-models', async (req, res) => {
-  try {
-    let cur = {};
-    try { cur = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')); } catch (e) {}
-    if (!cur.llm_base_url) return res.json({ models: [] });
-    const headers = llmAuthHeaders(cur.llm_base_url, llmApiKey);
-    const r = await fetch(cur.llm_base_url.replace(/\/$/, '') + '/models', { headers, signal: AbortSignal.timeout(6000) });
-    const data = r.ok ? await r.json() : null;
-    // Gemini 的 id 帶 models/ 前綴 (models/gemini-2.5-flash),照抄進設定會存成不能直接用的名字。
-    // 只剝這一個字面前綴 —— OpenRouter 的斜線是有意義的 (deepseek/deepseek-chat)。
-    const raw = (data && Array.isArray(data.data)) ? data.data.map(m => String(m.id).replace(/^models\//, '')) : [];
-    const models = raw
-      .filter(id => !NON_CHAT_MODEL.test(id))
-      .sort((a, b) => modelFamily(a).localeCompare(modelFamily(b))
-        || modelVersion(b) - modelVersion(a)
-        || a.localeCompare(b));
-    res.json({ models, error: r.ok ? undefined : `HTTP ${r.status}` });
-  } catch (e) {
-    res.json({ models: [], error: e.message });
-  }
-});
 
 // 檢查 GitHub Releases 是否有新版:GitHub API 對匿名請求限 60 次/小時/IP,
 // 每頁載入都打會很容易超,所以結果快取 1 小時。
@@ -891,31 +750,6 @@ app.post('/api/update-install', (req, res) => {
   }
   res.json({ success: true });
   setTimeout(() => global.quitAndInstallUpdate(), 300);
-});
-
-app.post('/api/llm-key', async (req, res) => {
-  try {
-    saveLlmKey((req.body.key || '').trim());
-
-    // 存 key 順便偵測供應商,自動帶入 Base URL / Model —— 只填空欄位,不蓋使用者設定
-    let detected = null;
-    if (llmApiKey) {
-      let cur = {};
-      try { cur = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')); } catch (e) {}
-      if (!cur.llm_base_url || !cur.llm_model) {
-        detected = await detectLlmProvider(llmApiKey);
-        if (detected) {
-          if (cur.llm_base_url) detected.base_url = cur.llm_base_url;
-          if (cur.llm_model) detected.model = cur.llm_model;
-          fs.writeFileSync(SETTINGS_FILE, JSON.stringify(
-            { ...cur, llm_base_url: detected.base_url, llm_model: detected.model }, null, 4), 'utf8');
-        }
-      }
-    }
-    res.json({ success: true, set: !!llmApiKey, detected });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
 });
 
 // 目前系統上有哪些媒體來源 (設定選單的「音訊來源」用)。每次打開子選單才掃一次。
@@ -1030,9 +864,8 @@ function applyWordTimes(artist, title, html) {
   });
 }
 
-// meta (選填) 是 out-param:force 重跑時 Python 回報的 LLM 失敗原因放 meta.llmError
-function injectFurigana(artist, title, lyrics, forceLlm = false, meta = null) {
-  return injectFuriganaRaw(artist, title, lyrics, forceLlm, meta)
+function injectFurigana(artist, title, lyrics) {
+  return injectFuriganaRaw(artist, title, lyrics)
     .then((html) => applyTranslations(artist, title, html))
     // 羅馬字要在譯文之後 —— 兩者都插在歌詞行後面,後插的會排在前面,順序才是 歌詞/羅馬字/譯文
     .then((html) => (wantsExtraLine('romaji') ? mergeRomaji(html) : html))
@@ -1042,18 +875,18 @@ function injectFurigana(artist, title, lyrics, forceLlm = false, meta = null) {
 }
 
 // 譯文刻意不進 furiganaCache:切換「顯示翻譯」就不必重跑 python,快取也不用多一個比對維度
-function injectFuriganaRaw(artist, title, lyrics, forceLlm = false, meta = null) {
+function injectFuriganaRaw(artist, title, lyrics) {
   const key = furiganaKey(artist, title);
   // 產出會隨「片假名標平假名」設定不同,所以旗標要一起比對,否則切換設定後會拿到舊 HTML
   const kataRuby = readSettings().katakana_ruby === true;
   const hit = furiganaCache.get(key);
-  if (!forceLlm && hit && hit.src === lyrics && hit.kata === kataRuby) return Promise.resolve(hit.out);
+  if (hit && hit.src === lyrics && hit.kata === kataRuby) return Promise.resolve(hit.out);
 
   return new Promise((resolve) => {
     console.log("injectFurigana called for:", title, artist);
     const pyProcess = spawnPy(['furigana']);
 
-    pyProcess.stdin.write(JSON.stringify({ artist, title, lyrics, force_llm: forceLlm, katakana_ruby: kataRuby }));
+    pyProcess.stdin.write(JSON.stringify({ artist, title, lyrics, katakana_ruby: kataRuby }));
     pyProcess.stdin.end();
     
     let output = '';
@@ -1067,7 +900,6 @@ function injectFuriganaRaw(artist, title, lyrics, forceLlm = false, meta = null)
       if (errOutput) console.error('furigana stderr:', errOutput);
       try {
         const parsed = JSON.parse(output);
-        if (meta && parsed.llm_error) meta.llmError = parsed.llm_error;
         if (parsed.success && parsed.lyrics) {
           if (furiganaCache.size >= FURIGANA_CACHE_MAX) {
             furiganaCache.delete(furiganaCache.keys().next().value);   // 丟最舊的
@@ -1277,46 +1109,6 @@ app.post('/api/furigana/reset', (req, res) => {
       rebroadcastLyrics(artist, title);
     }
   );
-});
-
-// 1.6 魔杖:強制重跑 LLM 讀音校正 (無視模式與快取,成功後覆寫 llm_hints) 並推播
-app.post('/api/llm-furigana/run', (req, res) => {
-  const { artist, title } = req.body;
-  if (!artist || !title) return res.status(400).json({ error: 'Missing parameters' });
-  if (!llmApiKey) return res.status(400).json({ error: 'API key 未設定' });
-
-  db.get('SELECT lyrics FROM cache WHERE title = ? AND artist = ?', [title, artist], async (err, row) => {
-    if (err || !row || !row.lyrics) return res.status(404).json({ error: '這首歌沒有快取歌詞' });
-    // 沒假名 = 中文歌 (或同名中文歌被抓錯進快取)。furigana_inject.process_lrc 對這種歌整份原樣退回、
-    // 根本不呼叫 LLM,而它「沒錯誤」的回覆會讓魔杖亮燈說「校正完成,無需修正」—— 使用者看不出
-    // 自己在對一份不是日文的歌詞按魔杖。判準與 process_lrc 的假名分界同一條。
-    if (!/[぀-ヿ]/.test(row.lyrics)) {
-      return res.json({ success: false, error: '這首歌沒有日文假名，不需要讀音校正' });
-    }
-    row.lyrics = toTraditional(row.lyrics);
-    const meta = {};
-    const injected = await injectFurigana(artist, title, row.lyrics, true, meta);
-    if (global.broadcast && currentMediaState.title === title && currentMediaState.artist === artist) {
-      global.broadcast({ type: 'lyrics_updated', title, artist, lyrics: injected });
-    }
-    if (meta.llmError) {
-      // 原始錯誤 (含 URL 的 requests 例外字串) 太吵,收斂成人話;細節 Python 已印在 stderr。
-      // **但供應商自己回的訊息比我們猜的準** (「這個模型不再開放給新使用者」vs 我們的
-      // 「Base URL 或 Model 有誤」),llm_furigana 有撈到就直接用它。
-      const e = meta.llmError;
-      const upstream = (e.match(/^HTTP \d+: (.+)$/s) || [])[1];
-      const friendly = upstream ? upstream.trim().slice(0, 200)
-        : /401|403/.test(e) ? 'API Key 無效或與供應商不符'
-        : /404/.test(e) ? 'Base URL 或 Model 有誤'
-        : /timed?\s?out|connection|max retries/i.test(e) ? '無法連線至端點，請檢查 Base URL'
-        : /[一-鿿]/.test(e) ? e   // Python 端給的中文訊息本來就簡短,直接用
-        : '請檢查填入的資料';
-      return res.json({ success: false, error: `LLM 請求失敗：${friendly}` });
-    }
-    // ponytail: 以 ruby 顆數近似「處」,okurigana 拆多顆的詞會多算;要精確再改 Python 輸出計數
-    const changed = (injected.match(/llm-ruby/g) || []).length;
-    res.json({ success: true, changed });
-  });
 });
 
 // 2. Fetch lyrics (checks DB, if missing fetches from lrclib)
@@ -2366,7 +2158,7 @@ app.post('/api/game/result', express.json(), (req, res) => {
 
 // 5b. 資料用量與清除。
 // 資料分兩類,清除只碰得到第一類:
-//   可重建 —— cache / romaji_hints / llm_hints / lyrics_translations,清掉只是下次重抓
+//   可重建 —— cache / romaji_hints / utaten_hints / lyrics_translations,清掉只是下次重抓
 //              (要時間、要網路,不會永久失去)
 //   不可重建 —— word_corrections (使用者手改的假名)、sync_offsets、artist_aliases、
 //              search_overrides。這些是使用者親手打的,任何清除功能都不准碰,只顯示筆數。
@@ -2375,7 +2167,7 @@ app.post('/api/game/result', express.json(), (req, res) => {
 // 猜歌成績與聆聽紀錄是兩件事,清一個不該順手把另一個清掉
 const CLEAR_TARGETS = {
   history: ['listening_history'],
-  lyrics: ['cache', 'romaji_hints', 'llm_hints', 'lyrics_translations', 'word_times'],
+  lyrics: ['cache', 'romaji_hints', 'utaten_hints', 'lyrics_translations', 'word_times'],
   game: ['game_history'],
 };
 
@@ -2392,7 +2184,7 @@ app.get('/api/db-usage', (req, res) => {
   Promise.all([
     one(`SELECT COUNT(*) AS rows, COALESCE(SUM(LENGTH(artist) + LENGTH(title) + LENGTH(lyrics)), 0) AS bytes FROM cache`),
     one(`SELECT COUNT(*) AS rows, COALESCE(SUM(LENGTH(data)), 0) AS bytes FROM romaji_hints`),
-    one(`SELECT COUNT(*) AS rows, COALESCE(SUM(LENGTH(data)), 0) AS bytes FROM llm_hints`),
+    one(`SELECT COUNT(*) AS rows, COALESCE(SUM(LENGTH(data)), 0) AS bytes FROM utaten_hints`),
     one(`SELECT COUNT(*) AS rows, COALESCE(SUM(LENGTH(data)), 0) AS bytes FROM lyrics_translations`),
     one(`SELECT COUNT(*) AS rows, COALESCE(SUM(LENGTH(data)), 0) AS bytes FROM word_times`),
     one(`SELECT COUNT(*) AS rows,
@@ -2403,9 +2195,9 @@ app.get('/api/db-usage', (req, res) => {
               + (SELECT COUNT(*) FROM artist_aliases)
               + (SELECT COUNT(*) FROM search_overrides) AS rows, 0 AS bytes`),
     one(`SELECT COUNT(*) AS rows, 0 AS bytes FROM game_history`),
-  ]).then(([cache, romaji, llm, trans, words, history, manual, game]) => {
+  ]).then(([cache, romaji, uta, trans, words, history, manual, game]) => {
     // 對使用者而言「歌詞快取」就是一首歌的全部衍生資料,提示/譯文/逐字時間不另外列一項
-    const lyrics = { rows: cache.rows, bytes: cache.bytes + romaji.bytes + llm.bytes + trans.bytes + words.bytes };
+    const lyrics = { rows: cache.rows, bytes: cache.bytes + romaji.bytes + uta.bytes + trans.bytes + words.bytes };
     // 實際佔用要含 WAL —— 剛寫入的資料還在 -wal 裡,只看主檔會少算
     let file = 0;
     for (const p of [DB_PATH, DB_PATH + '-wal']) {
@@ -2420,7 +2212,7 @@ app.post('/api/db-clear', express.json(), (req, res) => {
   if (!tables) return res.status(400).json({ error: 'Invalid target' });
 
   db.serialize(() => {
-    // callback 不能省:romaji_hints / llm_hints 是 Python 端建的,Python 還沒跑過的
+    // callback 不能省:romaji_hints / utaten_hints 是 Python 端建的,Python 還沒跑過的
     // 全新安裝上不存在。沒 callback 的話 node-sqlite3 會把 "no such table" 丟成
     // 未捕捉例外,整個 server 就掛了 —— 少一張表當作已經清乾淨即可
     for (const t of tables) db.run(`DELETE FROM ${t}`, [], () => {});
@@ -2443,7 +2235,6 @@ app.post('/api/db-clear', express.json(), (req, res) => {
 //
 // 做法刻意不引入 zip 函式庫:`VACUUM INTO` 產生一份壓實過、且與 WAL 一致的單檔快照,
 // 再把 settings.json 的內容塞進那個檔案自己的一張 meta 表 —— 備份因此仍然是「一個 .db 檔」。
-// secrets.json (LLM API key) 不進備份:備份檔會被隨手複製、傳送,key 不該跟著跑。
 const BACKUP_META = '_backup_meta';
 // 還原後這支 server 的 db 連線已經關掉,任何後續查詢都會炸;擋在最前面比讓它半死不活好
 let restoring = false;
@@ -2719,10 +2510,8 @@ global.broadcast = function(message) {
   });
 };
 
-// 只綁 127.0.0.1,不綁 0.0.0.0:API 全無認證,同網段的人若能打進來,可先用
-// /api/settings 把 llm_base_url 指向自己的伺服器,再觸發 /api/llm-models 或
-// /api/llm-furigana/run,server 就會把 API key 放進 Authorization header 送出去。
-// 靈動島與網頁前端都走 localhost,不受影響。
+// 只綁 127.0.0.1,不綁 0.0.0.0:API 全無認證,同網段的人若能打進來就能改設定、
+// 清資料庫、把備份還原成別的東西。靈動島與網頁前端都走 localhost,不受影響。
 // 純 node (npm start) 沒有 electron 的 findFreePort,5720 被占會直接 EADDRINUSE 崩
 // (而且是 WebSocketServer 那邊先炸)。先探一次:preferred 空就用它,被占就讓 OS 指派。
 // 先探再 listen 一次,避開 bind 後才拋 error 的處理。electron 已先設好空閒 PORT,所以
@@ -2741,7 +2530,7 @@ function findFreePort(preferred) {
 }
 // B2:雲端模式綁 0.0.0.0 且用 Render 指定的那個 PORT (換一個 port 它就探測不到、判定部署失敗),
 // 所以**不能**走 findFreePort。上面那段「不綁 0.0.0.0」的理由在雲端不成立:允許清單已經把
-// 所有寫入路由與 /api/settings 變成 404,那台也沒有 LLM key 可以外洩。
+// 所有寫入路由與 /api/settings 變成 404,那台除了可重建的歌詞快取什麼都沒有。
 if (CLOUD) {
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`[cloud] 唯讀歌詞服務 listening on 0.0.0.0:${PORT}`);

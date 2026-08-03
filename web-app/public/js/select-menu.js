@@ -6,12 +6,12 @@
  * Electron 33 是 Chromium 130。要讓 hover 是專案的綠色 (--accent-main) 就只能自己畫。
  *
  * 做法刻意是「攔開啟」而不是「換掉控制項」:**<select> 本身留著,關起來的樣子照舊**
- * (寬度、字級全都吃現有的 .menu-select / #llm-model 那幾條 CSS,一條都不用改),只在
+ * (寬度、字級全都吃現有的 .menu-select 那幾條 CSS,一條都不用改),只在
  * mousedown 時 preventDefault 擋掉原生彈窗,改開我們的 .sel-pop。選了就寫回 select.value
  * 並補發 change —— 所有既有的 onchange 處理器 (saveSettingsToServer…) 完全不用動。
  *
  * 彈窗是 position: fixed,不會被選單面板的 overflow 裁掉;高度上限交給 CSS,長清單
- * (LLM 模型動輒幾十個) 自己捲。
+ * (選項多的時候) 自己捲。
  */
 (function () {
     let pop = null;

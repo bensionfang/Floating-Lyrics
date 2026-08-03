@@ -63,7 +63,7 @@ class Blocked(Exception):
 TABLES = [
     ('cache',               ('artist', 'title'),         'lyrics'),
     ('romaji_hints',        ('artist', 'title'),         'data'),
-    ('llm_hints',           ('artist', 'title'),         'data'),
+    ('utaten_hints',        ('artist', 'title'),         'data'),
     ('lyrics_translations', ('artist', 'title'),         'data'),
     ('sync_offsets',        ('artist', 'title'),         None),
     ('word_corrections',    ('artist', 'title', 'word'), None),
