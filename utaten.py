@@ -152,16 +152,42 @@ def split_hints(data):
 
 _SUFFIX = re.compile(r'\s*[-–—]?\s*\(?\s*feat\.?\s.*$', re.I)
 _PARENS = re.compile(r'\s*[(（【\[].*$')
+# 破折號後面整段是版本資訊:` - Live`、` - replica -`、` - ALBUM ver.`、
+# ` - 本格中華喫茶・愛のペガサス ~羅武の香辛龍~ 2024 / LIVE`。**兩邊都要有空白** ——
+# 沒空白的連字號多半是歌名本身的一部分 (`go!go!vanillas`、`n-buna`)
+_DASH_TAIL = re.compile(r'\s+[-–—]\s+.*$')
+_DASH_HEAD = re.compile(r'^(.*?)\s+[-–—]\s+(.+)$')
 
 
-def clean_title(title):
+def _strip_artist_prefix(title, artist):
+    """
+    `くるり - 琥珀色の街、上海蟹の朝`、`ヨルシカ - 春泥棒`:播放器把歌手名黏進歌名開頭。
+    **一定要排在 `_DASH_TAIL` 前面** —— 這種形狀剝尾巴只會剩下歌手名。
+
+    判準同 `cleanBrowserQuery` 的「開頭確實等於歌手」:正規化後互相包含才剝,
+    對不上就原樣留著。歌手欄本身可能是 `ヨルシカ / n-buna / ヨルシカ` 這種複合寫法,所以逐段比。
+    """
+    m = _DASH_HEAD.match(title)
+    if not m:
+        return title
+    head, rest = m.group(1), m.group(2)
+    return rest if any(_matches(head, n) for n in re.split(r'[/／]', artist or '')) else title
+
+
+def clean_title(title, artist=''):
     """
     去掉查不到東西的尾綴。utaten 收的是原曲名,而播放器給的常常帶著版本資訊
     (`Pretender (… LIVE at STADIUM 2025)`、`点描の唄 (feat. 井上苑子)`、`rose - feat. Vaundy`),
     整串丟進去就是 0 筆。**只在原名查不到時才用**,不然歌名本身帶括號的歌會被剝壞。
+
+    Live/replica 版剝成原曲名是**刻意的**:那是同一份歌詞,注音本來就該一樣。
+    剝過頭的代價只是多打一次搜尋 —— 採用與否仍然要過 `fetch_hints` 的驗證
+    (歌手＋歌名對得上,或行重疊 ≥ `MIN_OVERLAP`)。
     """
-    t = _SUFFIX.sub('', title or '')
+    t = _strip_artist_prefix(title or '', artist)
+    t = _SUFFIX.sub('', t)
     t = _PARENS.sub('', t)
+    t = _DASH_TAIL.sub('', t)
     return t.strip()
 
 
@@ -178,7 +204,7 @@ def fetch_hints(artist, title, lrc_text):
 
     # 原名先查;查不到才用去噪後的歌名重試一次 (成功路徑零額外請求,同 fetchCnLyricsS2 的做法)
     queries = [title]
-    cleaned = clean_title(title)
+    cleaned = clean_title(title, artist)
     if cleaned and cleaned != title:
         queries.append(cleaned)
 

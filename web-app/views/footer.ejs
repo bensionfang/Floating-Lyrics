@@ -258,6 +258,31 @@
             }
         }
 
+        // CSV 走同一套 blob 下載 (理由同 downloadBackup:直接指 href 就看不到錯誤訊息)。
+        // 沒有紀錄時只有標題列,那不是錯誤 —— 吐司說清楚,不然使用者會以為下載壞了
+        async function downloadHistoryCsv(btn) {
+            const label = btn.textContent;
+            btn.disabled = true; btn.textContent = '準備中…';
+            try {
+                const r = await fetch('/api/history.csv');
+                if (!r.ok) throw new Error((await r.json()).error || r.status);
+                const blob = await r.blob();
+                const name = (r.headers.get('Content-Disposition') || '').match(/filename="?([^"]+)"?/);
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = name ? name[1] : 'Kanaric-history.csv';
+                a.click();
+                URL.revokeObjectURL(a.href);
+                const rows = (await blob.text()).trim().split('\n').length - 1;
+                showToast(rows > 0 ? `已匯出 ${rows} 筆聆聽紀錄` : '目前還沒有聆聽紀錄，CSV 只有標題列',
+                          'fa-solid fa-circle-check', 2500);
+            } catch (e) {
+                showToast('匯出失敗：' + e.message, 'fa-solid fa-triangle-exclamation', 4000);
+            } finally {
+                btn.disabled = false; btn.textContent = label;
+            }
+        }
+
         async function restoreBackup(input) {
             const file = input.files && input.files[0];
             input.value = '';   // 清掉才能連續選同一個檔案

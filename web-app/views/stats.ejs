@@ -112,6 +112,23 @@
     </div>
 </div>
 
+<!-- 聽歌熱力圖:近一年每天一格 -->
+<div class="dashboard-card glass-panel animate-fade-in" style="margin-bottom: 20px;">
+    <div class="card-header">
+        <h3><i class="fa-solid fa-fire"></i> 聽歌熱力圖</h3>
+        <span class="header-desc">近一年每天的播放次數</span>
+    </div>
+    <!-- 一年 53 欄放不下窄視窗,自己橫向捲(同 CLAUDE.md 對寬內容的規矩) -->
+    <div class="heatmap-scroll">
+        <div id="heatmap"></div>
+        <div class="heatmap-legend">
+            <span id="heatmap-total"></span>
+            <span class="heatmap-scale">少 <i class="hm-box l0"></i><i class="hm-box l1"></i><i
+                    class="hm-box l2"></i><i class="hm-box l3"></i><i class="hm-box l4"></i> 多</span>
+        </div>
+    </div>
+</div>
+
 <div class="stats-dashboard-grid animate-fade-in" style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 40px;">
     <!-- 24 小時聽歌時段分佈圖 -->
     <div class="dashboard-card glass-panel">
@@ -223,6 +240,10 @@
                 renderArtistChart(topArtists);
             }
 
+            // 5. Load Heatmap
+            const heatResp = await fetch('/api/stats/heatmap?t=' + Date.now());
+            if (heatResp.ok) renderHeatmap(await heatResp.json());
+
         } catch (err) {
             console.error('Error loading statistics:', err);
         } finally {
@@ -230,6 +251,54 @@
                 setTimeout(() => refreshIcon.classList.remove('fa-spin'), 600);
             }
         }
+    }
+
+    // 熱力圖:GitHub 貢獻圖的形狀 —— 一欄是一週 (週日在上),往右走是時間。
+    // **不用 Chart.js**:它沒有這種圖,而純 DOM 的一格一個 <i> 只有幾十行,還天然帶 title tooltip。
+    const HM_DAYS = 371;   // 53 週 × 7,起點對齊週日,右邊界永遠是今天那一週
+    function renderHeatmap(rows) {
+        const el = document.getElementById('heatmap');
+        if (!el) return;
+        const byDate = Object.fromEntries(rows.map(r => [r.date, r]));
+
+        // 用「本地時間的年月日」組鍵,不能用 toISOString() —— 那是 UTC,台灣時區會整批差一天
+        const key = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        const end = new Date();
+        end.setHours(0, 0, 0, 0);
+        end.setDate(end.getDate() + (6 - end.getDay()));   // 補到這一週的週六,格子才不會缺一角
+        const start = new Date(end);
+        start.setDate(start.getDate() - (HM_DAYS - 1));
+
+        // 分級用**該日次數 / 當期最大值**而不是寫死的門檻:每個人的聽歌量差一個數量級,
+        // 寫死的話重度使用者整片最深、輕度使用者整片最淺,兩種都看不出變化
+        const max = Math.max(1, ...rows.map(r => r.count));
+        const level = n => (n === 0 ? 0 : Math.min(4, Math.ceil(n / max * 4)));
+
+        const cells = [];
+        let months = [], lastMonth = -1;
+        for (let i = 0; i < HM_DAYS; i++) {
+            const d = new Date(start);
+            d.setDate(d.getDate() + i);
+            const k = key(d);
+            const hit = byDate[k];
+            const n = hit ? hit.count : 0;
+            const future = d > new Date();
+            const tip = future ? '' : `${k}　${n} 次${hit && hit.mins ? `　${hit.mins} 分鐘` : ''}`;
+            cells.push(`<i class="hm-box l${level(n)}${future ? ' hm-future' : ''}"${tip ? ` title="${tip}"` : ''}></i>`);
+            // 月標籤掛在「該月第一次出現的那一欄」的週日格
+            if (d.getDay() === 0) {
+                const m = d.getMonth();
+                months.push(m !== lastMonth ? `${m + 1}月` : '');
+                lastMonth = m;
+            }
+        }
+        el.innerHTML =
+            `<div class="hm-months">${months.map(m => `<span>${m}</span>`).join('')}</div>` +
+            `<div class="hm-grid">${cells.join('')}</div>`;
+
+        const total = rows.reduce((s, r) => s + r.count, 0);
+        document.getElementById('heatmap-total').textContent =
+            total ? `近一年共 ${total} 次播放，${rows.length} 天有聽歌` : '近一年還沒有紀錄';
     }
 
     function renderTimelineChart(data) {

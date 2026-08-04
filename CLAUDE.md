@@ -185,6 +185,8 @@ One Node.js backend, multiple thin clients, with Python scripts as helpers spawn
   - **`track_history` 設定 (預設 true) 的閘門只在 `global.logListen`,不要在別處再判斷一次。** `listening_history` 只有這一個寫入點 (換新歌、暫停後續播兩條計時器路徑共用);判斷刻意放在計時器「觸發時」而非排程時,使用者播到一半關掉就真的不會被記錄。關閉時側欄的統計數據/排行榜也一起隱藏 (`.nav-stats-item`,SSR 靠 `res.locals.settings` 決定,不然會閃一下才隱藏),但**路由保留** —— 關掉是「不記錄 / 不礙眼」,不是鎖起來。舊的 `/api/play-event` 是雲端同步時代的遺留、沒有任何呼叫者,已刪除,不要為了「外部 agent 也能回報」加回來。
   - **清除功能 (`/api/db-clear`) 的白名單寫死在 `CLEAR_TARGETS`,只碰得到可重建的資料。** `cache`/`romaji_hints`/`llm_hints` 清掉只是下次重抓;`word_corrections`、`sync_offsets`、`artist_aliases`、`search_overrides` 是使用者親手打的,**任何清除路徑都不准碰**,`/api/db-usage` 只顯示筆數。清 `lyrics` 要一併清記憶體的 `furiganaCache` 與 `itunesCache`,否則已刪的歌詞還會被吐出來;最後一定要 `VACUUM`,不然檔案不會真的變小。`romaji_hints`/`llm_hints` 是 Python 端 (`db.py`) 建的,**全新安裝上可能不存在** —— 這幾條 `db.run` 的 callback 不能省,沒 callback 的 "no such table" 會被 node-sqlite3 丟成未捕捉例外、整個 server 掛掉。回歸測試 `node tests/test_history_toggle.js`。
   - **備份/還原 (`/api/backup`、`/api/restore`) 是那批「不可重建」資料唯一的救生艇。** 備份 = **單一 `.db` 檔**:`VACUUM INTO` 產生壓實且與 WAL 一致的快照 (所以不必打包 `-wal`/`-shm`,也不必引入 zip 函式庫),再把 `settings.json` 的內容寫進備份檔自己的 `_backup_meta` 表。**`secrets.json` (LLM API key) 刻意不進備份** —— 備份檔會被隨手複製傳送。還原走 `express.raw`,前端直接把 File 當 body 送,不為了一支路由裝 multer;**動現有資料前一定要先驗 `_backup_meta.app === 'Kanaric'`**,否則隨便一個 sqlite 檔都能蓋掉使用者心血,而且要先複製一份 `.bak-restore-*` 救援檔。還原成功後 `db.close()` 已經執行,這支 server 不能再服務,靠 `global.relaunchApp()` (electron.js 掛的) 重開;純 node 模式沒有它,改成請使用者手動重啟。回歸測試 `node tests/test_backup_restore.js`。
+  - **`GET /api/history.csv` 是「給人讀」的匯出,跟備份是兩件事** —— 備份是二進位整庫快照、用來還原;CSV 是一張表,丟進 Excel 或自己寫腳本分析。**BOM 不能省**,Excel 開沒有 BOM 的 UTF-8 CSV 會用系統 codepage 解、日文歌名整片亂碼。一併匯出 `base_title` (統計都 GROUP BY 它),自己算才跟站上的排行榜對得起來。
+  - **`GET /api/stats/heatmap` 只回有資料的那幾天**,補零的 300 多天由前端照日曆長網格時當 0 即可。`strftime`/`date` 兩處都要 `'localtime'` —— `played_at` 存的是 UTC,不轉的話跨日那幾筆會落在錯的格子。前端 (`stats.ejs` 的 `renderHeatmap`) 三個坑:組鍵**不能用 `toISOString()`** (那是 UTC,台灣時區整批差一天);分級用「該日次數 / 當期最大值」而不是寫死門檻 (聽歌量差一個數量級,寫死的話重度使用者整片最深、輕度整片最淺);補到本週週六才畫得出完整一欄,但未來的格子要 `hm-future` 透明,不然看起來像「那天沒聽歌」。網格靠 CSS `grid-auto-flow: column` + `grid-template-rows: repeat(7,...)` 自己填成 7 列,**不用 Chart.js** (它沒有這種圖,純 DOM 還天然帶 title tooltip)。
   - 體積實測 (2026-07,393 首歌 / 349 筆紀錄 = 1.7 MB):`cache` 每首約 1.2 KB、`romaji_hints` 每首約 0.9 KB,而 `listening_history` 每筆只有 31 bytes (佔全庫 0.6%)。**要談資料庫大小,施力點是歌詞快取,不是聆聽紀錄。**
 
 ### Desktop packaging (Electron)
@@ -451,15 +453,22 @@ Don't re-run this. The errors that remain are mostly single-kanji on'yomi/kun'yo
   `サカナクション / アイデンティティ` 只有 8%、`Vaundy / 花占い` 28%,兩首都是對的歌,
   只是 utaten 那份的斷句與標注範圍不同。修掉這條之後覆蓋率 67% → 77%。
   歌手名兩邊寫法常常不同 (`SPITZ` / `スピッツ`),所以歌手對不上時仍然需要重疊率當退路。
-- 原名查不到才用 `clean_title()` 去掉 `(feat. …)` / `(… LIVE …)` 尾綴重試一次,成功路徑零額外請求。
+- 原名查不到才用 `clean_title()` 去噪重試一次,成功路徑零額外請求。剝三種:`feat.`、左括號之後、
+  **破折號尾綴** (` - Live`、` - replica -`、` - ALBUM ver.`)。剝成原曲名是刻意的 —— Live/replica
+  是同一份歌詞,注音本來就該一樣;剝過頭的代價只是多打一次搜尋,採用仍要過驗證。
+  - **破折號兩邊都要有空白**:沒空白的連字號多半是歌名/團名本身 (`go!go!vanillas`、`n-buna`)。
+  - **`_strip_artist_prefix` 一定要排在破折號尾綴前面** —— `ヨルシカ - 春泥棒`、
+    `くるり - 琥珀色の街、上海蟹の朝` 是歌手名黏進歌名開頭,剝尾巴只會剩下歌手名。
+    判準同 `cleanBrowserQuery` 的「開頭確實等於歌手」(正規化後互相包含),歌手欄可能是
+    `ヨルシカ / n-buna / ヨルシカ` 這種複合寫法所以逐段比。**這條讓涵蓋率 85% → 87%。**
 - 快取表 `utaten_hints`,形狀同 `romaji_hints`,**空 `{}` 是負快取**(查過了,utaten 沒這首)。
   平常播到那首歌時順手抓一次;`scripts/backfill_utaten.py` 是一次性補全 (每首之間睡 1 秒,
   這是別人家的網站)。
 - **`apply_hint` 不可以加「候選必須與原讀音等長」的門檻。** 那道閘門是 LLM 時代為了擋截斷加的,
   utaten 給的是完整假名,長度變化本身就是正解 (`夜 よる → よ`)。回歸測試 `test_furigana_hint.py`
   第 10 組釘住這條。
-- 涵蓋率**全庫實測 85%**(2026-08-04 跑完 `backfill_utaten.py` + 兩輪歌名還原:426 首日文歌,
-  有注音 363 / 落空 63)。找到的歌大約 7 成的行有注音。
+- 涵蓋率**全庫實測 87%**(2026-08-04 跑完 `backfill_utaten.py` + 兩輪歌名還原 + `clean_title`
+  補剝破折號尾綴:426 首日文歌,有注音 370 / 落空 56)。找到的歌大約 7 成的行有注音。
   - **落空的兩大類都救不到**:(a) 約 20 首**官方歌名本來就是英文** (`水中スピカ / Oshiroi`、
     `muque / TIME`、`NOMELON NOLEMON / SUGAR` —— iTunes JP 自己也登記這個名字);(b) 約 38 首是
     **獨立樂團** (NOMELON NOLEMON 11、CLAN QUEEN 6、Lavt 3、harha 2…),他們連日文歌名的歌 utaten
@@ -483,8 +492,16 @@ Don't re-run this. The errors that remain are mostly single-kanji on'yomi/kun'yo
 - **沒有第二個注音來源可用** (2026-08-04 探過)。uta-net、petitlyrics 的歌曲頁都沒有 ruby;
   kasi-time 網域已死、utamap 連不上;j-lyric / kashinavi 本來就沒有注音功能。
   **要提升覆蓋率,施力點是歌名還原,不是再找一家。**
+- **羅馬字那層量過是淨負,但還沒拔** (2026-08-04)。拿 utaten 的逐詞注音當**獨立裁判**
+  (161 首歌):羅馬字層動過的詞裡,變對 95 / **變錯 193** / 兩邊都不合 69,2:1 淨負。
+  用 `word_corrections` 當標準答案量不出這件事 —— 那是「看到錯了才手改」的詞,而羅馬字層
+  當時就在管線裡,它修對的詞永遠不會變成一筆 correction,**功勞在那份樣本裡是隱形的**。
+  實際傷害只在沒有 utaten 的那 13%(有 utaten 的歌會被後面那層蓋回去)。要拔的話動的是
+  `cn_music` 的羅馬字軌抓取、`romaji_hints` 表、`get_hints` 的回傳與 `CLEAR_TARGETS`。
 - 回歸測試 `venv\Scripts\python.exe tests/test_utaten.py` (不打網路);
   `python utaten.py` 是打真站的自我檢查,動到解析或搜尋時跑它。
+  `tests/test_recover_titles.py` 釘住 `recover_jp_titles.py` 的候選挑選 (排序要取絕對值、
+  不可以排除庫裡已有的歌名)。
 
 ### LLM 讀音校正 — 已移除 (2026-08-04)
 

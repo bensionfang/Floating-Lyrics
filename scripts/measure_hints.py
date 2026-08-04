@@ -65,7 +65,9 @@ def main():
     songs = con.execute(
         'SELECT DISTINCT artist, title FROM word_corrections ORDER BY artist, title').fetchall()
 
-    LAYERS = ['L0 字典', 'L1 ＋羅馬字', 'L2 ＋utaten']
+    # `U 只有 utaten` 是為了回答「羅馬字那層還值不值得留」:它跟 L2 的差就是羅馬字的
+    # **邊際**貢獻。L1 對 L0 的差不能拿來回答這題 —— 那是「沒有 utaten 時」的貢獻。
+    LAYERS = ['L0 字典', 'L1 ＋羅馬字', 'U 只有 utaten', 'L2 ＋utaten']
     hit = {n: 0 for n in LAYERS}
     total = 0
     skipped = []
@@ -95,9 +97,10 @@ def main():
         romaji = load('romaji_hints', artist, title)
 
         got = {
-            'L0 字典':      readings(row[0], artist, title, {}, {}),
-            'L1 ＋羅馬字':  readings(row[0], artist, title, romaji, {}),
-            'L2 ＋utaten':  readings(row[0], artist, title, romaji, uta),
+            'L0 字典':        readings(row[0], artist, title, {}, {}),
+            'L1 ＋羅馬字':    readings(row[0], artist, title, romaji, {}),
+            'U 只有 utaten':  readings(row[0], artist, title, {}, uta),
+            'L2 ＋utaten':    readings(row[0], artist, title, romaji, uta),
         }
 
         for word, want in corr:
@@ -135,7 +138,7 @@ def main():
         print(f'  {n:<16} {hit[n]:>3} / {total}   {pct}')
 
     print('\n逐詞 (✔ = 跟手改的一致):')
-    print(f'  {"詞":<8}{"正解":<10}{"L0":<12}{"L1":<12}{"L2":<12}')
+    print(f'  {"詞":<8}{"正解":<10}' + ''.join(f'{n.split()[0]:<14}' for n in LAYERS))
     for song, word, want, per in detail:
         cells = ''.join(f'{("✔ " if want in per[n] else "  ") + ("/".join(sorted(per[n])) or "—"):<14}'
                         for n in LAYERS)

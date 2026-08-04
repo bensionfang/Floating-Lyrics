@@ -143,7 +143,9 @@ def candidates(tracks, lrc):
         if last and dur:
             if dur + 5 < last:
                 continue
-            out.append((dur - last, name))
+            # **要取絕對值**:差值有號的話,「比歌詞末端短 2.5 秒」會排在「長 1.5 秒」前面,
+            # 而短的那個本來就比較可疑(曲長是下界)。每首歌只試前 MAX_TRIES 個,排錯 = 沒試到
+            out.append((abs(dur - last), name))
         else:
             out.append((9999, name))
     out.sort(key=lambda x: x[0])

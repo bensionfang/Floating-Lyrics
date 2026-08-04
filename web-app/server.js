@@ -1940,6 +1940,25 @@ app.get('/api/stats/timeline', (req, res) => {
   });
 });
 
+// 聽歌熱力圖:近一年每天一格。**只回有資料的那幾天** —— 前端本來就要照日曆長出整個網格,
+// 補零那 300 多天由它自己 lookup 時當 0 即可,不必送過來。
+// `'localtime'` 兩處都要:played_at 存的是 UTC,不轉的話跨日的那幾筆會落在錯的格子。
+app.get('/api/stats/heatmap', (req, res) => {
+  db.all(`
+    SELECT strftime('%Y-%m-%d', played_at, 'localtime') AS play_date,
+           COUNT(*) AS play_count, SUM(duration) AS duration_sum
+    FROM listening_history
+    WHERE date(played_at, 'localtime') >= date('now', 'localtime', '-365 days')
+    GROUP BY play_date`, [], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows.map(r => ({
+      date: r.play_date,
+      count: r.play_count,
+      mins: Math.round((r.duration_sum || 0) / 60),
+    })));
+  });
+});
+
 app.get('/api/stats/advanced', (req, res) => {
   const p1 = new Promise((resolve) => {
     db.get('SELECT MAX(cnt) AS maxLoop FROM (SELECT COUNT(*) AS cnt FROM listening_history GROUP BY artist, base_title)', [], (err, row) => resolve(row ? row.maxLoop : 0));
@@ -2238,6 +2257,32 @@ app.post('/api/db-clear', express.json(), (req, res) => {
 const BACKUP_META = '_backup_meta';
 // 還原後這支 server 的 db 連線已經關掉,任何後續查詢都會炸;擋在最前面比讓它半死不活好
 let restoring = false;
+
+// 聆聽紀錄匯出成 CSV。**跟 `/api/backup` 是兩件事**:那個是給程式還原的整庫快照 (二進位、
+// 含使用者手打的資料),這個是給人讀的一張表 —— 丟進 Excel 或自己寫腳本分析都行。
+// 直接串流成字串不落地:一筆 31 bytes,幾千筆也才幾百 KB。
+app.get('/api/history.csv', (req, res) => {
+  db.all(`SELECT played_at, artist, title, base_title, album, duration
+          FROM listening_history ORDER BY played_at ASC`, [], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    // 逗號、引號、換行三種都要處理 —— 日文歌名裡的全形逗號無所謂,但譯名/備註可能有半形的
+    const q = (v) => {
+      const s = v === null || v === undefined ? '' : String(v);
+      return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    // base_title 是剝掉 `(Live)`/`(feat. …)` 尾綴的 generated column,統計都 GROUP BY 它 ——
+    // 一起匯出,自己算的時候才跟站上的排行榜對得起來
+    const head = ['played_at', 'artist', 'title', 'base_title', 'album', 'duration_sec'];
+    const body = rows.map(r => [r.played_at, r.artist, r.title, r.base_title, r.album, r.duration].map(q).join(','));
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const name = `Kanaric-history-${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}.csv`;
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+    // **BOM 不能省**:Excel 開沒有 BOM 的 UTF-8 CSV 會用系統 codepage 解,日文歌名整片亂碼
+    res.send('﻿' + [head.join(','), ...body].join('\r\n'));
+  });
+});
 
 app.get('/api/backup', (req, res) => {
   if (restoring) return res.status(503).json({ error: '正在還原,請重新啟動 Kanaric' });

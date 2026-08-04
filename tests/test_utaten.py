@@ -81,6 +81,24 @@ check(utaten.clean_title('Pretender (LIVE at STADIUM 2025)') == 'Pretender',
       utaten.clean_title('Pretender (LIVE at STADIUM 2025)'))
 check(utaten.clean_title('花人局') == '花人局', '沒有尾綴的歌名原樣不動')
 
+# 4b. 破折號尾綴 (Live/replica/ALBUM ver.) 也要剝 —— 同一份歌詞,注音本來就該一樣
+check(utaten.clean_title('海馬成長痛 - Live') == '海馬成長痛', utaten.clean_title('海馬成長痛 - Live'))
+check(utaten.clean_title('怪獣の花唄 - replica -') == '怪獣の花唄',
+      utaten.clean_title('怪獣の花唄 - replica -'))
+check(utaten.clean_title('NEO炒飯 - 本格中華喫茶・愛のペガサス 2024 / LIVE') == 'NEO炒飯',
+      utaten.clean_title('NEO炒飯 - 本格中華喫茶・愛のペガサス 2024 / LIVE'))
+# **兩邊都要有空白**:沒空白的連字號多半是歌名/團名本身的一部分
+check(utaten.clean_title('怪獣の花唄-replica-') == '怪獣の花唄-replica-', '沒空白的連字號不剝')
+
+# 4c. 歌手名黏在歌名開頭 —— 要剝的是**前綴**,剝尾巴只會剩下歌手名
+check(utaten.clean_title('ヨルシカ - 春泥棒', 'ヨルシカ / n-buna / ヨルシカ') == '春泥棒',
+      utaten.clean_title('ヨルシカ - 春泥棒', 'ヨルシカ / n-buna / ヨルシカ'))
+check(utaten.clean_title('くるり - 琥珀色の街、上海蟹の朝', 'くるり') == '琥珀色の街、上海蟹の朝',
+      utaten.clean_title('くるり - 琥珀色の街、上海蟹の朝', 'くるり'))
+# 開頭那段不是歌手就不能當前綴剝掉 (它是版本尾綴,走 _DASH_TAIL)
+check(utaten.clean_title('海馬成長痛 - Live', 'ずっと真夜中でいいのに。') == '海馬成長痛',
+      '開頭不是歌手時不剝前綴')
+
 # 5. **這條是核心**:歌手與歌名都對得上就採用,不再看行重疊率。
 #    餵一份「一行都對不上」的注音,重疊率 0% —— 歌手對得上時仍然要收下。
 LYRICS = '[00:01.00]我們手上的歌詞這行\n[00:02.00]另外一行'
