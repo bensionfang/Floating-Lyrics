@@ -17,6 +17,10 @@ import sqlite3
 import sys
 from collections import defaultdict
 
+# 印的是日文歌手名,cp950 的 console 會在 `ー`/假名上丟 UnicodeEncodeError 整支炸掉
+if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8')
+
 DB = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'lyrics_data.db')
 
 # 方向一律收斂到原文名，與 artist_aliases 現有 6 筆的慣例一致
@@ -35,6 +39,8 @@ TABLES = [
     ('cache',            ('artist', 'title'),         'lyrics'),
     ('romaji_hints',     ('artist', 'title'),         'data'),
     ('utaten_hints',     ('artist', 'title'),         'data'),
+    ('lyrics_translations', ('artist', 'title'),      'data'),
+    ('word_times',       ('artist', 'title'),         'data'),
     ('sync_offsets',     ('artist', 'title'),         None),
     ('word_corrections', ('artist', 'title', 'word'), None),
 ]
@@ -81,6 +87,18 @@ def merge(conn, alias, true_name, apply):
         rows = conn.execute(f'SELECT {cols} FROM {table} WHERE artist=?', (alias,)).fetchall()
         for row in rows:
             key_vals = row[:len(rest)]
+
+            # **負快取(空 `{}`)不跟著改名,直接丟掉。** 它的意思是「用**別名**查過了,沒有」,
+            # 而歌手名是查詢的一部分:utaten 的驗證是「歌手＋歌名都對得上就採用,對不上才退回
+            # 行重疊率」,歌手停在中文譯名 (神不擲骰子) 時走的是比較嚴的那條,換成正規名結果
+            # 可能就不同。丟掉零損失,下次播到那首歌會用正規名重查。
+            if value and not (row[len(rest)] or '').strip().strip('{}'):
+                deleted += 1
+                if apply:
+                    conn.execute(f'DELETE FROM {table} WHERE artist=? AND {where_rest}',
+                                 (alias, *key_vals))
+                continue
+
             target = conn.execute(
                 f'SELECT {value or "1"} FROM {table} WHERE artist=? AND {where_rest}',
                 (true_name, *key_vals)

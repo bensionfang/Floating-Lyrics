@@ -2,6 +2,7 @@
 量讀音提示每一層的實際貢獻。
 
   venv\\Scripts\\python.exe scripts/measure_hints.py
+  venv\\Scripts\\python.exe scripts/measure_hints.py --diff   # 只列手改與自動不一致的
 
 標準答案 = 使用者手改的 `word_corrections`(它是修正鏈的最上層,所以量的時候要繞過它,
 否則每一層都會 100% 命中)。三種設定各跑一次完整的 `process_lrc`,再從輸出的
@@ -13,6 +14,10 @@
 
 **只讀快取,不打網路**:兩種 hint 都從 DB 撈。utaten 那張表要先有資料 ——
 沒有的歌會被列進「跳過」,正常播一遍或跑 scripts/backfill_utaten.py 補。
+
+`--diff` 把同一份資料反過來讀:不是「管線命中幾個」,而是「哪幾筆手改與 utaten／自動不一致」。
+**兩邊都可能是對的那一方**,所以這支只讀不寫、也不建議刪 —— `我愛你` 的 `我 うお` 是華語音譯,
+沒有任何日文注音來源會有它。列出來讓人自己判斷。
 """
 import html
 import json
@@ -55,15 +60,17 @@ def readings(lyrics, artist, title, romaji, uta):
 
 
 def main():
+    diff_only = '--diff' in sys.argv
     con = sqlite3.connect(DB)
     songs = con.execute(
         'SELECT DISTINCT artist, title FROM word_corrections ORDER BY artist, title').fetchall()
 
     LAYERS = ['L0 字典', 'L1 ＋羅馬字', 'L2 ＋utaten']
     hit = {n: 0 for n in LAYERS}
-    total = absent = 0
+    total = 0
     skipped = []
     detail = []
+    stale = []
 
     def load(table, artist, title):
         row = con.execute(f'SELECT data FROM {table} WHERE artist=? AND title=?',
@@ -95,7 +102,7 @@ def main():
 
         for word, want in corr:
             if word not in got['L0 字典']:
-                absent += 1
+                stale.append((f'{artist} / {title}', word, want))
                 continue
             total += 1
             per = {n: got[n].get(word, set()) for n in LAYERS}
@@ -105,8 +112,24 @@ def main():
                     hit[n] += 1
 
     print(f'資料庫: {DB}')
-    print(f'標準答案 {total} 個詞 (另有 {absent} 個詞已不在現在的歌詞裡,不計)')
+    print(f'標準答案 {total} 個詞 (另有 {len(stale)} 個詞已不在現在的歌詞裡,不計)')
     print(f'可量的歌: {len(songs) - len(skipped)} / {len(songs)}\n')
+
+    if diff_only:
+        bad = [d for d in detail if d[2] not in d[3]['L2 ＋utaten']]
+        print(f'手改與自動不一致 {len(bad)} / {total} 筆。**兩邊都可能是對的**,自己判斷,不要自動刪:\n')
+        print(f'  {"詞":<8}{"手改的":<10}{"utaten／自動":<16}歌')
+        for song, word, want, per in bad:
+            auto = '/'.join(sorted(per['L2 ＋utaten'])) or '—'
+            print(f'  {word:<8}{want:<10}{auto:<16}{song}')
+        if stale:
+            print(f'\n詞已不在現在的歌詞裡 {len(stale)} 筆 (歌詞換過版本,這幾筆是死資料):')
+            for song, word, want in stale:
+                print(f'  {word:<8}{want:<10}{"":<16}{song}')
+        if skipped:
+            print(f'\n跳過 {len(skipped)} 首 (沒有快取歌詞或沒有 utaten 注音,判斷不了)')
+        return
+
     for n in LAYERS:
         pct = f'{hit[n] / total * 100:.0f}%' if total else '—'
         print(f'  {n:<16} {hit[n]:>3} / {total}   {pct}')

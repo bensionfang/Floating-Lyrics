@@ -5,8 +5,14 @@ server.js 的 getResolvedMetadata 現在會在查詢失敗時標記 failedAt、�
 因為一次逾時就永久分裂；這支處理的是改動之前就已經用兩種寫法存進去的舊列。實測 TUYU / ツユ
 底下各存了同樣四首歌，listening_history 也分裂（排行榜與統計因此是錯的）。
 
-    python scripts/restore_jp_titles.py            # dry-run，只印出會做什麼
-    python scripts/restore_jp_titles.py --apply    # 備份後實際寫入
+    python scripts/restore_jp_titles.py                       # dry-run，只印出會做什麼
+    python scripts/restore_jp_titles.py --apply               # 備份後實際寫入
+    python scripts/restore_jp_titles.py --apply --pick 3,7    # 再套用人工確認清單的第 3、7 筆
+
+**「需人工確認」那批不會自己消化掉,`--pick` 是它唯一的出口。** 原本的想法是「正常聽歌
+累積出真實時長之後再跑一次」,實測(2026-08-04)證明那不會發生:那批是舊的孤兒列,現在播放
+早就直接還原成日文名了,英文名那列不會再進 `listening_history`;少數有進過的,`duration`
+也是 180 —— `writeListen` 拿不到時長時寫死的預設值,而時長閘門本來就排除它。
 
 **採用條件刻意比 server.js 嚴，而且只認一條證據：時長 ±3 秒吻合。**
 線上路徑判錯只是一首歌一時標錯、使用者看得到；這支是合併資料列，判錯等於把兩首不同的歌
@@ -40,6 +46,10 @@ import time
 import urllib.parse
 import urllib.request
 
+# 印的是日文歌名,cp950 的 console 會在 `ー` 這種字上丟 UnicodeEncodeError 整支炸掉
+if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8')
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB = os.path.join(ROOT, 'lyrics_data.db')
 CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.itunes_cache.json')
@@ -65,6 +75,7 @@ TABLES = [
     ('romaji_hints',        ('artist', 'title'),         'data'),
     ('utaten_hints',        ('artist', 'title'),         'data'),
     ('lyrics_translations', ('artist', 'title'),         'data'),
+    ('word_times',          ('artist', 'title'),         'data'),
     ('sync_offsets',        ('artist', 'title'),         None),
     ('word_corrections',    ('artist', 'title', 'word'), None),
 ]
@@ -208,6 +219,17 @@ def merge_one(conn, old, new, tables, apply):
 
         for row in rows:
             key_vals = tuple(row[:len(rest)])
+
+            # **負快取(空 `{}`)不跟著改名,直接丟掉。** 它的意思是「用**舊名**查過了,那邊沒有」,
+            # 而改名的整個用意就是新名查得到 —— utaten 只收日文歌名,英文名底下必然是 `{}`,
+            # 搬過去等於讓那首歌永遠不再查 utaten,剛好抵銷這支腳本的目的。
+            # 丟掉不會有損失:下次播到那首歌時 get_hints() 會用新名重查一次。
+            if value and not (row[len(rest)] or '').strip().strip('{}'):
+                deleted += 1
+                if apply:
+                    conn.execute(f'DELETE FROM {table} WHERE artist=? AND title=?{where_rest}',
+                                 (o_artist, o_title, *key_vals))
+                continue
             target = conn.execute(
                 f'SELECT {value or "1"} FROM {table} WHERE artist=? AND title=?{where_rest}',
                 (n_artist, n_title, *key_vals)
@@ -239,6 +261,9 @@ def merge_one(conn, old, new, tables, apply):
 
 def main():
     apply = '--apply' in sys.argv
+    pick = set()
+    if '--pick' in sys.argv:
+        pick = {int(n) for n in sys.argv[sys.argv.index('--pick') + 1].split(',') if n.strip()}
     if apply:
         shutil.copy(DB, DB + '.bak')
         print(f'已備份 → {DB}.bak\n')
@@ -269,6 +294,7 @@ def main():
     conn.execute('BEGIN')
     total_u = total_d = 0
     accepted, review = [], []
+    review_n = 0
     blocked = False
     misses = 0
     try:
@@ -282,10 +308,16 @@ def main():
             verdict, why = decide(title, artist, hit, dur_map.get((artist, title)))
             if verdict == 'skip':
                 continue
-            line = f'{artist} - {title}\n    → {hit["artist"]} - {hit["title"]}   [{why}]'
             if verdict == 'review':
-                review.append(line)
-                continue
+                # 編號要對每一筆 review 都遞增(含被 --pick 挑走的),否則挑掉幾筆之後
+                # 後面那些的編號會跟著位移,上一次 dry-run 印的號碼就對不上了
+                review_n += 1
+                if review_n not in pick:
+                    review.append((review_n, f'{artist} - {title}\n'
+                                             f'    → {hit["artist"]} - {hit["title"]}   [{why}]'))
+                    continue
+                why = f'--pick {review_n}，人工判斷是同一首'
+            line = f'{artist} - {title}\n    → {hit["artist"]} - {hit["title"]}   [{why}]'
             accepted.append(line)
             print(f'  {line}')
             u, d = merge_one(conn, (artist, title), (hit['artist'], hit['title']), tables, apply)
@@ -309,9 +341,10 @@ def main():
     print(f'\n自動合併 {len(accepted)} 首：改名 {total_u} 列，合併刪除 {total_d} 列')
     if review:
         print(f'\n=== 需人工確認 {len(review)} 首（沒有動到，證據不夠硬）===')
-        for line in review:
-            print(f'  {line}')
-        print('\n確認某首是對的，可以在 app 裡用「搜尋覆寫」修，或手動改 DB。')
+        for n, line in review:
+            print(f'  [{n:>2}] {line}')
+        print('\n自己判斷是同一首的,用左邊的號碼挑出來套用(編號在同一份 iTunes 快取下是穩定的):')
+        print('    python scripts/restore_jp_titles.py --apply --pick 13,14,15')
     if not apply and accepted:
         print('\n確認無誤後加 --apply 實際寫入。')
     conn.close()

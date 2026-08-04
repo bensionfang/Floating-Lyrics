@@ -249,6 +249,10 @@ GitHub repo 也已改名 `bensionfang/Kanaric`,`server.js` 的 `GITHUB_REPO` 跟
      - 歌手不可信時**只丟掉歌手、歌名的還原照留**。**時長幫不上這個忙** —— `Coldplay / Yellow` 是對的歌、時長完全吻合,只是那份名字是音譯;時長證明的是「同一首歌」,不是「名字是原名」。
      - 這一切只在 `hasKana(title)` 早退**沒有**觸發時才跑,所以歌名有假名的 (`きらり`、`10月無口な君を忘れる`) 仍然不查歌手 —— `artist_aliases` 補的正是這個盲區,加上 iTunes 給不了的純偏好 (`Jay Chou` → `周杰倫`,iTunes 自己就登記羅馬字)。
      - 舊資料用 `scripts/restore_jp_titles.py` 一次性收斂 (預設 dry-run,`--apply` 才寫入並備份)。**它的採用條件刻意比 server.js 嚴**:線上判錯只是一時標錯,批次判錯是合併資料列、不可逆。實測 iTunes JP 會把西洋歌音譯成片假名 (`Juice WRLD` → `ジュース・ワールド`),「含假名」擋不住,所以要「時長 ±3 秒吻合」或「新歌名含**平假名**」兩條之一,其餘列進人工確認清單。
+       - **人工確認清單不會自己消化掉,`--pick` 是它唯一的出口** (dry-run 印編號,`--apply --pick 3,7` 挑著套)。曾經以為「正常聽歌累積出真實時長之後再跑一次」就會過,實測 (2026-08-04) 是錯的:那批是**孤兒列** —— 現在播放早就直接還原成日文名,英文名那列不會再進 `listening_history`;少數有進過的 `duration` 也是 **180** (`writeListen` 拿不到時長時的寫死預設),而時長閘門本來就排除它。編號要對每一筆 review 都遞增 (含被挑走的),否則挑掉幾筆之後號碼會位移。
+       - **`scripts/merge_aliases.py` (歌手別名收斂) 的 `merge()` 是同一個形狀,同樣的坑要一起看** —— 兩支刻意沒合併成共用模組 (一支改 artist+title、一支只改 artist),但改任一支的改名邏輯要看另一支。
+       - **`merge_one` 的負快取 (空 `{}`) 不跟著改名,直接丟掉。** `utaten_hints`/`romaji_hints`/`lyrics_translations`/`word_times` 都用 `{}` 當負快取,而它的語意是「用**舊名**查過了,那邊沒有」——改名的整個用意就是新名查得到 (utaten 只收日文歌名,英文名底下必然是 `{}`),搬過去等於讓那首歌永遠不再查,剛好抵銷這支腳本的目的。丟掉零損失,下次播到自然重查。
+       - `scripts/` 底下**會印日文的腳本一律要在開頭 `sys.stdout.reconfigure(encoding='utf-8')`** —— cp950 的 console 印到長音符 `ー` 就 `UnicodeEncodeError` 整支炸掉 (同 `pytools.py` 那條坑)。
    - **`state.resolving` 是「歌名還沒定案」的旗標,前端必須等它變 false 才抓歌詞。** iTunes 日文原名還原 (`getResolvedMetadata`) 是非同步的,`handleMediaUpdate` 不能等,所以換歌後頭幾百毫秒 state 帶的是原始歌名、幾秒後才換成日文原名。前端是靠「title 變了」判斷換歌的,沒有這個旗標就會用兩個不同的鍵各抓一次歌詞 —— 第二次多半撞到來源限流拿到空的,把已經抓對的歌詞蓋成「找不到歌詞」,要重新載入才好。
    - `itunesCache` 的佔位項帶 `pending: true`,`getResolvedMetadata` **每一條 return 前都要覆寫掉它** (含假名早退、查到、例外三條)。漏掉任何一條,那首歌的 `resolving` 永遠是 true,歌詞就完全不會抓。回歸測試 `node tests/test_itunes_resolving.js`。
    - 前端 (`app.js`) 用 `lastLyricsKey` 判斷要不要抓,跟 `lastMediaTitle` 分開:換歌時 `lastMediaTitle` 會變兩次 (原名 → 還原後),歌詞只該抓最後定案的那次。自動搜尋備選歌詞也綁在同一個判斷裡,理由相同。
@@ -409,13 +413,17 @@ Don't re-run this. The errors that remain are mostly single-kanji on'yomi/kun'yo
 `utaten.py` — 爬 utaten.com 的 ふりがな 歌詞。它是**人標的**,而且伺服器端就渲染成
 `<span class="ruby"><span class="rb">漢字</span><span class="rt">かな</span></span>`,不必跑 JS。
 
-拿使用者手改的 `word_corrections` 當標準答案量過 (39 個詞 / 25 首歌,`scripts/measure_hints.py`):
+拿使用者手改的 `word_corrections` 當標準答案量過 (`scripts/measure_hints.py`;右欄是全庫 utaten 補全後重量的):
 
-| 層 | 命中 |
-|---|---|
-| L0 只有 fugashi 字典 | 26/39 (67%) |
-| L1 ＋羅馬字 hint | **25/39 (64%)** ← 淨負 |
-| L2 ＋utaten | **34/39 (87%)** |
+| 層 | 命中 (39 詞 / 25 首) | 補全後 (43 詞 / 28 首) |
+|---|---|---|
+| L0 只有 fugashi 字典 | 26/39 (67%) | 29/43 (67%) |
+| L1 ＋羅馬字 hint | **25/39 (64%)** ← 淨負 | 28/43 (65%) ← 仍淨負 |
+| L2 ＋utaten | **34/39 (87%)** | **38/43 (88%)** |
+
+`--diff` 把同一份資料反過來讀:不是「管線命中幾個」而是「哪幾筆**手改與 utaten 不一致**」
+(實跑 5/43,另列出「詞已不在現在的歌詞裡」的死資料)。**只讀不寫,也不要自動刪** ——
+`我愛你` 的 `我 うお` 是華語音譯,手改才是對的那一方,沒有任何日文注音來源會有它。
 
 `静寂=しじま`、`談=はなし`、`外=はず`、`逸=はぐ`、`退=ど` 這種字典全滅的特殊唸法它都對。
 **羅馬字那層仍然留著** —— 它在這批樣本是淨負,但 utaten 只涵蓋約 78% 的歌,沒被蓋到的地方靠它;
@@ -450,7 +458,26 @@ Don't re-run this. The errors that remain are mostly single-kanji on'yomi/kun'yo
 - **`apply_hint` 不可以加「候選必須與原讀音等長」的門檻。** 那道閘門是 LLM 時代為了擋截斷加的,
   utaten 給的是完整假名,長度變化本身就是正解 (`夜 よる → よ`)。回歸測試 `test_furigana_hint.py`
   第 10 組釘住這條。
-- 涵蓋率實測 **77%**(30 首隨機日文歌);找到的歌大約 7 成的行有注音。
+- 涵蓋率**全庫實測 85%**(2026-08-04 跑完 `backfill_utaten.py` + 兩輪歌名還原:426 首日文歌,
+  有注音 363 / 落空 63)。找到的歌大約 7 成的行有注音。
+  - **落空的兩大類都救不到**:(a) 約 20 首**官方歌名本來就是英文** (`水中スピカ / Oshiroi`、
+    `muque / TIME`、`NOMELON NOLEMON / SUGAR` —— iTunes JP 自己也登記這個名字);(b) 約 38 首是
+    **獨立樂團** (NOMELON NOLEMON 11、CLAN QUEEN 6、Lavt 3、harha 2…),他們連日文歌名的歌 utaten
+    也沒收。後者是天花板,**換第二家救不到,而且沒有第二家**(見上一條)。
+    **95% 不在射程內,不要再為此找來源;歌名還原這條也已經拉到底 (77% → 85%)。**
+  - **utaten 的行重疊率是比時長更好用的歌名證據** —— `scripts/recover_jp_titles.py` 就是這條:
+    抓歌手的 iTunes **JP** 曲目列,用「歌詞最後一個時間戳 vs 曲長」排序候選 (時間戳是曲長的下界),
+    逐個打 utaten 算行重疊,`≥60%` 採用。對「這首歌沒進過聆聽紀錄」免疫,那正是
+    `restore_jp_titles.py` 卡住 28 首的原因。實測對的 78~100%、錯的 0~14%,訊號分得很開。
+    - **限制:它分不出原曲/Live版/翻唱** (歌詞一樣)。所以是補時長的不足不是取代 —— 時長證明
+      「同一個錄音」,行重疊證明「同一首歌的內容」。腳本因此**只改歌名不改歌手**,候選全取自
+      這位歌手自己的曲目列,翻唱從一開始就不在候選裡。
+    - **不要排除「庫裡已經有的歌名」**:加過那條,剛好擋掉最該修的情況 (`go!go!vanillas` 的
+      `HEIAN` 與 `平安` 兩列同時存在,正是要合併的分裂)。守門本來就是重疊率。
+    - **先擋掉「iTunes JP 自己就登記這個英文歌名」的**:30 個目標裡 20 個是這種,
+      不擋就是白打 5 次 utaten 再回報「對不上」,看起來像判斷失敗。請求數 94 → 36。
+    - **`utaten.fetch_hints` 把 read timeout 吞掉回 `{}`,跟「真的沒這首」分不出來** ——
+      連打同一位歌手時會踩到,間隔要 2 秒 (backfill 的 1 秒不夠)。腳本冪等,漏判重跑就好。
   剩下的落空有一半是**歌名還沒還原成日文** (`Could I be yours?`、`HEIAN`) —— 那是
   ROADMAP 的人工確認清單,不是 utaten 的問題;其餘是 utaten 真的沒收 (獨立樂團、新歌)。
 - **沒有第二個注音來源可用** (2026-08-04 探過)。uta-net、petitlyrics 的歌曲頁都沒有 ruby;
