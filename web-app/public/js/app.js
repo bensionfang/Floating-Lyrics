@@ -209,7 +209,7 @@ function resumeSync() {
 // 兩件事都吃 server 的廣播:
 //   media_state / init —— 播放狀態 (換歌、暫停、位置、封面),取代以前每 100ms 打一次
 //                          /api/current-media 的輪詢 (那支回整份狀態含 base64 封面)。
-//   lyrics_updated    —— 同一首歌的歌詞在背景變動 (無歌詞重查自動套用、魔杖跑完)。那不會
+//   lyrics_updated    —— 同一首歌的歌詞在背景變動 (無歌詞重查自動套用、假名修正)。那不會
 //                          換歌,所以靠輪詢是抓不到的,只能等廣播 (跟靈動島同一條)。
 //
 // **連線本身在 footer.ejs**,那支每一頁都會載入,開一條就夠 —— 這裡只掛 handler,
@@ -798,7 +798,7 @@ const TOOLBAR_TOOLS = [
 function _toolHideTarget(id) {
     const el = document.getElementById(id);
     if (!el) return null;
-    // 備選歌詞/魔杖包在 .lyrics-opt-wrap (含浮層錨點),要連 wrapper 一起藏
+    // 備選歌詞包在 .lyrics-opt-wrap (含浮層錨點),要連 wrapper 一起藏
     return el.closest('.lyrics-opt-wrap') || el;
 }
 
