@@ -57,15 +57,11 @@ def main():
         WORD_TIME_SOURCES = {"QQMusic"}
 
         try:
-            # 讀音提示與譯文都搭歌詞的便車存起來,之後就不用再打一次網路。
-            # 兩者分開取第一個有東西的來源 —— 一家可能有羅馬字卻沒翻譯,反之亦然。
+            # 譯文與逐字時間都搭歌詞的便車存起來,之後就不用再打一次網路。
+            # 兩者分開取第一個有東西的來源 —— 一家可能有翻譯卻沒逐字,反之亦然。
             # 譯文一定要寫入 (沒有就寫空的當負快取),否則 server 的 ensureTranslations
             # 會判斷成「還沒查過」,每次播這首歌都重抓一輪。
             def _stash(results, tried_all):
-                for r in results:
-                    if r.get("hints"):
-                        db.save_romaji_hints(artist, title, r["hints"])
-                        break
                 for r in results:
                     if r.get("translations"):
                         db.save_translations(artist, title, r["translations"])
@@ -100,7 +96,10 @@ def main():
                 if r.get("lyrics"):
                     _stash([r], False)
                     print(json.dumps({
-                        "success": True, "lyrics": r["lyrics"], "source": r["source"]
+                        # word:這一份本身帶不帶逐字時間 (同 source:'all' 那條路)。server 靠它決定
+                        # 要不要連歌詞本體都用 QQ 那份 —— 本體與逐字同一份,行覆蓋率才會是 100%
+                        "success": True, "lyrics": r["lyrics"], "source": r["source"],
+                        "word": bool(r.get("word_times"))
                     }, ensure_ascii=False))
                 else:
                     print(json.dumps({"success": False, "error": "Not found"}))

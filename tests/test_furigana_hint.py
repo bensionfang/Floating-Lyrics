@@ -10,7 +10,7 @@ from furigana_inject import apply_hint
 # process_lrc 會去問外部來源 (cn_music 的羅馬字、utaten 的注音)。這支是離線單元測試,
 # hint 一律由各案例自己明確給,所以把整條抓取路徑短路掉 —— 不然跑測試會打網路,
 # 而且結果會隨那兩家當下有沒有資料而飄。
-furigana_inject.get_hints = lambda *a, **k: ({}, {})
+furigana_inject.get_hints = lambda *a, **k: {}
 
 def hira_of(words, orig):
     return next(w['hira'] for w in words if w['orig'] == orig)

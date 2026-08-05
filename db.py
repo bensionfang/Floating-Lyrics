@@ -60,10 +60,11 @@ class DatabaseManager:
 
         # 建立歌手別名映射表
         self.cursor.execute('''CREATE TABLE IF NOT EXISTS artist_aliases (alias TEXT PRIMARY KEY, true_name TEXT)''')
-        # 建立羅馬字讀音提示快取表 (data 為 JSON: {歌詞行: 平假名})
+        # 羅馬字讀音提示表 —— **2026-08-05 起不再讀寫**(那層量出來 2:1 淨負,已移除)。
+        # 建表與 server.js 的 CLEAR_TARGETS 保留著,單純是為了讓舊庫裡的殘留資料清得掉。
         self.cursor.execute('''CREATE TABLE IF NOT EXISTS romaji_hints (artist TEXT, title TEXT, data TEXT, PRIMARY KEY (artist, title))''')
         # utaten 的人工注音提示 (data 為 JSON: {正規化後的歌詞行: 整行平假名})。
-        # 形狀同 romaji_hints,空 {} 是負快取 (查過了,utaten 沒這首)
+        # 空 {} 是負快取 (查過了,utaten 沒這首)
         self.cursor.execute('''CREATE TABLE IF NOT EXISTS utaten_hints (artist TEXT, title TEXT, data TEXT, PRIMARY KEY (artist, title))''')
         # 中文譯文快取 (data 為 JSON: {正規化後的日文行: 譯文})。定義同時寫在 server.js,改一邊要改兩邊
         self.cursor.execute('''CREATE TABLE IF NOT EXISTS lyrics_translations (artist TEXT, title TEXT, data TEXT, PRIMARY KEY (artist, title))''')
@@ -101,27 +102,8 @@ class DatabaseManager:
         self.cursor.execute("INSERT OR REPLACE INTO cache VALUES (?, ?, ?)", (artist, title, lyrics))
         self.conn.commit()
 
-    def get_romaji_hints(self, artist: str, title: str) -> Optional[dict]:
-        """取得快取的羅馬字讀音提示。回傳 None 代表沒抓過,回傳 {} 代表抓過但沒有來源"""
-        self.cursor.execute("SELECT data FROM romaji_hints WHERE artist=? AND title=?", (artist, title))
-        row = self.cursor.fetchone()
-        if not row:
-            return None
-        try:
-            return json.loads(row[0])
-        except (ValueError, TypeError):
-            return {}
-
-    def save_romaji_hints(self, artist: str, title: str, hints: dict) -> None:
-        """儲存羅馬字讀音提示。空 dict 也要存,當作負快取避免重複請求"""
-        self.cursor.execute(
-            "INSERT OR REPLACE INTO romaji_hints VALUES (?, ?, ?)",
-            (artist, title, json.dumps(hints, ensure_ascii=False))
-        )
-        self.conn.commit()
-
     def get_translations(self, artist: str, title: str) -> Optional[dict]:
-        """取得快取的中文譯文。None = 沒抓過,{} = 抓過但沒有來源附翻譯 (負快取,同 romaji_hints)"""
+        """取得快取的中文譯文。None = 沒抓過,{} = 抓過但沒有來源附翻譯 (負快取)"""
         self.cursor.execute("SELECT data FROM lyrics_translations WHERE artist=? AND title=?", (artist, title))
         row = self.cursor.fetchone()
         if not row:
@@ -140,7 +122,7 @@ class DatabaseManager:
         self.conn.commit()
 
     def get_word_times(self, artist: str, title: str) -> Optional[dict]:
-        """取得快取的逐字時間。None = 沒抓過,{} = 抓過但沒有來源有逐字 (負快取,同 romaji_hints)"""
+        """取得快取的逐字時間。None = 沒抓過,{} = 抓過但沒有來源有逐字 (負快取)"""
         self.cursor.execute("SELECT data FROM word_times WHERE artist=? AND title=?", (artist, title))
         row = self.cursor.fetchone()
         if not row:

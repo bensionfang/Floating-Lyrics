@@ -52,8 +52,8 @@ def main() -> int:
                 lines = len((r.get("lyrics") or "").strip().splitlines())
                 if lines:
                     totals[name] += 1
-                    print(f"  {name:9} OK    {lines:3} 行 / {len(r.get('hints') or {}):3} 讀音提示"
-                          f" / {len(r.get('translations') or {}):3} 譯文  {ms} ms")
+                    print(f"  {name:9} OK    {lines:3} 行 / {len(r.get('translations') or {}):3} 譯文"
+                          f" / {'有' if r.get('word_times') else '無'}逐字  {ms} ms")
                 else:
                     print(f"  {name:9} 空    (連得上但沒歌詞 —— 可能是搜尋被擋或這首沒收錄)  {ms} ms")
             except Exception as e:

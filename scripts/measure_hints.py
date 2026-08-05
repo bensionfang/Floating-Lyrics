@@ -5,14 +5,15 @@
   venv\\Scripts\\python.exe scripts/measure_hints.py --diff   # 只列手改與自動不一致的
 
 標準答案 = 使用者手改的 `word_corrections`(它是修正鏈的最上層,所以量的時候要繞過它,
-否則每一層都會 100% 命中)。三種設定各跑一次完整的 `process_lrc`,再從輸出的
+否則每一層都會 100% 命中)。每一層各跑一次完整的 `process_lrc`,再從輸出的
 `data-orig` / `data-hira` 把每個詞的讀音撈回來比對:
 
   L0  只有 fugashi 字典
-  L1  ＋羅馬字 hint (cn_music,機器產的)
-  L2  ＋utaten 的注音 (人標的)
+  L1  ＋utaten 的注音 (人標的)
 
-**只讀快取,不打網路**:兩種 hint 都從 DB 撈。utaten 那張表要先有資料 ——
+(2026-08-05 之前中間還有一層「中國平台的逐音節羅馬字」,量出來 2:1 淨負,已移除。)
+
+**只讀快取,不打網路**:hint 從 DB 撈。utaten 那張表要先有資料 ——
 沒有的歌會被列進「跳過」,正常播一遍或跑 scripts/backfill_utaten.py 補。
 
 `--diff` 把同一份資料反過來讀:不是「管線命中幾個」,而是「哪幾筆手改與 utaten／自動不一致」。
@@ -41,7 +42,7 @@ RUBY = re.compile(r"data-orig='([^']*)' data-hira='([^']*)'")
 furigana_inject.db.get_word_correction = lambda *a, **k: None
 
 
-def readings(lyrics, artist, title, romaji, uta):
+def readings(lyrics, artist, title, uta):
     """
     回 {詞: 這首歌裡出現過的所有讀音}。
 
@@ -51,7 +52,7 @@ def readings(lyrics, artist, title, romaji, uta):
     比對的是 `word_corrections`,它的鍵也只到 (歌手, 歌名, 詞),本來就表達不了第幾次出現,
     所以「任一次對得上」就是這裡能做到的最準判準。
     """
-    furigana_inject.get_hints = lambda *a, **k: (romaji, uta)
+    furigana_inject.get_hints = lambda *a, **k: uta
     out = furigana_inject.process_lrc(artist, title, lyrics)
     got = {}
     for o, h in RUBY.findall(out):
@@ -65,9 +66,7 @@ def main():
     songs = con.execute(
         'SELECT DISTINCT artist, title FROM word_corrections ORDER BY artist, title').fetchall()
 
-    # `U 只有 utaten` 是為了回答「羅馬字那層還值不值得留」:它跟 L2 的差就是羅馬字的
-    # **邊際**貢獻。L1 對 L0 的差不能拿來回答這題 —— 那是「沒有 utaten 時」的貢獻。
-    LAYERS = ['L0 字典', 'L1 ＋羅馬字', 'U 只有 utaten', 'L2 ＋utaten']
+    LAYERS = ['L0 字典', 'L1 ＋utaten']
     hit = {n: 0 for n in LAYERS}
     total = 0
     skipped = []
@@ -94,13 +93,9 @@ def main():
         if not uta:
             skipped.append((artist, title, '沒有 utaten 注音'))
             continue
-        romaji = load('romaji_hints', artist, title)
-
         got = {
-            'L0 字典':        readings(row[0], artist, title, {}, {}),
-            'L1 ＋羅馬字':    readings(row[0], artist, title, romaji, {}),
-            'U 只有 utaten':  readings(row[0], artist, title, {}, uta),
-            'L2 ＋utaten':    readings(row[0], artist, title, romaji, uta),
+            'L0 字典':     readings(row[0], artist, title, {}),
+            'L1 ＋utaten': readings(row[0], artist, title, uta),
         }
 
         for word, want in corr:
@@ -119,11 +114,11 @@ def main():
     print(f'可量的歌: {len(songs) - len(skipped)} / {len(songs)}\n')
 
     if diff_only:
-        bad = [d for d in detail if d[2] not in d[3]['L2 ＋utaten']]
+        bad = [d for d in detail if d[2] not in d[3]['L1 ＋utaten']]
         print(f'手改與自動不一致 {len(bad)} / {total} 筆。**兩邊都可能是對的**,自己判斷,不要自動刪:\n')
         print(f'  {"詞":<8}{"手改的":<10}{"utaten／自動":<16}歌')
         for song, word, want, per in bad:
-            auto = '/'.join(sorted(per['L2 ＋utaten'])) or '—'
+            auto = '/'.join(sorted(per['L1 ＋utaten'])) or '—'
             print(f'  {word:<8}{want:<10}{auto:<16}{song}')
         if stale:
             print(f'\n詞已不在現在的歌詞裡 {len(stale)} 筆 (歌詞換過版本,這幾筆是死資料):')

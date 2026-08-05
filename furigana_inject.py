@@ -15,25 +15,22 @@ import difflib
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 import fugashi
 from db import db
-from cn_music import fetch_hints, normalize_line
+from cn_music import normalize_line
 import utaten
 
 tagger = fugashi.Tagger()
 
-# 長度不變的等價正規化,只用於「比較」,不影響輸出。
-# 羅馬字轉回假名時 づ/ぢ 一定會變成 ず/じ,助詞 は/へ/を 也會寫成 wa/e/o,
-# 這些差異是羅馬字的先天損失,不算真的讀音不同。
+# 長度不變的等價正規化,只用於「比較」,不影響輸出:兩邊只差在這幾個字時當作同一個讀音,
+# 不要拿 hint 去蓋掉字典。(留著的原因是 utaten 的標注也會出現 は/わ 這種書寫差異。)
 _KANA_EQ = str.maketrans({'づ': 'ず', 'ぢ': 'じ', 'を': 'お', 'へ': 'え', 'は': 'わ'})
 _KANA_ONLY = re.compile(r'^[ぁ-ゟァ-ヿー]+$')
 
-# 兩邊來源都不可信的字:unidic-lite 挑錯,網易雲/酷狗的羅馬字多半也是機器產的,
-# 常常跟著錯同一個 (例如 私 兩邊都給 watakushi)。所以這張表套在 apply_hint 之後,
-# 只有使用者的 word_corrections 蓋得過它 —— 真的唱 わたくし 的歌手動改一次即可。
+# 自動來源常錯的字:unidic-lite 挑錯,而 utaten 不見得標到那一行。這張表套在 apply_hint
+# 之後,只有使用者的 word_corrections 蓋得過它 —— 真的唱 わたくし 的歌手動改一次即可。
 # 只在「整個斷詞完全等於 key」時才套用,所以 私的 (してき) 之類的複合詞不受影響。
 _COMMON_READING = {
-    '私': 'わたし',   # 兩邊來源預設都是 わたくし
-    # 三個寫法的 lemma 都是 良い,unidic 一律給 ヨイ,平台的機器羅馬字也跟著給 yoi
-    # (實測 Chevon/antlion 的 hint 就是「よいからいっしょに…」)。歌裡唱的幾乎都是 いい。
+    '私': 'わたし',   # unidic-lite 預設是 わたくし
+    # 三個寫法的 lemma 都是 良い,unidic 一律給 ヨイ。歌裡唱的幾乎都是 いい。
     # 只比對整個斷詞,所以活用形 (良く=よく) 與複合詞 (仲良く=なかよく) 都不受影響;
     # 格好良い/気持ち良い 會斷成 格好+良い,套下去正好得到 かっこいい/きもちいい。
     '良い': 'いい',
@@ -52,7 +49,7 @@ _HONORIFIC = {'さん', 'ちゃん', 'さま'}
 #   光の中君を愛すよ     → 中君 ナカノキミ (正解 なか + きみ)
 # 詞性完全分不出來 —— 道君/中君 與 諸君/暴君/主君/若君 全都是「名詞 普通名詞 一般」——
 # 所以只能列表,**不可以寫成「名詞尾巴是君就拆」的通則**,那會把 諸君(しょくん) 拆成 諸+君。
-# 羅馬字來源也跟著錯 (實測網易/酷狗給 doukun、chuukun),所以這層要套在 apply_hint 之後。
+# 這層套在 apply_hint 之後:先拆的話 hint 會按原本的黏詞邊界把錯讀音貼回來。
 # 實測 429 首日文歌只黏出這兩個詞,增長率低,手動加即可。
 _SPLIT_WORD = {
     '道君': (('道', 'みち'), ('君', 'きみ')),
@@ -88,11 +85,11 @@ def _keeps_okurigana(orig, candidate):
 
 def apply_hint(words, hint):
     """
-    用羅馬字來源的整行假名 (hint) 校正 fugashi 的分詞讀音。
+    用外部來源的整行假名 (hint,現在只有 utaten) 校正 fugashi 的分詞讀音。
 
     做法:把 fugashi 預測的整行假名跟 hint 做序列對齊,再依每個 token 在預測字串
     裡的區間,切出 hint 對應的片段。只有在「正規化後仍然不同」時才覆蓋 ——
-    例如 君: くん vs きみ 會被修正,而 続: つづけ vs つずけ 屬羅馬字損失,保留 fugashi。
+    例如 君: くん vs きみ 會被修正,而 続: つづけ vs つずけ 只是書寫差異,保留 fugashi。
     """
     if not hint:
         return
@@ -246,13 +243,13 @@ def build_ruby_html(text, artist, title, hints=(), kata_ruby=False, uta_words=No
     if pos < len(text):
         words.append({'orig': text[pos:], 'hira': text[pos:], 'is_space': True})
 
-    # 用外部來源的假名校正字典挑錯的讀音 (依序疊加,各自過 apply_hint 的 guard):
-    # 羅馬字 hint 先、utaten 的人工注音後,後者蓋前者
+    # 用外部來源的假名校正字典挑錯的讀音。現在只剩 utaten 一層,但仍收一個 list ——
+    # 呼叫端 (line_hints) 可能給 0 或 1 筆,而 apply_hint 本來就會各自過一次 guard
     for hint in hints:
         apply_hint(words, hint)
 
     # 黏成一個詞條的「X君」拆回兩個詞,兩個字才各自標對 (見 _SPLIT_WORD)。
-    # 要在 apply_hint 之後:羅馬字 hint 是整行對齊的,先拆會讓它把錯讀音貼回來。
+    # 要在 apply_hint 之後:hint 是整行對齊的,先拆會讓它把錯讀音貼回來。
     expanded = []
     for w in words:
         parts = None if w.get('is_space') else _SPLIT_WORD.get(w['orig'])
@@ -357,36 +354,25 @@ def build_ruby_html(text, artist, title, hints=(), kata_ruby=False, uta_words=No
 
 def get_hints(artist, title, lrc_text):
     """
-    取得整首歌的讀音提示:(羅馬字 hint, utaten hint) 兩層,後者套在前者之上。
+    取得整首歌的讀音提示 (utaten 的人工注音)。
     只有含漢字的歌詞才值得抓,英文歌直接跳過以免多打一次網路請求。
 
-    **utaten 在上面是因為它是人標的,羅馬字是機器產的。** 量測 (2026-08-04,使用者手改的
-    word_corrections 當標準答案,5 首歌 16 個詞):字典 9/16 → ＋羅馬字 10/16 → ＋utaten 15/16。
-    唯一沒中的是「那個詞在 utaten 頁面上沒標注音」,不是標錯。
-    羅馬字那層留著:utaten 只涵蓋約 7 成的歌,而且找到的歌也只有約 7 成的行有注音,
-    沒被 utaten 蓋到的地方仍然靠它。
+    **曾經還有一層「中國平台的逐音節羅馬字」,2026-08-05 移除。** 拿 utaten 當獨立裁判
+    量了 161 首:那一層動過的詞裡變對 95 / **變錯 193**,2:1 淨負。用 word_corrections
+    當標準答案量不出這件事 —— 那是「使用者看到錯了才手改」的詞,羅馬字層修對的永遠不會
+    變成一筆 correction,功勞在那份樣本裡是隱形的。**不要重新提案把它加回來。**
     """
     if not re.search(r'[一-龯々]', lrc_text):
-        return {}, {}
-    romaji = {}
-    try:
-        romaji = db.get_romaji_hints(artist, title)
-        if romaji is None:  # None = 沒抓過; {} = 抓過但沒來源 (負快取)
-            romaji = fetch_hints(artist, title)
-            db.save_romaji_hints(artist, title, romaji)
-    except Exception as e:
-        print(f"[furigana] romaji hints unavailable: {e}", file=sys.stderr)
-        romaji = {}
-    uta = {}
+        return {}
     try:
         uta = db.get_utaten_hints(artist, title)
-        if uta is None:
+        if uta is None:  # None = 沒抓過; {} = 抓過但 utaten 沒這首 (負快取)
             uta = utaten.fetch_hints(artist, title, lrc_text)
             db.save_utaten_hints(artist, title, uta)
+        return uta
     except Exception as e:
         print(f"[furigana] utaten hints unavailable: {e}", file=sys.stderr)
-        uta = {}
-    return romaji, uta
+        return {}
 
 def process_lrc(artist, title, lrc_text, kata_ruby=False):
     """
@@ -399,11 +385,10 @@ def process_lrc(artist, title, lrc_text, kata_ruby=False):
     if not re.search(r'[぀-ヿ]', lrc_text):
         # 沒經過 build_ruby_html 就直接回去,逃逸要自己做一次 (見那邊的說明)
         return html.escape(lrc_text)
-    romaji, uta = get_hints(artist, title, lrc_text)
-    uta_lines, uta_words = utaten.split_hints(uta)
+    uta_lines, uta_words = utaten.split_hints(get_hints(artist, title, lrc_text))
     def line_hints(text):
-        k = normalize_line(text)
-        return [h for h in (romaji.get(k), uta_lines.get(k)) if h]
+        h = uta_lines.get(normalize_line(text))
+        return [h] if h else []
     lines = lrc_text.split('\n')
     new_lines = []
     for line in lines:

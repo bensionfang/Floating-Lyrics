@@ -1,18 +1,14 @@
 """
-中國音樂平台歌詞抓取 (網易雲 / 酷狗)
+中國音樂平台歌詞抓取 (網易雲 / QQ / 酷狗)
 
-這兩個平台的一次 API 回應裡同時有「日文歌詞」與「逐音節羅馬字」,所以歌詞與讀音提示
-一起抓回來,不用打兩次網路。
+一次 API 回應同時給「日文歌詞」「中文譯文」,QQ 另外給「逐字時間 (QRC)」,
+所以三樣東西一起抓回來,不用分開打網路。譯文與逐字時間用歌詞「文字」當 key
+而非時間戳,因為歌詞可能來自 Lrclib,時間軸跟中國平台對不起來。
 
-羅馬字的用途:fugashi + unidic-lite 這種小辭典遇到人名、罕見訓讀、同形異讀會挑錯讀音
-(例如「君」被讀成 くん 而不是 きみ),用平台附的羅馬字轉回平假名當「正解讀音」校正。
-校正邏輯在 furigana_inject.apply_hint()。
-
-來源:
-  1. 網易雲音樂 romalrc 欄位
-  2. 酷狗音樂 krc 內嵌的 language 軌 (type=0 即羅馬字)
-
-hints 用歌詞「文字」當 key 而非時間戳,因為歌詞可能來自 Lrclib,時間軸跟中國平台對不起來。
+**曾經還抓過一條「逐音節羅馬字」軌當讀音提示,2026-08-05 移除。** 拿 utaten 的
+人工注音當獨立裁判量了 161 首:羅馬字層動過的詞裡變對 95 / **變錯 193**,2:1 淨負。
+機器產的羅馬字分不出 づ/ず、は/わ,轉回假名本來就有損。讀音提示現在只剩 utaten 那一層
+(人標的),見 utaten.py 與 furigana_inject.get_hints()。**不要重新提案把它加回來。**
 """
 import base64
 import json
@@ -20,7 +16,6 @@ import re
 import sys
 import zlib
 
-import jaconv
 import requests
 
 import qrc_decrypt
@@ -102,14 +97,6 @@ def _pick_song(candidates, artist, duration=None):
     return song
 
 
-def romaji_to_hira(romaji: str) -> str:
-    """逐音節羅馬字 -> 平假名。空白是音節分隔,轉換前要拿掉"""
-    r = re.sub(r'[^A-Za-z]+', '', romaji or '')
-    if not r:
-        return ''
-    return jaconv.alphabet2kana(r.lower())
-
-
 def _parse_lrc(text: str) -> dict:
     """LRC -> {時間(秒, 取到 0.1): 歌詞}"""
     out = {}
@@ -146,31 +133,21 @@ def _fetch_netease(artist: str, title: str, duration=None) -> dict:
 
     lyric = requests.get(
         "https://music.163.com/api/song/lyric",
-        params={"id": song["id"], "lv": 1, "tv": -1, "rv": -1},
+        params={"id": song["id"], "lv": 1, "tv": -1},
         headers=headers, timeout=TIMEOUT,
     ).json()
     lrc = (lyric.get("lrc") or {}).get("lyric") or ''
     if not lrc:
         return {}
 
-    hints = {}
+    # 譯文:tlyric 是另一份帶時間戳的 LRC,用主歌詞的時間戳對齊
     jp = _parse_lrc(lrc)
-    roma = _parse_lrc((lyric.get("romalrc") or {}).get("lyric") or '')
-    for ts, jp_line in jp.items():
-        if ts not in roma:
-            continue
-        hira = romaji_to_hira(roma[ts])
-        key = normalize_line(jp_line)
-        if key and hira:
-            hints[key] = hira
-
-    # 譯文:tlyric 是另一份帶時間戳的 LRC,用跟 romalrc 同一套時間戳對齊
     trans_lrc = _parse_lrc((lyric.get("tlyric") or {}).get("lyric") or '')
     translations = _pair_translations(
         (jp_line, trans_lrc[ts]) for ts, jp_line in jp.items() if ts in trans_lrc
     )
 
-    return {"lyrics": lrc, "hints": hints, "translations": translations, "source": "NetEase"}
+    return {"lyrics": lrc, "translations": translations, "source": "NetEase"}
 
 
 # krc 是 XOR + zlib 壓縮過的,這把金鑰是公開的固定值
@@ -241,32 +218,21 @@ def _fetch_kugou(artist: str, title: str, duration=None) -> dict:
     if not jp_lines:
         return {}
 
-    # language 軌:type=0 羅馬字, type=1 翻譯。行序與主歌詞對齊
-    hints = {}
+    # language 軌:type=1 是翻譯 (type=0 是羅馬字,已不再使用)。行序與主歌詞對齊
     translations = {}
     lang_tag = re.search(r'\[language:(.*?)\]', krc)
     if lang_tag:
         lang = json.loads(base64.b64decode(lang_tag.group(1)).decode("utf-8"))
-
-        def track(type_id):
-            return next(
-                (t.get("lyricContent") or [] for t in lang.get("content", []) if t.get("type") == type_id),
-                []
-            )
-
-        for (_, jp_line), row in zip(jp_lines, track(0)):
-            hira = romaji_to_hira(''.join(row))
-            key = normalize_line(jp_line)
-            if key and hira:
-                hints[key] = hira
-
-        # 翻譯軌的每一列本身就是完整一句 (不像羅馬字軌是逐音節切開),但格式同樣是 list
+        rows = next(
+            (t.get("lyricContent") or [] for t in lang.get("content", []) if t.get("type") == 1),
+            []
+        )
+        # 翻譯軌的每一列本身就是完整一句,但格式是 list
         translations = _pair_translations(
-            (jp_line, ''.join(row)) for (_, jp_line), row in zip(jp_lines, track(1))
+            (jp_line, ''.join(row)) for (_, jp_line), row in zip(jp_lines, rows)
         )
 
-    return {"lyrics": _krc_to_lrc(jp_lines), "hints": hints,
-            "translations": translations, "source": "Kugou"}
+    return {"lyrics": _krc_to_lrc(jp_lines), "translations": translations, "source": "Kugou"}
 
 
 def _qrc_lines(text: str) -> list:
@@ -350,13 +316,6 @@ def _qq_lyrics(song_id) -> dict:
     if not jp_lines:
         return {}
 
-    hints = {}
-    for (_, jp_line), (_, roma_line) in zip(jp_lines, _qq_track(resp, "contentroma")):
-        hira = romaji_to_hira(roma_line)
-        key = normalize_line(jp_line)
-        if key and hira:
-            hints[key] = hira
-
     # 譯文軌實測是「明文標準 LRC」而非加密 QRC,所以不能走 _qq_track (它只解 QRC 那種
     # [起始毫秒,長度] 格式)。用時間戳跟主歌詞對齊,同網易 tlyric 的做法。
     trans_lrc = _parse_lrc(_qq_plain_track(resp, "contentts"))
@@ -366,22 +325,22 @@ def _qq_lyrics(song_id) -> dict:
         if round(start_ms / 1000.0, 1) in trans_lrc
     )
 
-    return {"lyrics": _krc_to_lrc(jp_lines), "hints": hints, "word_times": _qrc_flow(raw),
+    return {"lyrics": _krc_to_lrc(jp_lines), "word_times": _qrc_flow(raw),
             "translations": translations, "source": "QQMusic"}
 
 
 def _fetch_qqmusic(artist: str, title: str, duration=None) -> dict:
     """
-    QQ 音樂：逐字歌詞 (QRC) 另外附一條 contentroma 羅馬字軌,行序與主歌詞一一對應。
-    網易雲有不少日文歌只有 lrc 沒有 romalrc,這時 QQ 是第三個機會。
+    QQ 音樂:三家裡**唯一**給得出逐字時間的 (QRC),所以逐字卡拉OK整個功能靠它。
 
-    注意:搜尋端點 (u.y.qq.com) 限流很兇,連打幾次就開始回空結果。QQ 排在來源清單最後,
-    被限流時就當作沒找到、自然降級,不必特別處理。
+    注意:搜尋端點 (u.y.qq.com) 限流很兇,連打幾次就開始回空結果。被限流時就當作沒找到、
+    自然降級,不必特別處理 —— 但那也代表逐字時間不能因為一次空結果就寫負快取
+    (見 pytools._stash)。
 
     **module 是 DoSearchForQQMusicMobile 不是 ...Desktop。** Desktop 那支已經對任何字串都
     回 0 筆 (code 仍然是 0,不報錯,就是空 list) —— 純中文歌 `晴天 周杰伦` 也一樣,所以不是
     限流也不是日文的問題。它靜默死掉的期間 QQ 這一家等於整個不存在:歌詞快取裡 QQ 佔 0 首,
-    羅馬字讀音提示也少了唯一把 `私` 讀對的來源。Mobile 那支同一句回 10 筆,結果放在
+    逐字時間也一筆都拿不到。Mobile 那支同一句回 10 筆,結果放在
     `req.data.body.item_song` (欄位是 title 不是 name),其餘欄位形狀相同。
     """
     body = {
@@ -412,9 +371,8 @@ def _fetch_qqmusic(artist: str, title: str, duration=None) -> dict:
     return _qq_lyrics(song["id"])
 
 
-# 順序即 fetch_hints 的取用優先序 (第一個有羅馬字的來源勝出)。
-# QQ 排在酷狗前面:兩邊的羅馬字都是機器產的,但 QQ 明顯準一些 (例如 私,酷狗給 watakushi、
-# QQ 給 watashi)。QQ 的搜尋端點會限流,被擋時自然落到酷狗,所以酷狗仍留著當保底。
+# 順序即 fetch() 的嘗試順序。QQ 排在酷狗前面:只有它給得出逐字時間,
+# 被限流時自然落到酷狗,所以酷狗仍留著當保底。
 _SOURCES = {"NetEase": _fetch_netease, "QQMusic": _fetch_qqmusic, "Kugou": _fetch_kugou}
 
 
@@ -451,23 +409,6 @@ def fetch_all(artist: str, title: str, duration=None) -> list:
     return results
 
 
-def fetch_hints(artist: str, title: str, duration=None) -> dict:
-    """
-    只要讀音提示 (furigana_inject 在歌詞來自其他平台時走這條)。
-
-    一個平台可能有歌詞卻沒有羅馬字 (例如網易雲的某些歌只有 lrc,romalrc 是空的),
-    這時要繼續問下一個平台 —— 讀音提示跟歌詞本來就不必來自同一家。
-    """
-    for name, fn in _SOURCES.items():
-        try:
-            hints = fn(artist, title, duration).get("hints") or {}
-            if hints:
-                return hints
-        except Exception as e:
-            print(f"[cn_music] {name} failed: {e}", file=sys.stderr)
-    return {}
-
-
 def _selftest():
     # (song, 標題, 歌手, 時長秒);呼叫端已過濾標題,這裡只驗歌手/時長的取捨
     real = ({"id": 1}, "夏風に溶ける", "りりあ。", 240.0)
@@ -499,5 +440,7 @@ if __name__ == "__main__":
         print(f"{artist} - {title}: 沒有結果", file=sys.stderr)
         sys.exit(1)
     lines = r["lyrics"].strip().split('\n')
-    print(f"{artist} - {title} [{r['source']}]: {len(lines)} 行歌詞, {len(r['hints'])} 筆讀音提示", file=sys.stderr)
+    print(f"{artist} - {title} [{r['source']}]: {len(lines)} 行歌詞, "
+          f"{len(r.get('translations') or {})} 筆譯文, "
+          f"{'有' if r.get('word_times') else '沒有'}逐字時間", file=sys.stderr)
     print('\n'.join(lines[:3]))
