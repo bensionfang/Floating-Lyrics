@@ -7,16 +7,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Kanaric</title>
-    <!-- Google Fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Poppins:ital,wght@0,400;0,600;0,700;0,800;1,400;1,600;1,700;1,800&display=swap" rel="stylesheet">
-    <!-- FontAwesome -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- 字型與圖示一律自架 (public/vendor/):打包版是離線桌面 app,走 CDN 的話斷網時
+         圖示全變空框、字型退回系統預設。順帶少三次對外 DNS + TLS。
+         更新方式見 scripts/fetch_vendor_assets.py。 -->
+    <link rel="stylesheet" href="/vendor/fonts.css?v=1">
+    <link rel="stylesheet" href="/vendor/fa/css/all.min.css?v=1">
     <!-- Style -->
-    <link rel="stylesheet" href="/css/style.css?v=108">
-    <!-- Chart.js -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="/css/style.css?v=109">
     <!-- 各頁共用:吐司 + 備選歌詞 + 重新載入歌詞 -->
     <script src="/js/lyrics-tools.js?v=12" defer></script>
     <!-- 設定選單的下拉:自己畫彈出清單 (原生 select 的 hover 底色改不了,見該檔說明) -->

@@ -10,7 +10,7 @@ const express = require('express');
 const http = require('http');
 const net = require('net');
 const { WebSocketServer } = require('ws');
-const bodyParser = require('body-parser');
+const compression = require('compression');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
@@ -159,8 +159,13 @@ app.use((req, res, next) => {
   }
   next();
 });
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
+// gzip:本機看不出來,雲端那台的行動網路才是重點 —— 手機首載的 index.html 67KB、
+// 每首歌帶 <ruby> 的歌詞幾十 KB,都是純文字,壓完剩約四分之一。
+app.use(compression());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+// vendor/ 底下是版本固定的第三方字型與圖示,檔名一變就是新網址,直接讓瀏覽器永久快取
+app.use('/vendor', express.static(path.join(__dirname, 'public', 'vendor'), { maxAge: '1y', immutable: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // View Engine
@@ -585,7 +590,10 @@ app.use((req, res, next) => {
     position: m.position || 0,
     duration: m.duration || 0,
     is_playing: !!m.is_playing,
-    thumbnail: m.thumbnail || '',
+    // 封面**不內嵌**,只渲染成一個網址 —— base64 封面實測 175 KB,佔整份 currentMediaState 的
+    // 99.8%,內嵌等於每換一次頁就重傳一次 (而且 base64 的 PNG 幾乎壓不掉,gzip 也救不了)。
+    // 換成 /api/current-media/cover 之後瀏覽器會拿 ETag revalidate,同一首歌重載只回 304。
+    hasCover: !!m.thumbnail,
     shuffle: !!m.shuffle,
     repeat: m.repeat || 0
   };
@@ -633,6 +641,15 @@ app.get('/api/current-media', (req, res) => {
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
   res.json(currentMediaState);
+});
+
+// 目前這首歌的封面 (SSR 用,見 res.locals.media 的說明)。express 會自己依內容算 ETag,
+// no-cache = 「可以快取但每次要 revalidate」,所以換頁重載同一首歌只會拿到 304。
+app.get('/api/current-media/cover', (req, res) => {
+  const b64 = currentMediaState && currentMediaState.thumbnail;
+  if (!b64) return res.redirect('/img/cover-placeholder.svg');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.type('jpeg').send(Buffer.from(b64, 'base64'));
 });
 
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
@@ -864,21 +881,28 @@ function applyWordTimes(artist, title, html) {
   });
 }
 
-function injectFurigana(artist, title, lyrics) {
-  return injectFuriganaRaw(artist, title, lyrics)
-    .then((html) => applyTranslations(artist, title, html))
+/**
+ * @param {object} opts  行動版專用的兩個覆寫 (桌面一律不傳):
+ *   force — 不看桌面的 show_translation / show_romaji,譯文與羅馬字一律併進來。
+ *           雲端那台的 settings.json 是預設值 (全關),而手機有自己的顯示開關。
+ *   kata  — 蓋掉設定裡的 katakana_ruby。這一項改到的是注音本體,沒辦法像另外兩行那樣
+ *           用 CSS 藏,所以要重跑 python (手機那邊的快取鍵也跟著分開)。
+ */
+function injectFurigana(artist, title, lyrics, opts = {}) {
+  return injectFuriganaRaw(artist, title, lyrics, opts.kata)
+    .then((html) => applyTranslations(artist, title, html, opts.force))
     // 羅馬字要在譯文之後 —— 兩者都插在歌詞行後面,後插的會排在前面,順序才是 歌詞/羅馬字/譯文
-    .then((html) => (wantsExtraLine('romaji') ? mergeRomaji(html) : html))
+    .then((html) => ((opts.force || wantsExtraLine('romaji')) ? mergeRomaji(html) : html))
     // 逐字時間排最後:它不是要顯示的行,插在最貼著歌詞的位置最省事,
     // 而且 mergeTranslations / mergeRomaji 的跳過清單就不必多認一種標記
     .then((html) => applyWordTimes(artist, title, html));
 }
 
 // 譯文刻意不進 furiganaCache:切換「顯示翻譯」就不必重跑 python,快取也不用多一個比對維度
-function injectFuriganaRaw(artist, title, lyrics) {
+function injectFuriganaRaw(artist, title, lyrics, kataOverride) {
   const key = furiganaKey(artist, title);
   // 產出會隨「片假名標平假名」設定不同,所以旗標要一起比對,否則切換設定後會拿到舊 HTML
-  const kataRuby = readSettings().katakana_ruby === true;
+  const kataRuby = kataOverride === undefined ? readSettings().katakana_ruby === true : !!kataOverride;
   const hit = furiganaCache.get(key);
   if (hit && hit.src === lyrics && hit.kata === kataRuby) return Promise.resolve(hit.out);
 
@@ -1014,7 +1038,7 @@ function fetchCnLyrics({ title, artist, searchTitle, searchArtist, source = 'aut
     onJson: (parsed) => {
       if (!parsed.success) return null;
       if (source === 'all') return parsed.results || [];
-      return parsed.lyrics ? { lyrics: parsed.lyrics, source: parsed.source } : null;
+      return parsed.lyrics ? { lyrics: parsed.lyrics, source: parsed.source, word: !!parsed.word } : null;
     }
   });
 }
@@ -1136,14 +1160,14 @@ app.post('/api/lyrics/offset', (req, res) => {
   });
 });
 
-app.post('/api/seek', express.json(), (req, res) => {
+app.post('/api/seek', (req, res) => {
   const { position } = req.body;
   if (position === undefined) return res.status(400).json({ error: 'Missing position' });
   spawnPy(['seek', position.toString()]);
   res.json({ success: true });
 });
 
-app.post('/api/media-control', express.json(), (req, res) => {
+app.post('/api/media-control', (req, res) => {
   const { action } = req.body;
   if (!['play', 'pause', 'playpause', 'next', 'prev', 'shuffle', 'repeat'].includes(action)) {
     return res.status(400).json({ error: 'Invalid action' });
@@ -1204,13 +1228,25 @@ async function searchBestLyric(title, artist, searchTitle, searchArtist) {
   // モザイクロール 網易是內嵌注音版、酷狗那份乾淨,不重問就會白白掉到 fallback。
   // 這個迴圈只有在被擋掉時才會多打,成功路徑跟以前一樣一次。
   if (preferredSource === 'NetEase' || preferredSource === 'Kugou') {
-    const cnOrder = [preferredSource, ...['NetEase', 'QQMusic', 'Kugou'].filter((s) => s !== preferredSource)];
+    // **QQ 排在偏好來源前面,但只有「它自己那份帶逐字」時才佔位。** 逐字時間只有 QQ 的 QRC 有,
+    // 而歌詞本體多半來自網易 —— 兩份不同源就有幾行對不上,`mergeWordTimes` 是全有或全無,
+    // 那首歌就整個沒有卡拉OK。本體也用 QQ 那份的話,行覆蓋率天生 100%。
+    // 沒有 QRC 時它那份不佔位:QQ 會把兩三個短句併成一長行,讀起來比網易差。
+    // 成本是**只在快取 miss 時**多打一次 QQ 搜尋,而且常常不會多 —— `cn_music.fetch` 在
+    // 「這家沒有」時自己就往下一家問,回來的 source 剛好是偏好來源的話就直接用。
+    const cnOrder = ['QQMusic', preferredSource, ...['NetEase', 'QQMusic', 'Kugou']
+      .filter((s) => s !== preferredSource && s !== 'QQMusic')];
+    const tried = new Set();
     for (const src of cnOrder) {
+      if (tried.has(src)) continue;
+      tried.add(src);
       const cnData = await fetchCnLyricsS2({
         title, artist, searchTitle: cleanTitle, searchArtist: trueArtist, source: src
       });
       if (!cnData || !cnData.lyrics) break;              // 一家都沒有 = 三家都沒有 (cn_music 內部已經問過)
       if (!usable(cnData.lyrics, cnData.source)) continue;
+      // QQ 那份沒有逐字 = 沒有留下它的理由,讓給偏好來源 (它內部已經掉到別家的話就照收)
+      if (cnData.source === 'QQMusic' && !cnData.word && src === 'QQMusic') continue;
       if (/\[\d{2}:\d{2}/.test(cnData.lyrics)) { bestLyric = cnData.lyrics; finalSource = cnData.source; }
       else if (!plainBackup) { plainBackup = cnData.lyrics; finalSource = cnData.source; }
       break;
@@ -1414,11 +1450,11 @@ app.get('/api/lyrics', async (req, res) => {
       lyric = found.lyric;
       source = found.source;
     }
-    // 譯文一律併進來 (force),要不要畫由手機自己的開關決定 —— 這樣切換開關不必重打一次
-    // 端點,前端快取裡的那份也永遠是完整的。查無譯文時 ensureTranslations 會背景補抓,
-    // 但**不 rebroadcast** (quiet),手機查歌不該動到桌面顯示的內容。
-    const html = await injectFurigana(a, t, lyric);
-    res.json({ ...meta, lyrics: await applyTranslations(a, t, html, true), source });
+    // 譯文與羅馬拼音一律併進來 (force),要不要畫由手機自己的開關決定 —— 這樣切換開關不必
+    // 重打一次端點,前端快取裡的那份也永遠是完整的。查無譯文時 ensureTranslations 會背景
+    // 補抓,但**不 rebroadcast** (quiet),手機查歌不該動到桌面顯示的內容。
+    const html = await injectFurigana(a, t, lyric, { force: true, kata: req.query.kata === '1' });
+    res.json({ ...meta, lyrics: html, source });
   } catch (e) {
     console.error('行動版查歌詞失敗:', e.message);
     res.status(500).json({ error: e.message });
@@ -1520,8 +1556,8 @@ app.get('/api/lyrics/pick', async (req, res) => {
     // 刻意不加 [source:ManualEdit] 前綴 —— 那個標記是保護 cache 裡的歌詞不被自動重抓蓋掉,
     // 這條路根本不寫 cache。
     const lyric = autoMarkTitleLines(toTraditional(opt.lyrics), title);
-    const html = await injectFurigana(artist, title, lyric);
-    res.json({ title, artist, lyrics: await applyTranslations(artist, title, html, true), source: opt.provider });
+    const html = await injectFurigana(artist, title, lyric, { force: true, kata: req.query.kata === '1' });
+    res.json({ title, artist, lyrics: html, source: opt.provider });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -1691,7 +1727,7 @@ app.get('/api/aliases', (req, res) => {
   });
 });
 
-app.post('/api/aliases', express.json(), (req, res) => {
+app.post('/api/aliases', (req, res) => {
   const { alias, true_name } = req.body;
   if (!alias || !true_name) return res.status(400).json({ error: 'alias and true_name are required' });
   db.run('INSERT OR REPLACE INTO artist_aliases (alias, true_name) VALUES (?, ?)', [alias, true_name], function(err) {
@@ -1712,7 +1748,7 @@ app.delete('/api/aliases/:alias', (req, res) => {
 
 // per-song 搜尋覆蓋:髒標題 (瀏覽器影片名等) 手動填正確歌名/歌手,下次自動套用。
 // 空字串 = 清除該首覆蓋。存完清歌詞快取,前端隨後重抓即會用新關鍵字。
-app.post('/api/search-override', express.json(), (req, res) => {
+app.post('/api/search-override', (req, res) => {
   const { title, artist, searchTitle, searchArtist } = req.body;
   if (!title || !artist) return res.status(400).json({ error: 'title and artist are required' });
   const st = (searchTitle || '').trim();
@@ -1753,7 +1789,7 @@ app.post('/api/lyrics/custom', async (req, res) => {
   }
 });
 
-app.post('/api/lyrics/save', express.json(), async (req, res) => {
+app.post('/api/lyrics/save', async (req, res) => {
   const { title, artist, lyrics } = req.body;
   if (!title || !artist || !lyrics) return res.status(400).json({ error: 'Missing parameters' });
   
@@ -1777,7 +1813,7 @@ app.post('/api/lyrics/save', express.json(), async (req, res) => {
 // 刪除某首歌的快取歌詞。只碰可重抓的 cache —— word_corrections/sync_offsets 那些
 // 使用者親手打的不動。一併清記憶體的 furiganaCache/itunesCache,否則已刪的歌詞會被
 // 再吐回來 (與 /api/db-clear 清 lyrics 時同款處理)。回歸測試 node test_lyrics_delete.js。
-app.post('/api/lyrics/delete', express.json(), (req, res) => {
+app.post('/api/lyrics/delete', (req, res) => {
   const { title, artist } = req.body;
   if (!title || !artist) return res.status(400).json({ error: 'title and artist are required' });
   db.run('DELETE FROM cache WHERE artist=? AND title=?', [artist, title], function(err) {
@@ -1793,7 +1829,7 @@ app.post('/api/lyrics/delete', express.json(), (req, res) => {
 
 // 標記/取消標記「此歌無歌詞」。marked=true 同時把現有(錯的)快取清掉,下次播放也不再自動搜尋。
 // marked=false 只是解除標記,之後就恢復自動搜尋。屬使用者資料,清除白名單碰不到。
-app.post('/api/lyrics/no-lyrics', express.json(), (req, res) => {
+app.post('/api/lyrics/no-lyrics', (req, res) => {
   const { title, artist, marked } = req.body;
   if (!title || !artist) return res.status(400).json({ error: 'title and artist are required' });
   if (marked) {
@@ -2044,7 +2080,7 @@ const gameQuery = (sql, params = []) => new Promise(
 );
 const shuffle = (a) => a.map(v => [Math.random(), v]).sort((x, y) => x[0] - y[0]).map(p => p[1]);
 
-app.post('/api/game/options', express.json(), async (req, res) => {
+app.post('/api/game/options', async (req, res) => {
   const { title, artist } = req.body || {};
   if (!title || !artist) return res.status(400).json({ error: 'title and artist are required' });
 
@@ -2089,7 +2125,7 @@ app.post('/api/game/options', express.json(), async (req, res) => {
 const gameArtistCache = new Map();
 const GAME_ARTIST_TTL = 6 * 60 * 60 * 1000;
 
-app.post('/api/game/artist', express.json(), async (req, res) => {
+app.post('/api/game/artist', async (req, res) => {
   const name = String((req.body && req.body.name) || '').trim();
   if (!name) return res.status(400).json({ error: 'bad_name' });
 
@@ -2162,7 +2198,7 @@ app.post('/api/game/artist', express.json(), async (req, res) => {
 });
 
 
-app.post('/api/game/result', express.json(), (req, res) => {
+app.post('/api/game/result', (req, res) => {
   const { title, artist, correct, hints, answer_ms, mode } = req.body || {};
   if (!title || !artist) return res.status(400).json({ error: 'title and artist are required' });
   db.run(
@@ -2226,7 +2262,7 @@ app.get('/api/db-usage', (req, res) => {
   });
 });
 
-app.post('/api/db-clear', express.json(), (req, res) => {
+app.post('/api/db-clear', (req, res) => {
   const tables = CLEAR_TARGETS[req.body && req.body.target];
   if (!tables) return res.status(400).json({ error: 'Invalid target' });
 
