@@ -9,6 +9,11 @@ A desktop floating-lyrics system (Windows-only for full functionality): it picks
 ## Commands
 
 ```bash
+# 日常開發的入口:repo 根的 dev.bat (= scripts/dev-cleanup.ps1 收掉殘留的 node/electron,再 npm run app)
+# dev.bat 本身刻意全 ASCII —— cmd 用 OEM 字碼頁解析 .bat,中文註解會讓它整支解析失敗,
+# 所以註解與清理邏輯都在那支 .ps1 裡。.gitattributes 釘住它的換行。
+dev.bat
+
 # Python deps (repo root; a venv/ exists and is auto-detected by server.js)
 pip install -r requirements.txt
 
@@ -53,7 +58,7 @@ gh release create v1.1.0 \
 tag 沒帶 `v` 或漏推,純 node 模式的更新提醒也抓不到新版。安裝檔未簽章,`gh release create` 會直接
 公開發布,屬於「發布公開內容」的動作,不要自動執行,要使用者自己按。
 - 靈動島 = Electron 的一個視窗 (`web-app/island.js`),由 `npm run app` 一起帶起,沒有獨立進程也沒有 build 步驟。
-- 沒有 test runner 或 linter。零星的獨立測試檔直接用直譯器跑:`node tests/test_origin_guard.js` (同源守門)、`node tests/test_s2t.js` (簡轉繁)、`node tests/test_lyric_quality.js` (內嵌注音的歌詞守門)、`node tests/test_search_query.js` (繁轉簡 + 瀏覽器標題去噪)、`node tests/test_title_lines.js` (製作人員/版權列標記)、`node tests/test_translations.js` (中文譯文合併)、`node tests/test_romaji.js` (羅馬拼音)、`node tests/test_itunes_resolving.js` (iTunes 原名還原的時序)、`node tests/test_history_toggle.js` (聆聽紀錄開關 + 清除白名單)、`node tests/test_backup_restore.js` (備份/還原 + 還原前的驗證守門)、`node tests/test_scroll_zone.js` (歌詞自動捲動的三段判定)、`node tests/test_game.js` (猜歌的干擾選項挑選)、`node tests/test_island_position.js` (靈動島的多螢幕位置記憶)、`node tests/test_word_times.js` (逐字卡拉OK的跨來源比對)、`node tests/test_llm_wand.js` (魔杖對非日文歌詞的守門)、`node tests/test_pkce.js` (行動版的 OAuth PKCE)、`node tests/test_mobile_playback.js` (行動版的播放位置插值)、`node tests/test_mobile_lyrics.js` (行動版的 LRC 解析)、`node tests/test_mobile_color.js` (行動版的封面主色採樣)、`python tests/test_pick_session.py`、`python tests/test_furigana_hint.py` (Python 的要用 `venv/Scripts/python.exe`,系統 python 沒裝 fugashi)。
+- 沒有 test runner 或 linter。零星的獨立測試檔直接用直譯器跑:`node tests/test_origin_guard.js` (同源守門)、`node tests/test_s2t.js` (簡轉繁)、`node tests/test_lyric_quality.js` (內嵌注音的歌詞守門)、`node tests/test_search_query.js` (繁轉簡 + 瀏覽器標題去噪)、`node tests/test_title_lines.js` (製作人員/版權列標記)、`node tests/test_translations.js` (中文譯文合併)、`node tests/test_romaji.js` (羅馬拼音)、`node tests/test_itunes_resolving.js` (iTunes 原名還原的時序)、`node tests/test_history_toggle.js` (聆聽紀錄開關 + 清除白名單)、`node tests/test_backup_restore.js` (備份/還原 + 還原前的驗證守門)、`node tests/test_scroll_zone.js` (歌詞自動捲動的三段判定)、`node tests/test_game.js` (猜歌的干擾選項挑選)、`node tests/test_island_position.js` (靈動島的多螢幕位置記憶)、`node tests/test_word_times.js` (逐字卡拉OK的跨來源比對)、`node tests/test_loop_end.js` (段落循環的尾段間奏防護)、`node tests/test_lrclib_duration.js` (lrclib 的時長守門)、`node tests/test_lyrics_delete.js` (單首歌詞刪除)、`node tests/test_no_lyrics.js` (標記無歌詞)、`node tests/test_cloud_guard.js` (雲端 B1~B4)、`node tests/test_pkce.js` (行動版的 OAuth PKCE)、`node tests/test_mobile_playback.js` (行動版的播放位置插值)、`node tests/test_mobile_lyrics.js` (行動版的 LRC 解析)、`node tests/test_mobile_color.js` (行動版的封面主色採樣)、`python tests/test_pick_session.py`、`python tests/test_furigana_hint.py` (Python 的要用 `venv/Scripts/python.exe`,系統 python 沒裝 fugashi)。
 - `ROADMAP.md` (repo 根,**本機檔案,不進版控**) 記著 v1.0.0 之後的規劃與**明確不做的事**。動到「未來要做什麼」的討論先看它,免得重新提案已經否決過的方向 (雲端同步、換 tokenizer、離線辭典、Steam 式強制更新)。clone 下來沒有這個檔屬正常。
   主軸是**歌詞體驗**,不是學日文 —— 翻譯/查詞這類功能要進來,得先過「它讓歌詞更好讀嗎」這一關。
 
@@ -61,7 +66,7 @@ tag 沒帶 `v` 或漏推,純 node 模式的更新提醒也抓不到新版。安�
 
 One Node.js backend, multiple thin clients, with Python scripts as helpers spawned as child processes:
 
-- **`web-app/server.js`** (~1200 lines, the whole backend): Express + WebSocket server owning all business logic — REST API routes, lyrics fetching (order driven by the `preferred_source` setting, with caching), artist-alias substitution, iTunes JP name resolution (undoes Spotify's auto-translation of Japanese titles), a 30-second "valid listen" state machine before writing history, and WebSocket broadcast of the current media state to all clients. `server.listen` binds `127.0.0.1` explicitly, not `0.0.0.0`, and **there is no auth on any route** — 安全性完全靠「只有本機、且只有同源」這兩條。
+- **`web-app/server.js`** (~2600 lines, the whole backend): Express + WebSocket server owning all business logic — REST API routes, lyrics fetching (order driven by the `preferred_source` setting, with caching), artist-alias substitution, iTunes JP name resolution (undoes Spotify's auto-translation of Japanese titles), a 30-second "valid listen" state machine before writing history, and WebSocket broadcast of the current media state to all clients. `server.listen` binds `127.0.0.1` explicitly, not `0.0.0.0`, and **there is no auth on any route** — 安全性完全靠「只有本機、且只有同源」這兩條。
   - 同源守門是 server.js 的第一個 middleware,`cors()` 已經移除 (開 CORS 等於自己拆掉這道牆)。它同時看 `Origin` 與 `Sec-Fetch-Site`,兩層都必要:`Origin` 只有 fetch/XHR 會帶,`<script src>` 這類不帶,而 `Sec-Fetch-Site` 瀏覽器對所有請求都帶。兩個 header 都沒有 = 非瀏覽器客戶端 (curl、腳本),放行;靈動島現在是 Electron 視窗,兩個 header 都會帶,走的是同源那條。WebSocket 的 upgrade 不經過 express middleware,所以 `verifyClient` 要再擋一次。
   - **綁 127.0.0.1 擋不住跨站攻擊**,這是這道守門存在的理由:使用者開著 Kanaric 時瀏覽任一網頁,那個網頁就能打這裡的 API —— 跨站 POST `/api/settings` 把 `llm_base_url` 改成攻擊者的位址,再觸發 `/api/llm-models` 或 `/api/llm-furigana/run`,BYOK 的 API key 就送出去了。`<form>` POST 屬於 simple request,不觸發 preflight,所以光靠 CORS 設定擋不住。
   - **跨站的「頂層導覽」是例外,要放行** (`GET`/`HEAD` + `Sec-Fetch-Dest: document`):使用者從 README、聊天視窗點 `http://localhost:5720` 連結進來就是這種請求,擋掉只會讓人看到一行 JSON 錯誤。放行不開洞 —— 跨站 `<form>` POST 的 dest 也是 document,但方法是 POST,照樣擋住;`<img>`/`<script src>` 的 dest 是 image/script,iframe 內嵌是 iframe,都不是 document。**只認 dest 不要再比 mode**:mode 多擋不到東西,而且 undici 會把 fetch 的 `Sec-Fetch-Mode` 硬改成 `cors`,測試根本設不進去。
@@ -158,7 +163,7 @@ One Node.js backend, multiple thin clients, with Python scripts as helpers spawn
   - `media_monitor.py` — long-running; polls Windows Media API via `winrt` and emits one JSON line per state change on stdout. `server.js` parses these lines and auto-restarts the process on exit (unless `global.isShuttingDown`).
     - **`pick_session()` is the single source-selection rule**, shared by the monitor loop and the one-shot `seek` / `media-action` / `sessions` subcommands — don't inline a session filter anywhere else (all four used to hardcode `"spotify"` separately). The `media_source` setting holds either `'auto'` or an exact `source_app_user_model_id`. Auto = playing music app (`MUSIC_APPS`) > paused music app > any playing session; the paused-music tier deliberately outranks other playing sessions so a background video can't steal the lyrics while Spotify is paused. An explicitly chosen app that isn't running yields nothing rather than silently falling back.
     - The monitor re-reads `settings.json` when its mtime changes, so switching source takes effect live — there is no "restart the monitor on settings change" path and none should be added.
-    - The empty (no session) payload must keep listing **every** field, because `handleMediaUpdate` merges shallowly (`server.js:146`); an omitted key leaves the previous song's value on screen.
+    - The empty (no session) payload must keep listing **every** field, because `handleMediaUpdate` merges shallowly (`currentMediaState = { ...currentMediaState, ...state }`); an omitted key leaves the previous song's value on screen.
   - `furigana_inject.py` — one-shot; JSON in via stdin, lyrics with furigana out via stdout. Readings come from fugashi/unidic-lite, then get corrected in three layers, each beating the last: `apply_hint()` (utaten 的人工注音, aligned to the tokens with difflib) → `_COMMON_READING` (a tiny table of words the automatic sources get wrong — 私 → わたし、良い/好い/善い → いい；比對的是**整個斷詞**,所以活用形 `良く` 與複合詞 `仲良く` 都不受影響,而 `格好良い`/`気持ち良い` 斷成兩詞後正好得到 かっこいい/きもちいい) → `word_corrections` from the DB (user's manual edits, always final).
     - **「有沒有假名」是日文歌/中文歌的分界線,兩個地方共用這條規則**:`process_lrc()` 整份沒假名就原文回傳 (中文歌的漢字丟給 fugashi 只會得到亂七八糟的音讀,也順便省掉 `get_hints()` 的網路請求);`web-app/s2t.js` 的簡轉繁同理只在沒假名時動手。
     - **`_SPLIT_WORD` 是「unidic 把兩個詞黏成一個罕見詞條」的拆詞表** (`道君` ドウクン、`中君` ナカノキミ)。黏詞讓兩個字**同時**標錯,要套在 `apply_hint` 之後 —— 先拆的話 hint 會按原本的黏詞邊界把錯讀音貼回來。**只能是列表,不可以寫成「名詞尾巴是君就拆」的通則**:`道君`/`中君` 與 `諸君`/`暴君`/`主君`/`若君` 全都是「名詞 普通名詞 一般」,詞性與讀音形狀都分不出來,寫通則會把 諸君(しょくん) 拆成 諸+君。實測 429 首日文歌只黏出這兩個詞,增長率低,手動加即可。回歸測試 `tests/test_furigana_hint.py` 第 8 組。
@@ -197,9 +202,11 @@ One Node.js backend, multiple thin clients, with Python scripts as helpers spawn
 - **`web-app/views/*.ejs` + `web-app/public/`** — web frontend (lyrics editor, leaderboard, stats).
   - **第三方字型/圖示/Chart.js 一律自架在 `public/vendor/`,不准改回 CDN。** 打包版是離線桌面 app,走 CDN 的話斷網時圖示全變空框、字型退回系統預設、統計圖整個不出現。重抓/升級版本用 `scripts/fetch_vendor_assets.py` (跑完把 `?v=` 往上加)。**Chart.js 只掛在 `stats.ejs`** —— 只有那一頁用,放 header 等於每頁多載 208 KB。刻意**不做 icon subset**:全站 77 個圖示全是字面常數,subset 之後新增圖示會靜默變空框,不值得省那 100 KB。
   - **每頁共用的前端邏輯在 `public/js/common.js`,不要搬回 `footer.ejs` 內嵌。** 那 1000 行內嵌時每次換頁都要重傳 (~60 KB) 且永遠不進快取。留在 footer 的只有需要 EJS 插值的那三行 (`window.__initialMedia` 等)。那支 `<script>` **刻意不加 `defer`** —— 它要在原本內嵌的位置同步執行,順序與時機才跟改版前一致 (各頁自己的 inline script 有可能在它之後才跑)。
+    - **移除一個功能時,`common.js` 的 `tourSteps` (使用說明導覽) 要一起改 —— 它是最容易被漏掉的一份文案。** LLM 讀音校正整套在 2026-08-04 刪掉,但導覽到 2026-08-05 都還在教使用者按魔杖鈕、去「AI 讀音校正」小節填 API Key,而那些元素連 DOM 都不長:導覽走的是「元素不存在 → 卡片置中不畫框」那條**正常**分支,沒有錯誤、沒有 log,只有真的點開使用說明的人看得到。同一批要看的還有 `sourceTourSteps`、`targetMissing` 那段附註文字、README。
+    - **改了 `public/js/*.js` 要把對應 `<script src>` 的 `?v=` 往上加** (同 `style.css` 的先例),不然舊使用者的瀏覽器一直吃快取裡那份,症狀是「改的東西像是沒生效」。只動註解就不必加 —— 那等於叫所有人白重載一次。
   - **封面不內嵌進 HTML,SSR 只給 `media.hasCover` 這個旗標 + `/api/current-media/cover` 這個網址。** base64 封面實測 **175 KB,佔整份 `currentMediaState` 的 99.8%**,內嵌等於每換一次頁就重傳一次,而 base64 的 PNG 幾乎壓不掉、gzip 也救不了。改成端點之後瀏覽器靠 ETag revalidate,同一首歌重載只回 304。實測首頁的 gzip 後大小 **272 KB → 6.8 KB**、編輯器 282 KB → 17 KB。
   - `app.use(compression())` 在同源守門**之後**、static 之前。本機看不出來,雲端那台的行動網路才是重點 (手機首載的 `index.html` 67 KB、每首帶 `<ruby>` 的歌詞幾十 KB,壓完剩約四分之一)。
-- **`lyrics_data.db`** (repo root, SQLite, WAL mode): tables `cache` (lyrics keyed by artist+title), `listening_history`, `sync_offsets`, `word_corrections` (user furigana overrides), `utaten_hints` (utaten 的人工注音,見下), `artist_aliases` (maps Spotify's translated artist names back to originals, e.g. 魚韻 → サカナクション), `romaji_hints` (**已停用**,2026-08-05 起不再讀寫;留著只為了讓舊資料清得掉), `word_times` (逐字卡拉OK的時間資料,見上面那節). Path configurable via `DB_PATH` env var. The .db file is gitignored (`*.db`),每台機器各自初始化。
+- **`lyrics_data.db`** (repo root, SQLite, WAL mode): tables `cache` (lyrics keyed by artist+title), `listening_history`, `sync_offsets`, `word_corrections` (user furigana overrides), `utaten_hints` (utaten 的人工注音,見下), `artist_aliases` (maps Spotify's translated artist names back to originals, e.g. 魚韻 → サカナクション), `romaji_hints` (**已停用**,2026-08-05 起不再讀寫;留著只為了讓舊資料清得掉), `word_times` (逐字卡拉OK的時間資料,見上面那節), `lyrics_translations` (中文譯文), `search_overrides` (逐首歌的自訂搜尋關鍵字), `no_lyrics` (標記為「各站都沒收錄」的歌), `game_history` (猜歌的每題結果). Path configurable via `DB_PATH` env var. The .db file is gitignored (`*.db`),每台機器各自初始化。
   - **歌手名收斂在 `handleMediaUpdate` 做,只此一處。** 每張表的鍵都是 (artist, title),而不同播放 app 對同一位歌手給不同寫法 (Spotify 給「魚韻」、YouTube 給「サカナクション」),同一首歌就會分裂成兩筆。解法是進 `handleMediaUpdate` 時就用 `artistAliases` Map (開機載入 `artist_aliases` 全表,`/api/aliases` 增刪後同步更新;`handleMediaUpdate` 是同步的,不能在那等 `db.get`) 把名字換成正規名,下游的 cache、listening_history、Python 端讀音提示全部自動一致。**不要在各處寫入點各包一次,也不要為了「分開不同來源」把 source 加進主鍵** —— 實測重複全來自 metadata 字串,加 source 一列都修不掉,反而讓五張表都要改鍵。舊資料用 `scripts/merge_aliases.py` 一次性收斂 (預設 dry-run,`--apply` 才寫入並自動備份)。
   - `listening_history` 另有 `base_title` (virtual generated column,剝掉第一個括號起的尾綴):統計/排行榜一律 GROUP BY 它,讓 `(Live)`/`(feat. …)` 算同一首。**歌詞類的表刻意不加這欄** —— Live 版歌詞本來就不同,必須分開快取。定義同時寫在 server.js 建表處與 `db.py`,改一邊要改兩邊。
   - **`track_history` 設定 (預設 true) 的閘門只在 `global.logListen`,不要在別處再判斷一次。** `listening_history` 只有這一個寫入點 (換新歌、暫停後續播兩條計時器路徑共用);判斷刻意放在計時器「觸發時」而非排程時,使用者播到一半關掉就真的不會被記錄。關閉時側欄的統計數據/排行榜也一起隱藏 (`.nav-stats-item`,SSR 靠 `res.locals.settings` 決定,不然會閃一下才隱藏),但**路由保留** —— 關掉是「不記錄 / 不礙眼」,不是鎖起來。舊的 `/api/play-event` 是雲端同步時代的遺留、沒有任何呼叫者,已刪除,不要為了「外部 agent 也能回報」加回來。
@@ -231,7 +238,7 @@ GitHub repo 也已改名 `bensionfang/Kanaric`,`server.js` 的 `GITHUB_REPO` 跟
 
 `build.files` 是**白名單**:新增 repo 根層的 js 檔 (`s2t.js`、`island.js`、`preload-island.js` 這類 server 端 require 得到的檔案) 一定要同步加進去,否則 dev 正常、打包版一啟動就 MODULE_NOT_FOUND。
 
-**雲端部署的檔案不會被打包進安裝檔,不必特別處理。** `build.files` 的路徑是相對 `web-app/`,而 `Dockerfile`、`render.yaml`、`.dockerignore`、`tests/`、`scripts/` 全在 repo 根層、也都不在清單裡 —— 白名單天生就把它們排除了。唯一會跟著進安裝檔的行動版檔案是 `public/mobile/` 那 45 KB 靜態頁 (`public/**` 收得到),那是刻意留的:打包版的 server 照樣服務 `http://127.0.0.1:5720/mobile/`,而那個位址本來就是 Spotify 註冊過的 redirect URI。**不要為了「桌面版用不到行動版」把它從白名單挖掉** —— 挖了要多寫一條排除規則,省下的 45 KB 沒有意義。
+**雲端部署的檔案不會被打包進安裝檔,不必特別處理。** `build.files` 的路徑是相對 `web-app/`,而 `Dockerfile`、`render.yaml`、`.dockerignore`、`tests/`、`scripts/` 全在 repo 根層、也都不在清單裡 —— 白名單天生就把它們排除了。唯一會跟著進安裝檔的行動版檔案是 `public/mobile/` 那 ~100 KB 靜態頁 (`public/**` 收得到),那是刻意留的:打包版的 server 照樣服務 `http://127.0.0.1:5720/mobile/`,而那個位址本來就是 Spotify 註冊過的 redirect URI。**不要為了「桌面版用不到行動版」把它從白名單挖掉** —— 挖了要多寫一條排除規則,省下的 100 KB 沒有意義。
 
 ### Data flow (the key sequence)
 
@@ -554,6 +561,8 @@ Lines like `作詞：米津玄師` and copyright boilerplate are prefixed with `
 
 iOS PWA 版規格在 `docs/mobile/PWA-SPEC.md`。動到 `web-app/public/mobile/` 或
 `/api/lyrics` 端點之前，先讀那份規格，特別是「明確不做」那一節。
+**`docs/` 整個在 `.gitignore` 裡 (同 `ROADMAP.md`,是本機檔案)，所以 README 或任何進版控的
+文件都不可以連過去 —— GitHub 上會是死連結。clone 下來沒有這個資料夾屬正常。**
 
 Phase 1（靜態頁 + Spotify OAuth PKCE）、Phase 2（輪詢 + 本地插值 + 進度條）、
 Phase 3+4（同步歌詞 + 注音）、Phase 5（PWA 化）已完成:`web-app/public/mobile/index.html`
@@ -787,7 +796,9 @@ WebSocket 直接吃 `media_state` 廣播、不打 Spotify,角色跟靈動島一�
 
 **中國三家從 `singapore` region 打得通,已實測** (2026-08-01,線上第一首歌的「歌詞來源」
 是 NetEase)。這是上雲前最後一個未知數 —— 全不通的話那台只剩 lrclib,連中文譯文與逐字時間
-都會整個沒有。動 region 之前要重驗這件事,驗法就是看那一列寫什麼。
+都會整個沒有。動 region 之前要重驗這件事:線上看「歌詞來源」那一列寫什麼,
+或直接在那台機器上跑 `python3 scripts/check_cn_reachability.py` (只要 requests + jaconv,
+不必裝 fugashi/unidic;必須從 repo 根目錄跑)。
 
 **已知落差,不是 bug**:
 - 雲端**沒有 `word_corrections` / `artist_aliases`**(使用者定案不帶上去)。注音等於少掉最上面
@@ -808,7 +819,7 @@ WebSocket 直接吃 `media_state` 廣播、不打 Spotify,角色跟靈動島一�
 
 部署檔:`Dockerfile`(node:20-bookworm-slim + venv;`requirements.txt` 現場 `grep -v '^winrt'`,
 **不維護第二份清單**,兩份一定會漂)、`.dockerignore`、`render.yaml`。
-`server.js:99` 在 Linux 上找不到 `venv/Scripts/python.exe` 會 fallback 到 `python`,
+`server.js` 的 `venvPythonPath` 在 Linux 上找不到 `venv/Scripts/python.exe` 會 fallback 到 `python`,
 Dockerfile 的 venv 正好讓 PATH 上有它 —— 零程式碼改動。
 
 回歸測試 `node tests/test_cloud_guard.js`。**動到 B1~B4 任何一處都要跑它**,
