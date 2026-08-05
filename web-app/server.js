@@ -989,7 +989,8 @@ async function buildSearchQuery(title, artist, searchTitle, searchArtist) {
   const trueArtist = canonicalArtist(qArtist);
 
   const cleanTitle = qTitle.replace(/\(feat\..*?\)|\- Remastered.*|\- Live.*/ig, '').trim();
-  return { qTitle, qArtist, trueArtist, cleanTitle };
+  // explicit 一路傳出去是為了擋「搭便車的快取寫入」—— 見 searchOptions 的 stash 註解
+  return { qTitle, qArtist, trueArtist, cleanTitle, explicit };
 }
 
 // 網易雲 / 酷狗:歌詞與日文讀音提示在同一次請求裡拿到,提示由 Python 端直接寫進 DB
@@ -1031,10 +1032,10 @@ function spawnPyJson(args, { stdin = null, timeoutMs = PY_TIMEOUT_MS, onJson }) 
   });
 }
 
-function fetchCnLyrics({ title, artist, searchTitle, searchArtist, source = 'auto' }) {
+function fetchCnLyrics({ title, artist, searchTitle, searchArtist, source = 'auto', stash = true }) {
   const duration = currentDuration(title, artist);
   return spawnPyJson(['cnlyrics'], {
-    stdin: JSON.stringify({ title, artist, searchTitle, searchArtist, source, duration }),
+    stdin: JSON.stringify({ title, artist, searchTitle, searchArtist, source, duration, stash }),
     onJson: (parsed) => {
       if (!parsed.success) return null;
       if (source === 'all') return parsed.results || [];
@@ -1565,7 +1566,7 @@ app.get('/api/lyrics/pick', async (req, res) => {
 
 async function searchOptions({ title, artist, searchTitle, searchArtist }, onProgress) {
   {
-    const { qTitle, qArtist, trueArtist, cleanTitle } = await buildSearchQuery(title, artist, searchTitle, searchArtist);
+    const { qTitle, qArtist, trueArtist, cleanTitle, explicit } = await buildSearchQuery(title, artist, searchTitle, searchArtist);
     const searchUrl = `https://lrclib.net/api/search?q=${encodeURIComponent(cleanTitle + ' ' + trueArtist)}`;
 
     // 三家**並行**問,不要改回依序 await。這支跟 searchBestLyric 不一樣:那邊抓到好歌詞就早退,
@@ -1583,8 +1584,17 @@ async function searchOptions({ title, artist, searchTitle, searchArtist }, onPro
     // 網易 / 酷狗 (自家 client,不經過 syncedlyrics)
     const cnTask = (async () => {
     try {
+      // **手動輸入關鍵字時不准搭便車寫快取** (`stash: false`)。pytools 的 `_stash` 是用
+      // 「DB 鍵 (title, artist)」存譯文與逐字時間,而查的是 searchTitle/searchArtist ——
+      // 平常兩者是同一首歌的不同寫法所以正確,但備選歌詞視窗讓使用者**打任何歌名**,
+      // 那時等於把別首歌的譯文/逐字時間蓋到正在播的這首上 (實測踩過:muque 那首的
+      // word_times 變成 ヨルシカ/春泥棒 的字元流,而且因為「全有或全無」只表現成
+      // 「這首突然不逐字了」,完全沒有錯誤訊息)。
+      // 存起來的 per-song 覆蓋 (`search_overrides`) 不受影響 —— 那是「同一首歌換個名字查」,
+      // 走的是 explicit=false 那條路,照舊要 stash。
       const cnResults = await fetchCnLyricsS2({
-        title, artist, searchTitle: cleanTitle, searchArtist: trueArtist, source: 'all'
+        title, artist, searchTitle: cleanTitle, searchArtist: trueArtist,
+        source: 'all', stash: !explicit
       });
       if (Array.isArray(cnResults)) {
         for (const cn of cnResults) {

@@ -52,6 +52,10 @@ def main():
         q_artist = data.get("searchArtist") or artist
         source = data.get("source", "auto")
         duration = data.get("duration") or None  # 秒;拿來擋同名歌/翻唱
+        # 譯文/逐字時間存的鍵是 (artist, title),查的卻是 searchTitle/searchArtist ——
+        # 平常兩者是同一首歌的不同寫法,但備選歌詞視窗讓使用者打任何歌名,那時 server 會
+        # 傳 stash=false,不然等於把別首歌的資料蓋到正在播的這首上 (見 server.js searchOptions)
+        stash_ok = data.get("stash") is not False
 
         # 哪幾家的歌詞檔本身帶逐字時間 (見 cn_music._qrc_flow)
         WORD_TIME_SOURCES = {"QQMusic"}
@@ -62,6 +66,8 @@ def main():
             # 譯文一定要寫入 (沒有就寫空的當負快取),否則 server 的 ensureTranslations
             # 會判斷成「還沒查過」,每次播這首歌都重抓一輪。
             def _stash(results, tried_all):
+                if not stash_ok:
+                    return
                 for r in results:
                     if r.get("translations"):
                         db.save_translations(artist, title, r["translations"])
