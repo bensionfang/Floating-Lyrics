@@ -227,7 +227,9 @@ function connectLyricsSocket() {
     });
 }
 
-const DEFAULT_COVER = 'https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?q=80&w=300&auto=format&fit=crop';
+// 自架,不走 CDN:打包版是離線桌面 app,斷網時外部圖抓不到就是一塊破圖。
+// 播放列 (footer.ejs) 與 /api/current-media/cover 的 fallback 都指著同一個檔。
+const DEFAULT_COVER = '/img/cover-placeholder.svg';
 let lastThumbnail;   // 已經套用在畫面上的封面 (undefined = 還沒收到過任何一份)
 
 // 封面主色 → 歌詞區底色。行動版的 public/mobile/color.js 是同一套數學,改了要一起改。
