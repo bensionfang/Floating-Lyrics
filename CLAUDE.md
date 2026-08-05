@@ -9,9 +9,7 @@ A desktop floating-lyrics system (Windows-only for full functionality): it picks
 ## Commands
 
 ```bash
-# 日常開發的入口:repo 根的 dev.bat (= scripts/dev-cleanup.ps1 收掉殘留的 node/electron,再 npm run app)
-# dev.bat 本身刻意全 ASCII —— cmd 用 OEM 字碼頁解析 .bat,中文註解會讓它整支解析失敗,
-# 所以註解與清理邏輯都在那支 .ps1 裡。.gitattributes 釘住它的換行。
+# 日常開發的入口:repo 根的 dev.bat (= scripts/dev-cleanup.ps1 清殘留進程,再 npm run app)
 dev.bat
 
 # Python deps (repo root; a venv/ exists and is auto-detected by server.js)
@@ -29,6 +27,10 @@ npm run dist     # = build:py (PyInstaller → dist-py/) + electron-builder (→
 ```
 
 - Web dashboard: http://localhost:5720 (預設值;被占用時自動改用空閒 port,靈動島視窗直接載入同一個 port 的 `/island`)
+- **`dev.bat` 刻意只有三行純 ASCII,註解與清理邏輯全在 `scripts/dev-cleanup.ps1`。** cmd 用**系統字碼頁**讀 `.bat`,UTF-8 的中文註解會被誤解碼、多位元組字的殘餘位元組把後面的 ASCII 吃掉 (`chcp 65001` 也救不回來);而 `^` 行接續又要求檔案是 CRLF,LF-only 會把續行拆散、後面的註解片段當成指令跑 (症狀:exit 255 + 幾行「'xxx' 不是內部或外部命令」)。`.gitattributes` 的 `*.bat text eol=crlf` 釘住換行 —— **`core.autocrlf` 靠不住**,直接被寫出來的檔案不經過 checkout 的 smudge。
+  - 清理是必要的:每跑一次就留一份殭屍 server (連帶 media monitor),久了佔住 5720 讓新的掉到隨機 port —— **port 一變 origin 就變,localStorage 整份失憶**,症狀是「使用說明每次啟動都重播」。
+  - **認人的方式是「Kanaric pytools 的 parent」而不是比對 `node server.js`** (node 的 command line 只有 `node  server.js`,認不出是哪個專案),而且 **parent 要同時認 `node` 與 `electron`**:`npm run app` 之下佔著 port 的是 electron.exe,只認 node 會變成「python 被殺、真正的殭屍留著」。
+  - 那支 `.ps1` 印訊息用 `Write-Output` 不是 `Write-Host`:後者寫的是 console host,`dev.bat` 的輸出被重導向到檔案時整行會消失,看起來像清理沒執行。
 
 ### 發版 (GitHub Release)
 
@@ -554,6 +556,8 @@ Lines like `作詞：米津玄師` and copyright boilerplate are prefixed with `
 - **`isSongNameLine()` — 歌名行 (整行就是歌名)。判準是「前面每一行都已經是製作人員列」,不是行號、也不是時間戳。** 兩個都實測過都錯:ヨルシカ「あぶく」第 4 行 (t=23.6s) 是唱出來的歌名,前面三行是真歌詞;反過來 muque「TIME」的歌名行在 t=11.6s,但前後都是製作人員列,是真標頭。還要求前面**至少有一行**製作人員列 —— 第 1 行就是歌名時無從判斷是標頭還是開口唱歌名 (WurtS「分かってないよ」第 1、2 行都是歌名),寧可漏標。這條規則需要歌名,所以 `autoMarkTitleLines(lrcText, songTitle)` 有第二個參數,**五個呼叫點都要傳**;沒傳就整條跳過。
 
 `CREDIT_KEYWORDS` 與 `LABEL_ONLY_KEYWORDS` **刻意分成兩張表**:單字的 `詞`/`曲`/`鼓`/`唱` 只能在標籤位置比對 (中文歌常見 `词：周杰伦`),放進 `isCreditPlain` 會把「この曲が終わる前に」這種正文整批誤殺。回歸測試 `node tests/test_title_lines.js`,案例全部取自真實快取。
+
+**規則改好之後,舊快取要用 `node scripts/remark_title_lines.js` 補標** (預設 dry-run,`--apply` 才寫入並自動備份)。`autoMarkTitleLines` 只在**寫入時**跑,改進規則不會回頭重標,症狀是畫面上出現一行超長的「歌詞」、實際是一整排編曲名單 (實測最長 109 字)。**它的守門是「重標結果只准多出 `#TITLE#` 前綴」** (外加時間戳後的空白被吃掉,那是 `autoMarkTitleLines` 本來就會做的),其餘任何差異一律跳過那一列 —— 寧可漏標也不要讓一支批次腳本動到歌詞本身。
 
 `config.py` holds the DB path for standalone Python use; `settings.json` (repo root) holds UI settings served via `/api/settings`.
 
