@@ -77,9 +77,15 @@ function karaokePaint(root, points, ms, rejectSel) {
     const on = i < full;
     if (chars[i].classList.contains('sung') !== on) chars[i].classList.toggle('sung', on);
   }
-  // 正在唱的那一個字做局部漸層。單一個字不會換行,所以水平漸層在這裡是正確的
+  // 正在唱的那一個字做局部漸層。單一個字不會換行,所以水平漸層在這裡是正確的。
+  // **換掉正在唱的那顆時要一併清掉行內的 `--k`** —— 三端的 CSS 現在是「每一顆 .kc 都套
+  // 同一條漸層,唱過的靠 --k:100%」(見下面 karaokeClear 的註解),行內值的權重比 class 高,
+  // 留著的話那顆字會永遠停在當時的百分比 (例如唱過了卻只填到六成)。
   const cur = chars[full];
-  if (root.__kcNow && root.__kcNow !== cur) root.__kcNow.classList.remove('kc-now');
+  if (root.__kcNow && root.__kcNow !== cur) {
+    root.__kcNow.classList.remove('kc-now');
+    root.__kcNow.style.removeProperty('--k');
+  }
   root.__kcNow = cur || null;
   if (cur) {
     cur.classList.add('kc-now');
@@ -93,14 +99,25 @@ function karaokePaint(root, points, ms, rejectSel) {
     r.rt.classList.toggle('rt-now', p > 0 && p < 1);
     r.rt.classList.toggle('rt-sung', p >= 1);
     if (p > 0 && p < 1) r.rt.style.setProperty('--k', `${p * 100}%`);
+    else r.rt.style.removeProperty('--k');   // 同上:行內值會蓋掉 rt-sung 的 100%
   }
 }
 
-/** 把填色狀態收乾淨 (換句時要做,不然唱過的那一行會整行留白) */
+/**
+ * 把填色狀態收乾淨 (換句時要做,不然唱過的那一行會整行留白)。
+ *
+ * 行內的 `--k` 也要清:三端的 CSS 是「每一顆 .kc / rt 都套同一條 background-clip 漸層」
+ * (**不是只有正在唱的那顆才套**) —— 只有正在唱的那顆套的話,它未填的那半會比旁邊還沒唱到
+ * 的字**暗一截**:background-clip 會關掉次像素抗鋸齒,同一個顏色畫出來就是比較細比較暗
+ * (實測平均亮度 42.4 vs 47.4)。統一套之後兩者逐像素相同。
+ */
 function karaokeClear(el) {
   if (!el) return;
   el.querySelectorAll('.kc.sung, .kc.kc-now, rt.rt-pending, rt.rt-now, rt.rt-sung')
-    .forEach((c) => c.classList.remove('sung', 'kc-now', 'rt-pending', 'rt-now', 'rt-sung'));
+    .forEach((c) => {
+      c.classList.remove('sung', 'kc-now', 'rt-pending', 'rt-now', 'rt-sung');
+      c.style.removeProperty('--k');
+    });
   el.__kcNow = null;
 }
 

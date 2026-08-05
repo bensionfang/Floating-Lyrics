@@ -80,6 +80,25 @@ check('折線簡化 / 兩點原樣', simplify([[0, 0], [2, 200]]), [[0, 0], [2, 
   check('冪等', mergeWordTimes(once, wt), once);
 }
 
+// --- 全有或全無:一行對不上就整份不插 (「一句有一句沒有」比整首都不逐字更糟) ---
+{
+  const wt = flowOf('あいうかきく', 0, 100);
+  const good = '[00:01.00]あいう\n[00:05.00]かきく';
+  check('全對上 / 兩行都插', mergeWordTimes(good, wt).split('\n').filter((l) => l.includes('#WORDS#')).length, 2);
+
+  // 中間夾一行 flow 裡沒有的 (合聲括號、尾巴的 yeah 這類真實情況)
+  const partial = '[00:01.00]あいう\n[00:03.00]さしす\n[00:05.00]かきく';
+  check('一行對不上 / 整份原樣回傳', mergeWordTimes(partial, wt), partial);
+
+  // 純標點的行不算數,不該因為它而整首放棄
+  const punct = '[00:01.00]あいう\n[00:03.00]♪♪♪\n[00:05.00]かきく';
+  check('純標點行不影響', mergeWordTimes(punct, wt).split('\n').filter((l) => l.includes('#WORDS#')).length, 2);
+
+  // 已經插好的行要算成「對上」,否則第二次合併會把整首丟掉
+  const once = mergeWordTimes(good, wt);
+  check('冪等 / 全有或全無之後仍然冪等', mergeWordTimes(once, wt), once);
+}
+
 // --- 沒有資料 / 資料壞掉就原樣回傳 ---
 {
   const lrc = '[00:01.00]あいう';

@@ -17,7 +17,7 @@ const { parseLrc, activeIndex, medianGap, loopEndMs, escapeHtml, readCache, writ
   assert.ok(lines.every((l) => l.html === 'サビ'));
 }
 
-// 3. 製作人員列與羅馬字吃掉,ruby 與空行 (間奏) 留著;譯文掛回同一個時間戳的那句
+// 3. 製作人員列吃掉,ruby 與空行 (間奏) 留著;譯文/羅馬字/逐字掛回同一個時間戳的那句
 {
   const lines = parseLrc([
     '[source:NetEase]',
@@ -32,6 +32,9 @@ const { parseLrc, activeIndex, medianGap, loopEndMs, escapeHtml, readCache, writ
   // 譯文不能自成一句 (會多出一行且時間軸重複),要掛在對應那句上
   assert.strictEqual(lines[0].trans, '春天');
   assert.strictEqual(lines[1].trans, undefined, '沒有譯文的行不該長出 trans');
+  // 羅馬拼音同理 (前綴 8 個字,比 #TRANS# 多一個 —— 切錯會留下一個 I)
+  assert.strictEqual(lines[0].romaji, 'haru');
+  assert.strictEqual(lines[1].romaji, undefined, '沒有羅馬字的行不該長出 romaji');
   // 逐字時間同理:掛成 words 給卡拉OK填色用,不能自成一句
   assert.deepStrictEqual(lines[0].words, [[0, 0], [1, 400]]);
   assert.strictEqual(lines[1].words, undefined, '沒有逐字的行不該長出 words');

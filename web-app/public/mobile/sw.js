@@ -4,7 +4,7 @@
  * 直接不 respondWith,讓瀏覽器照常送出去。
  */
 
-const CACHE = 'kanaric-mobile-v22';   // 改 shell 檔案時把版號往上加,activate 會清掉舊的
+const CACHE = 'kanaric-mobile-v24';   // 改 shell 檔案時把版號往上加,activate 會清掉舊的
 // karaoke.js 刻意放在 /js/ 而不是複製一份進來 —— 逐字填色是歌詞區/靈動島/行動版共用的,
 // 各留一份就是靜默失效的來源。代價是 shell 多一個不在 /mobile/ 底下的路徑,
 // 下面的 fetch 條件要跟著放行它,否則離線時抓不到 (SHELL_EXTRA)。

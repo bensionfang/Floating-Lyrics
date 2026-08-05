@@ -87,25 +87,24 @@
   /* 逐字卡拉OK填色 (../js/karaoke.js 掛的 class,三個端共用同一份實作)。
      當前句本來就是亮的,所以是「還沒唱到的先暗下去」。沒有逐字資料的歌一個 class
      都不會掛上,整句照舊一起變亮。.kc 不設 transition:逐字要銳利,補間會把「唱到哪」糊掉 */
-  .lyrics p.on .kc { color: var(--lyric-dim); }
-  .lyrics p.on .kc.sung { color: var(--text); }
-  .lyrics p.on .kc.kc-now {
-    background: linear-gradient(90deg, var(--text) var(--k, 0%), var(--lyric-dim) var(--k, 0%));
+  /* **每一顆字都套同一條漸層,唱過的是 --k:100%、還沒唱的是 0%** —— 只給正在唱的那一顆
+     套的話,它未填的那半會比旁邊還沒唱到的字暗一截 (background-clip: text 會關掉次像素
+     抗鋸齒,同一個顏色畫出來就是比較細比較暗;實測平均亮度 42.4 vs 47.4) */
+  .lyrics p.on .kc, .lyrics p.on rt.rt-pending, .lyrics p.on rt.rt-now, .lyrics p.on rt.rt-sung {
+    --k: 0%;
+    background: linear-gradient(90deg, var(--text) var(--k), var(--lyric-dim) var(--k));
     -webkit-background-clip: text; background-clip: text; color: transparent;
   }
-  /* 假名跟著它蓋住的那幾個字一起填。rt 很短不會換行,整塊套水平漸層是對的 */
-  .lyrics p.on rt.rt-pending { color: var(--lyric-dim); }
-  .lyrics p.on rt.rt-sung { color: var(--text); }
-  .lyrics p.on rt.rt-now {
-    background: linear-gradient(90deg, var(--text) var(--k, 0%), var(--lyric-dim) var(--k, 0%));
-    -webkit-background-clip: text; background-clip: text; color: transparent;
-  }
+  .lyrics p.on .kc.sung, .lyrics p.on rt.rt-sung { --k: 100%; }
   /* ruby 在 iOS Safari 預設會把行高撐開,自己壓一下讀音大小 */
   .lyrics rt { font-size: .5em; font-weight: 400; opacity: .75; }
   body.no-furigana rt { display: none; }
   /* 譯文跟著歌詞本體走,只小一號、不斜體 —— 唱到那句一起反白 (顏色靠 .lyrics p 繼承) */
   .tr { display: block; font-size: .62em; font-weight: 400; opacity: .8; margin-top: 2px; }
   body.no-trans .tr { display: none; }
+  /* 羅馬拼音排在譯文前面 (歌詞 / 羅馬字 / 譯文,與桌面同序),再小一號 */
+  .rj { display: block; font-size: .52em; font-weight: 400; opacity: .7; margin-top: 2px; }
+  body.no-romaji .rj { display: none; }
   .lyrics .empty { text-align: center; color: var(--lyric-dim); font-weight: 400; opacity: .8; }
 
   /* --- 播放列上方的工具條 --- */
@@ -307,6 +306,12 @@
   <div class="srow"><span>顯示中文翻譯</span>
     <input type="checkbox" id="set-trans">
   </div>
+  <div class="srow"><span>顯示羅馬拼音</span>
+    <input type="checkbox" id="set-romaji">
+  </div>
+  <div class="srow"><span>片假名標平假名</span>
+    <input type="checkbox" id="set-kata">
+  </div>
   <div class="srow"><span>歌詞來源</span><span id="lyrics-source">—</span></div>
   <div class="srow"><span>版本</span><span id="shell-ver">—</span></div>
   <div class="srow"><span>段落循環</span><span id="loop-val">未設定</span></div>
@@ -380,7 +385,10 @@
   // --- 顯示偏好 (純前端,不進 server) ---------------------------------------
 
   // fs 的預設 32 = 滑桿 (20~44) 的正中央,往兩邊都調得動。改這裡要一起改 CSS 的 --lyric-fs
-  const DEFAULT_PREFS = { fs: 32, align: 'left', furigana: true, trans: true };
+  // romaji/kata 預設關,同桌面的 show_romaji / katakana_ruby。
+  // **kata 與另外三個不同類**:它改的是注音本體 (server 要重跑 python),不是 CSS 開關,
+  // 所以切換它要重抓歌詞,而且快取鍵要分開 (cacheId)。
+  const DEFAULT_PREFS = { fs: 32, align: 'left', furigana: true, trans: true, romaji: false, kata: false };
 
   function readPrefs() {
     try { return { ...DEFAULT_PREFS, ...JSON.parse(localStorage.getItem(LS_PREFS) || '{}') }; }
@@ -392,10 +400,13 @@
     document.documentElement.style.setProperty('--lyric-align', p.align);
     document.body.classList.toggle('no-furigana', !p.furigana);
     document.body.classList.toggle('no-trans', !p.trans);
+    document.body.classList.toggle('no-romaji', !p.romaji);
     $('set-fs').value = p.fs;
     $('set-fs-val').textContent = `${p.fs}px`;
     $('set-furigana').checked = p.furigana;
     $('set-trans').checked = p.trans;
+    $('set-romaji').checked = p.romaji;
+    $('set-kata').checked = p.kata;
     for (const b of $('set-align').children) b.classList.toggle('on', b.dataset.align === p.align);
   }
 
@@ -404,6 +415,14 @@
     localStorage.setItem(LS_PREFS, JSON.stringify(next));
     applyPrefs(next);
   }
+
+  /**
+   * 歌詞快取的鍵。「片假名標平假名」會產出不同的注音 HTML,兩種各存一份 (切回去不必重抓)。
+   * 尾巴那個 `r` 是「這一版的回應帶羅馬拼音」—— 加上去等於讓改版前存的舊快取自然失效,
+   * 不然開了「顯示羅馬拼音」在快取命中的歌上完全沒反應。舊鍵不必特地清:writeCache 的
+   * 上限淘汰是同一份 map 的插入順序,再存幾首就被擠掉了。
+   */
+  const cacheId = (id) => `${id}|${readPrefs().kata ? 'k' : ''}r`;
 
   // --- 設定面板 -------------------------------------------------------------
 
@@ -767,7 +786,7 @@
     showEmpty('查詢歌詞中…');
 
     // 快取命中就整個不打 server (規格 §4.3),離線時也還有歌詞
-    const hit = readCache(localStorage, t.id);
+    const hit = readCache(localStorage, cacheId(t.id));
     if (hit) return showLyrics(hit);
 
     // Render 免費方案閒置 15 分鐘就休眠,第一次請求要等 30~60 秒。**不要加 timeout 中斷它** ——
@@ -780,6 +799,7 @@
 
     try {
       const q = new URLSearchParams({ title: t.title, artist: t.artist, duration_ms: t.durationMs });
+      if (readPrefs().kata) q.set('kata', '1');
       const resp = await fetch(`/api/lyrics?${q}`, {
         cache: 'no-store',
         headers: { 'X-Kanaric-Token': localStorage.getItem(LS_TOKEN) || '' },
@@ -792,7 +812,7 @@
 
       showLyrics(data);
       // 只快取真的有歌詞的:「找不到歌詞」存下去等於永遠不再重試
-      if (lines.length) return writeCache(localStorage, t.id, data);
+      if (lines.length) return writeCache(localStorage, cacheId(t.id), data);
     } catch (e) {
       if (lyricsFor !== t.id) return;
       $('lyrics-source').textContent = `讀取失敗:${e.message}`;
@@ -840,7 +860,8 @@
     // 歌詞是 furigana_inject.py 逃逸過的 <ruby> HTML,譯文則由 translations.js 的
     // escapeHtml 逃逸過 —— 兩邊都逃逸過了才敢直接 innerHTML
     $('lyrics').innerHTML = lines.map((l) =>
-      `<p>${l.html || '♪'}${l.trans ? `<span class="tr">${l.trans}</span>` : ''}</p>`).join('');
+      `<p>${l.html || '♪'}${l.romaji ? `<span class="rj">${l.romaji}</span>` : ''}` +
+      `${l.trans ? `<span class="tr">${l.trans}</span>` : ''}</p>`).join('');
   }
 
   /** 高亮 + 置中。只在換行時動,不然每幀寫 scrollTop 會把手動捲動整個吃掉 */
@@ -861,10 +882,11 @@
     }
     // 卡拉OK填色**在換行判斷之外**:同一句的每一幀都要更新,那才是「逐字」的意思。
     // 沒有逐字資料的歌 karaokePaint 自己早退,整句照舊一起變白。
-    // rejectSel 要把 .tr (譯文) 一起排除 —— 它是 <p> 的子元素,不像桌面是另一顆 div
+    // rejectSel 要把 .tr (譯文) 與 .rj (羅馬拼音) 一起排除 —— 它們是 <p> 的子元素,
+    // 不像桌面是另外的 div;不排除就會被切成字元跟著填色
     const cur = lines[activeLine];
     if (cur && cur.words) {
-      karaokePaint(pane.children[activeLine], cur.words, posMs - cur.ms, 'rt, .tr');
+      karaokePaint(pane.children[activeLine], cur.words, posMs - cur.ms, 'rt, .tr, .rj');
     }
   }
 
@@ -942,7 +964,7 @@
     if (!track) return;
     let all;
     try { all = JSON.parse(localStorage.getItem(CACHE_KEY) || '{}'); } catch (e) { all = {}; }
-    delete all[track.id];
+    delete all[cacheId(track.id)];
     try { localStorage.setItem(CACHE_KEY, JSON.stringify(all)); } catch (e) {}
     closeSheet();
     loadLyrics(track);
@@ -1009,13 +1031,14 @@
     const id = track.id;
     $('opts').innerHTML = '<p class="hint">套用中…</p>';
     try {
-      const data = await apiGet(`/api/lyrics/pick?${optQuery()}&index=${i}`);
+      const kata = readPrefs().kata ? '&kata=1' : '';
+      const data = await apiGet(`/api/lyrics/pick?${optQuery()}&index=${i}${kata}`);
       if (!track || track.id !== id) return;
       showLyrics(data);
       clearLoop();
       // 寫進自己的快取 = 持久化:它是 loadLyrics 的第一順位,所以「套用」會一直有效,
       // 直到按重新載入 (server 那邊完全沒被寫過)
-      if (lines.length) writeCache(localStorage, id, data);
+      if (lines.length) writeCache(localStorage, cacheId(id), data);
       closeSheet();
     } catch (e) {
       // 409 = server 那份工作不見了 (重啟、或被 20 筆上限淘汰),重跑一次搜尋就好
@@ -1166,6 +1189,12 @@
     $('set-fs').addEventListener('input', (e) => savePrefs({ fs: Number(e.target.value) }));
     $('set-furigana').addEventListener('change', (e) => savePrefs({ furigana: e.target.checked }));
     $('set-trans').addEventListener('change', (e) => savePrefs({ trans: e.target.checked }));
+    $('set-romaji').addEventListener('change', (e) => savePrefs({ romaji: e.target.checked }));
+    // kata 不是 CSS 開關:注音本體變了,要重抓 (換一把快取鍵,兩種各存一份)
+    $('set-kata').addEventListener('change', (e) => {
+      savePrefs({ kata: e.target.checked });
+      if (track) loadLyrics(track);
+    });
     $('set-align').addEventListener('click', (e) => {
       const b = e.target.closest('button');
       if (b) savePrefs({ align: b.dataset.align });

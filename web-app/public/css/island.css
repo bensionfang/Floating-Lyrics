@@ -4,8 +4,10 @@
   --edge: 24px;
   /* 透明度只調底色的 alpha,不用整塊 opacity —— 整塊調的話歌詞會跟著糊掉,
      30% 時字幾乎看不見,而使用者要的是「底變透、字還看得清楚」。
-     整塊的 opacity 留給 .idle (暫停淡出) 專用。 */
-  --island-bg: rgba(12, 12, 12, calc(0.9 * var(--island-opacity)));
+     整塊的 opacity 留給 .idle (暫停淡出) 專用。
+     **alpha 就是設定值本身,不要再乘一個係數** —— 乘了的話設定裡的 100% 其實是 90%,
+     底下的桌面永遠透出來一點 (2026-08-04 回報)。 */
+  --island-bg: rgba(12, 12, 12, var(--island-opacity));
   --island-fs: 24px;
   /* 固定字級,不跟主頁 font_size 連動 (見 island.ejs applySettings) */
   --island-r: 20px;
@@ -31,7 +33,11 @@ body {
   /* 島貼著內容的大小,不是撐滿視窗;視窗尺寸由 island.js 依量到的內容尺寸調整 */
   display: flex;
   justify-content: center;
-  align-items: center;
+  /* **上緣對齊,不可以改回 center** —— 逐句換行時視窗高度是「只長不縮」的
+     (island.js 的 growOnly,為了不讓透明視窗每句都改尺寸而閃),所以兩行變一行之後
+     視窗會比島高一截。置中的話那一截會平分到上下兩邊,吸附狀態下島就浮在螢幕頂端下面
+     貼不上去 (2026-08-04 回報);對齊上緣的話多出來的高度全留在下面,那裡是透明的。 */
+  align-items: flex-start;
 }
 
 #island {
@@ -361,37 +367,38 @@ html.hide-furigana rt {
    沒有逐字資料的歌一個 class 都不會掛上,整行照舊全白。
    #l1 是 nowrap,理論上可以整行套漸層,但共用實作用逐字 span —— 歌詞區會換行,
    兩邊做法分岔只會多一份要維護的東西。 */
+/* **每一顆字都套同一條漸層,唱過的是 --k:100%、還沒唱的是 0%** ——
+   只給正在唱的那一顆套的話,它未填的那半會比旁邊還沒唱到的字暗一截:
+   background-clip: text 會關掉次像素抗鋸齒,同一個顏色畫出來就是比較細比較暗
+   (實測平均亮度 42.4 vs 47.4,2026-08-04 回報)。 */
 #l1 .kc {
-  color: rgba(255, 255, 255, 0.45);
+  --k: 0%;
+  background: linear-gradient(90deg,
+      #fff var(--k),
+      rgba(255, 255, 255, 0.45) var(--k));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 
 #l1 .kc.sung {
-  color: #fff;
+  --k: 100%;
 }
 
-#l1 .kc.kc-now {
+/* 假名跟著它蓋住的那幾個字一起填 (rt 的 color: inherit 會拿到 .kc 的顏色,要蓋掉)。
+   三個狀態同樣共用一條漸層,理由同上面的 .kc */
+#l1 rt.rt-pending,
+#l1 rt.rt-now,
+#l1 rt.rt-sung {
+  --k: 0%;
   background: linear-gradient(90deg,
-      #fff var(--k, 0%),
-      rgba(255, 255, 255, 0.45) var(--k, 0%));
+      #fff var(--k),
+      rgba(255, 255, 255, 0.45) var(--k));
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-}
-
-/* 假名跟著它蓋住的那幾個字一起填 (rt 的 color: inherit 會拿到 .kc 的顏色,要蓋掉) */
-#l1 rt.rt-pending {
-  color: rgba(255, 255, 255, 0.45);
 }
 
 #l1 rt.rt-sung {
-  color: #fff;
-}
-
-#l1 rt.rt-now {
-  background: linear-gradient(90deg,
-      #fff var(--k, 0%),
-      rgba(255, 255, 255, 0.45) var(--k, 0%));
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  --k: 100%;
 }

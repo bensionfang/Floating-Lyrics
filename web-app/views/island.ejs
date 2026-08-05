@@ -4,9 +4,9 @@
 <head>
 <meta charset="UTF-8">
 <title>Kanaric Island</title>
-<link rel="stylesheet" href="/css/island.css?v=16">
+<link rel="stylesheet" href="/css/island.css?v=17">
 <!-- 逐字卡拉OK填色:與歌詞區、行動版共用同一份實作 -->
-<script src="/js/karaoke.js?v=1"></script>
+<script src="/js/karaoke.js?v=2"></script>
 </head>
 <body>
 <div id="island" class="docked">
@@ -53,6 +53,9 @@ const el = {
 
 // 展開時控制列本身要放得下 (三顆按鈕 + 進度條),歌詞比它短時視窗不能縮到切掉按鈕
 const CTRL_MIN_W = 240;
+// 提早換行的補償秒數 (見 frame())。等於 .lyric-anim 的長度,不要再放大 ——
+// 每一句的最後 LEAD 秒是填不到色的,放大就是把逐字填色的尾巴吃掉。
+const LEAD = 0.2;
 
 // 量一組 (line1,line2) 的藥丸外框寬 (含封面/等化器/gap/padding)。純量測,不動畫面。
 // 寬度量在 #measure (絕對定位) 上,視窗此刻多窄都不影響量到的自然寬度。
@@ -432,8 +435,14 @@ function frame() {
   // 進度條要在歌詞的早退之前更新:找不到歌詞的歌、瀏覽器來源,進度照樣要走
   updateProgress();
   if (!lyrics.length) return;
-  // 早 0.5 秒切換:抵銷淡入動畫與傳輸延遲,看起來才「跟手」(沿用舊島的補償值)
-  const now = pos + (playing ? (performance.now() - lastSync) / 1000 : 0) - offset + 0.5;
+  // 早一點切換:抵銷淡入動畫,看起來才「跟手」。**這個值直接吃掉逐字填色的尾巴** ——
+  // 島提早 LEAD 秒換行,而填色用的是真實播放位置,所以每一句的最後 LEAD 秒永遠填不到。
+  // 舊值 0.5 是從 C# 島沿用的 (那時還沒有逐字填色):快歌一句才 1.2 秒,等於最後四成的字
+  // 都還沒亮就跳下一句了 (2026-08-04 回報)。改成 0.2 = `.lyric-anim` 的實際長度,
+  // 它本來就是這個補償要抵銷的東西。
+  // ponytail: 剩下的 0.2 秒尾巴還在,要完全消掉得讓填色用「被壓縮的時間軸」提前跑完,
+  //           那會讓每個字都亮得比唱得早,不划算。
+  const now = pos + (playing ? (performance.now() - lastSync) / 1000 : 0) - offset + LEAD;
   if (now < lyrics[0].t) {                    // 前奏:顯示歌名
     if (lastLine1 !== 'INTRO') { lastLine1 = 'INTRO'; el.song.classList.remove('hidden');
       el.l1.classList.add('hidden'); el.l2.classList.add('hidden');
@@ -462,7 +471,7 @@ function frame() {
   // 卡拉OK填色:**每一幀都要跑,而且要排在重繪之後** (換行那一幀 el.l1 的內容剛換掉)。
   // 用 now - 0.5 而不是 now —— 那 0.5 秒是「提早換行來抵銷淡入動畫」的補償,
   // 不是真實播放位置,拿它去填色整句會快半秒。
-  if (idx >= 0) karaokePaint(el.l1, words[lyrics[idx].t], (now - 0.5 - lyrics[idx].t) * 1000);
+  if (idx >= 0) karaokePaint(el.l1, words[lyrics[idx].t], (now - LEAD - lyrics[idx].t) * 1000);
 }
 requestAnimationFrame(frame);
 </script>
