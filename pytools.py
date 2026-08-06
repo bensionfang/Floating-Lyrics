@@ -68,12 +68,27 @@ def main():
             def _stash(results, tried_all):
                 if not stash_ok:
                     return
-                for r in results:
-                    if r.get("translations"):
-                        db.save_translations(artist, title, r["translations"])
-                        break
-                else:
-                    db.save_translations(artist, title, {})
+                # **譯文只有 `source:'all'` 那條路可以寫,而且要把三家合併起來。**
+                #
+                # 合併:鍵是 normalize_line 後的日文行,三家對同一首歌的**斷句與收錄範圍不同**,
+                # 聯集嚴格地比任何單一家多 —— 實測 ツユ/やっぱり雨は降るんだね 網易 41 鍵 vs
+                # QQ 64 鍵、NOMELON NOLEMON/moonshadow 網易 16 vs QQ 30。而 _SOURCES 是網易優先,
+                # 舊寫法「第一個有譯文的就 break」每次都挑到少的那份,症狀是「這句有譯文、
+                # 下一句沒有」(那些行根本沒有鍵可以查)。衝突時**前面的來源勝**,所以反著填。
+                #
+                # 只在 tried_all 寫:理由同下面的 word_times —— fetch() 拿到網易的歌詞就不會再問
+                # QQ,那時寫下去等於拿一家的答案定案 (寫 {} 更慘,`applyTranslations` 只在
+                # **沒有列**時才補抓,一個 {} 就讓那首歌永遠不再查譯文)。單一來源那條路乾脆
+                # 不碰這張表,讓 ensureTranslations 的 source:'all' 來寫 —— 它本來就會跑:
+                # word_times 的負快取同樣要 tried_all,所以單一來源抓完那首歌的 applyWordTimes
+                # 一定查無資料、一定觸發它。
+                if tried_all:
+                    merged = {}
+                    for r in reversed(results):
+                        if r.get("translations"):
+                            merged.update(r["translations"])
+                    # 空 dict 仍然要寫 —— 那才是真的負快取 (三家都問過,都沒有翻譯軌)
+                    db.save_translations(artist, title, merged)
                 for r in results:
                     if r.get("word_times"):
                         db.save_word_times(artist, title, r["word_times"])
