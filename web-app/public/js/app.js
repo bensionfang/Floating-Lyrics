@@ -28,6 +28,9 @@ let syncOffset = 0;
 let scrollLocked = false;   // 硬鎖自動捲動:編輯假名中 / 鍵盤手動切行中
 let autoCenter = true;      // 逐句置中模式 (黏著):使用者自己捲才脫離,漂回中間帶才黏回去
 let programmaticScrollUntil = 0;   // 這個時間點前的 scroll 事件是自己捲的,不算使用者操作
+// 隱藏的預設提前量,讓網頁版歌詞提早顯示 (補償視覺延遲,但不影響右下角的調整值)。
+// **不可以留在 syncLoop 裡面** —— seekToLyric 要用同一個值做反向換算
+const WEB_APP_LYRICS_ADVANCE = 0.25;
 
 // 段落循環 (練唱):存 parsedLyrics 的 index,不是秒 —— 歌詞重畫後才有辦法把標記畫回去
 let isLoopMode = false;
@@ -65,15 +68,13 @@ document.addEventListener('DOMContentLoaded', () => {
             currentInterpolatedPosition += dt;
         }
         if (parsedLyrics.length > 0) {
-            // 隱藏的預設提前量，讓網頁版歌詞提早顯示 (補償視覺延遲，但不影響右下角調整值)
-            const WEB_APP_LYRICS_ADVANCE = 0.25;
             syncLyricsToTime(currentInterpolatedPosition - syncOffset + WEB_APP_LYRICS_ADVANCE);
         }
         // 段落循環:唱完 B 句就跳回 A 句。pendingSeekTarget 還沒清掉代表上一次跳轉還沒到位,
         // 這時再送一次 seek 會變成每幀狂送。
         if (loopB !== null && isCurrentlyPlaying && pendingSeekTarget === null &&
             currentInterpolatedPosition >= loopEndTime()) {
-            seekTo(parsedLyrics[loopA].time);
+            seekToLyric(parsedLyrics[loopA].time);
         }
         updatePlaybackProgress(currentInterpolatedPosition);
         requestAnimationFrame(syncLoop);
@@ -1071,7 +1072,7 @@ function pickLoopLine(line) {
         loopB = index;   // 再點同一句 = 單句循環
         if (loopB < loopA) [loopA, loopB] = [loopB, loopA];   // 由下往上點也算數
         saveLoopRange();
-        seekTo(parsedLyrics[loopA].time);
+        seekToLyric(parsedLyrics[loopA].time);
         showToast(loopA === loopB
             ? `循環第 ${loopA + 1} 句`
             : `循環第 ${loopA + 1} – ${loopB + 1} 句`, 'fa-solid fa-bookmark');
@@ -1089,7 +1090,28 @@ function paintLoopRange() {
     }
 }
 
-// 跳到指定秒數:先在本地跳好,不等系統回報 —— 暫停時系統回報位置很慢甚至不回報
+/**
+ * 跳到**某一句歌詞**。收的是歌詞時間,送出去的是播放位置 —— 兩者差一個「顯示對齊」的量,
+ * 不換算就會跳錯句。
+ *
+ * 高亮的判斷是 `syncLyricsToTime(播放位置 - syncOffset + ADVANCE)`,反過來解:要讓第 L 句
+ * 成為當前句,播放位置得是 `L.time + syncOffset - ADVANCE`。舊版直接把 `L.time` 當播放位置
+ * 送出去,`syncOffset > 0.25` 的歌 (庫裡 39 筆偏移有好幾首是 0.5 / 1.0) 就落在 L 的前面 =
+ * **高亮跳到上一句**。播放中看不出來,位置馬上推進過去了;**暫停時位置不動,就卡在錯的那句**。
+ *
+ * **`SEEK_EPS` 不是防禦性程式,少了它照樣跳錯句。** 反函數算出來的目標正好落在邊界上,
+ * 而 seek 是繞一圈回來的 (送出去 → 播放器跳 → Windows Media API 回報),回報值往下捨
+ * 任何一點就掉回上一句 —— 實測送 39.271、回報 39.2705,差 0.0005 就足以判成上一句。
+ * 往後推 50ms 讓目標落在那一句裡面而不是邊界上;50ms 聽不出來。
+ *
+ * 進度條那條路 (`seekTo`) 收的本來就是播放位置,不能走這裡。
+ */
+const SEEK_EPS = 0.05;
+function seekToLyric(lyricTime) {
+    seekTo(Math.max(0, lyricTime + syncOffset - WEB_APP_LYRICS_ADVANCE + SEEK_EPS));
+}
+
+// 跳到指定秒數 (播放位置):先在本地跳好,不等系統回報 —— 暫停時系統回報位置很慢甚至不回報
 function seekTo(sec) {
     currentInterpolatedPosition = sec;
     updatePlaybackProgress(sec);
@@ -1122,7 +1144,7 @@ document.getElementById('lyrics-scroll').addEventListener('click', (e) => {
 
     // Seek mode
     const timeSec = line.getAttribute('data-time');
-    if (timeSec) seekTo(parseFloat(timeSec));
+    if (timeSec) seekToLyric(parseFloat(timeSec));
 });
 
 // 就地編輯假名:直接把 <rt> 變成可編輯,不開視窗
