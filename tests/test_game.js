@@ -3,7 +3,7 @@
 // 不會有錯誤訊息,所以要釘住。
 const assert = require('assert');
 const { pickDistractors, filterArtistTracks } = require('../web-app/game');
-const { scoreFor, round1 } = require('../web-app/public/js/game-score');
+const { scoreFor, gainFor, round1, WRONG_PENALTY } = require('../web-app/public/js/game-score');
 const { songKey, titleKey } = require('../web-app/public/js/song-key');
 
 let pass = 0, fail = 0;
@@ -155,7 +155,7 @@ check('空輸入不會炸', () => {
   assert.deepStrictEqual(filterArtistTracks([]), []);
 });
 
-// --- 計分公式 (基本 + 速度 + 連勝,沒有扣分項) ---
+// --- 計分公式 (答對 = 基本 + 速度 + 連勝;答錯 −1;跳過 0) ---
 
 check('速度分是半衰期曲線:每 10 秒剩一半', () => {
   assert.strictEqual(scoreFor(0, 1).speed, 5, 't=0 拿滿');
@@ -172,7 +172,7 @@ check('速度分吃實際秒數,差一秒就有差 (不是門檻)', () => {
   assert.ok(scoreFor(3000, 1).speed > scoreFor(3100, 1).speed, '晚 0.1 秒就該少一點');
 });
 
-check('慢答不歸零也不倒扣 (只有加分沒有扣分)', () => {
+check('慢答不歸零也不倒扣 (倒扣只針對答錯)', () => {
   assert.ok(scoreFor(60000, 1).speed > 0, '一分鐘還是拿得到一點');
   assert.ok(scoreFor(600000, 1).speed >= 0, '十分鐘也不會變負的');
 });
@@ -191,6 +191,17 @@ check('第一題答對沒有連勝加成,第二題起每題多 1 分', () => {
 
 check('連勝加成有上限,不會一題抵前面十題', () => {
   assert.strictEqual(scoreFor(30000, 20).streak, 5);
+});
+
+check('答錯倒扣,跳過不扣不加 (兩者不可以混為一談)', () => {
+  const q = { correct: false, elapsedMs: 3000, streak: 0 };
+  assert.strictEqual(gainFor({ ...q, skipped: false }), -WRONG_PENALTY, '選錯要倒扣');
+  assert.strictEqual(gainFor({ ...q, skipped: true }), 0, '跳過是 0,不是倒扣');
+  assert.ok(WRONG_PENALTY > 0, '倒扣值本身是正的,加負號在 gainFor 裡');
+});
+
+check('答對照舊走三項相加,不受倒扣影響', () => {
+  assert.strictEqual(gainFor({ correct: true, skipped: false, elapsedMs: 0, streak: 1 }), 6);
 });
 
 check('總分 = 三項相加', () => {

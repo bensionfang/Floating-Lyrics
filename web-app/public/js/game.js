@@ -29,16 +29,22 @@
   // 不設上限就是無止境地按下一首。曲目多的歌手後期本來就會連跳好幾首,所以門檻要寬
   const FULL_SKIP_LIMIT = 25;
   const MISSING_SHOWN = 24;   // 結算只列前幾首沒考到的 (114 首全列會把畫面吃光)
-  // 計分公式在 game-score.js (基本 1 + 速度加成 + 連勝加成,沒有扣分項)
+  // 計分公式在 game-score.js (答對 = 基本 1 + 速度 + 連勝;答錯 −1;跳過 0)
 
   let mode = '10';
   let poolTracks = [];        // 指定歌手的曲目,干擾選項的第一順位;沒指定就是空陣列
   let startMode = 'intro';    // 從哪裡開始播:前奏 (0 秒) / 隨機時間
   let lastKey = '';           // 最後一次看到的播放狀態 (不管有沒有在遊戲中)
+  let shuffleOn = false;      // 播放器現在的隨機播放狀態 (shuffle 是 toggle,要先知道現況)
+  // 我們送出 next/seek 之後的一小段窗:播放器在這段時間內停下來就補一次 play。
+  // 窗外的暫停當作使用者自己按的,不跟他搶
+  let resumeUntil = 0;
+  const RESUME_WINDOW_MS = 6000;
+  const expectPlaying = () => { resumeUntil = Date.now() + RESUME_WINDOW_MS; };
   const S = {
     running: false, q: 0, score: 0, lives: LIVES, wrong: [], streak: 0, best: 0, log: [],
     answer: null, key: '', answered: true,
-    askedAt: 0, waitFrom: 0, timerId: null, revealId: null,
+    askedAt: 0, waitFrom: 0, timerId: null, revealId: null, startPos: 0,
     // 全曲目玩法:考過的歌 (titleKey) 與連續跳過次數
     asked: new Set(), skips: 0,
   };
@@ -51,6 +57,8 @@
   const keyOf = (m) => (m.artist || '') + '|||' + (m.title || '');
   // 分數是小數 (速度分吃實際秒數),但整數就別多印一個 .0
   const fmtPts = (n) => (Number.isInteger(n) ? String(n) : n.toFixed(1));
+  // 有正負號的版本:負數自己帶著 -,只有正數要補 +
+  const fmtDelta = (n) => (n > 0 ? '+' : '') + fmtPts(n);
   const post = (url, body) => fetch(url, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   });
@@ -79,10 +87,25 @@
     // 開局時要靠它擋掉「還沒切歌」的那首 (見 startGame)。**只記非空的** ——
     // 沒有播放來源時監控照樣推空 payload,記進去等於把開局要擋的那首忘掉
     if (m.title) lastKey = keyOf(m);
+    // shuffle 是 toggle (pytools 送的是 not is_shuffle_active),所以開局前要先知道現況
+    if (typeof m.shuffle === 'boolean') shuffleOn = m.shuffle;
     // 進度條的基準點。廣播是換狀態才來 (不是每 0.1 秒),所以畫的時候要自己內插
     if (typeof m.position === 'number') {
       track = { at: Date.now(), base: m.position, dur: Number(m.duration) || 0, playing: !!m.is_playing };
       paintTrack();
+    }
+    // 我們自己送的 next/seek 有時候會讓播放器停下來 (切歌途中撞到 seek、隨機佇列走完)。
+    // 只補在窗內的那一次 —— 補完就關窗,不然使用者真的想暫停會被一直搶回去
+    if (S.running && m.title && m.is_playing === false && Date.now() < resumeUntil) {
+      resumeUntil = 0;
+      control('play').catch(() => {});
+    }
+    // 作答中原則上不理會播放狀態,但「歌被換掉」是例外:keepQuestionPlaying() 沒繞成
+    // (分頁被凍結、廣播延遲) 時播放器已經跳下一首,題目就不再是正在播的那首 ——
+    // 判成跳過 (0 分) 收掉,總比讓使用者對著另一首歌作答好
+    if (S.running && !S.answered && S.answer && m.title && !m.resolving && keyOf(m) !== S.key) {
+      showToast('這首播完了,自動跳過', 'fa-solid fa-circle-info', 3000);
+      return answer('', null);
     }
     if (!S.running || S.answered === false) return;   // 作答中不理會播放狀態
     if (S.answer || !m.title || m.resolving) return;
@@ -99,6 +122,7 @@
       }
       S.waitFrom = Date.now();
       S.key = keyOf(m);
+      expectPlaying();
       control('next').catch(() => {});
       return;
     }
@@ -150,13 +174,23 @@
   }
 
   // 前奏 = 回到 0 秒 (next 之後多半已經在 0,但使用者手動切歌進來就不一定);
-  // 隨機時間 = 10%~80% 之間隨機跳一次。沒有時長 (瀏覽器來源) 就不動,亂 seek 只會跳到歌尾
+  // 隨機時間 = 10%~95% 之間隨機跳一次。沒有時長 (瀏覽器來源) 就不動,亂 seek 只會跳到歌尾
   function seekForQuestion(m) {
     const dur = Number(m.duration) || 0;
-    if (startMode === 'random' && dur > 30) {
-      const pos = Math.round(dur * (0.1 + Math.random() * 0.7));
-      post('/api/seek', { position: pos }).catch(() => {});
+    const random = startMode === 'random' && dur > 30;
+    // 這題的起點,快播完時 keepQuestionPlaying() 跳回這裡。
+    // 10%~95% 均勻 —— 上限拉到 95% 是因為歌不會播完了 (keepQuestionPlaying 會繞回來),
+    // 但**要留下 MIN_TAIL_SEC 的尾巴**:繞的那一圈比 LOOP_MARGIN_SEC 還短的話,
+    // 一跳回去就又判定「快播完」,變成在最後幾秒之間來回彈
+    S.startPos = random
+      ? Math.min(Math.round(dur * (0.1 + Math.random() * 0.85)), Math.round(dur) - MIN_TAIL_SEC)
+      : 0;
+    loopGuard = 0;
+    if (random) {
+      expectPlaying();
+      post('/api/seek', { position: S.startPos }).catch(() => {});
     } else if (startMode === 'intro' && (m.position || 0) > 3) {
+      expectPlaying();
       post('/api/seek', { position: 0 }).catch(() => {});
     }
   }
@@ -166,12 +200,15 @@
     S.answered = true;
     stopTimer();
     const correct = chosenKey === S.key;
+    // btn 是空的 = 按了「跳過」而不是選錯。倒扣只掛在真的選錯上 ——
+    // 跳過也扣的話使用者會亂按一個選項而不是跳過,成績反而更沒意義
+    const skipped = !btn;
     const elapsed = Date.now() - S.askedAt;
     el.timer.textContent = `${fmtSec(elapsed)} 秒`;
     S.streak = correct ? S.streak + 1 : 0;
     S.best = Math.max(S.best, S.streak);
     const sc = correct ? scoreFor(elapsed, S.streak) : null;
-    const gained = sc ? sc.total : 0;
+    const gained = gainFor({ correct, skipped, elapsedMs: elapsed, streak: S.streak });
     // 累加也要收一次小數 —— 不收的話 0.1 + 0.2 那種浮點誤差會一路長出 17.400000000000002
     S.score = round1(S.score + gained);
     if (!correct) {
@@ -188,7 +225,7 @@
     el.reveal.innerHTML = `
       <div class="game-reveal-mark ${correct ? 'ok' : 'no'}">
         <i class="fa-solid ${correct ? 'fa-circle-check' : 'fa-circle-xmark'}"></i>
-        ${correct ? `答對 +${fmtPts(gained)}` : (btn ? '答錯' : '跳過')}
+        ${correct ? `答對 +${fmtPts(gained)}` : (skipped ? '跳過' : `答錯 ${fmtDelta(gained)}`)}
       </div>
       ${sc ? `<div class="game-reveal-breakdown">基本 +1${
         sc.speed ? ` ・ ${fmtSec(elapsed)} 秒 +${fmtPts(sc.speed)}` : ''}${
@@ -222,6 +259,7 @@
     el.reveal.classList.add('hidden');
     el.stage.classList.remove('revealed');
     updateHud();
+    expectPlaying();
     control('next').catch(() => {});
   }
 
@@ -254,7 +292,7 @@
     el.streak.innerHTML = `<i class="fa-solid fa-fire"></i> ${S.streak} 連勝`;
   }
 
-  // 碼表只往上跑,不再掛「現在答對 +N」那種一直變小的數字 —— 計分沒有扣分項,
+  // 碼表只往上跑,不再掛「現在答對 +N」那種一直變小的數字 —— 倒扣只針對答錯,
   // 慢只是拿不到速度加成。小數點後一位是為了讓快答的差別看得出來 (3.2 vs 4.8 秒)
   const fmtSec = (ms) => (Math.max(0, ms) / 1000).toFixed(1);
   function paintTimer(ms) { el.timer.textContent = `${fmtSec(ms)} 秒`; }
@@ -264,8 +302,25 @@
     S.timerId = setInterval(() => {
       paintTimer(Date.now() - S.askedAt);
       paintTrack();
+      keepQuestionPlaying();
     }, 100);
     paintTimer(0);
+  }
+
+  // 題目就是「正在播的那首」,所以作答中不能讓它播完 —— 播完播放器會自己跳下一首,
+  // 畫面上的問題與耳朵聽到的就變成兩首歌。快到尾巴就跳回這題的起點,讓它一直繞。
+  // 位置是內插出來的 (廣播的 position 一秒才來一次),所以留 5 秒餘裕;
+  // seek 之後 track.base 要等下一則廣播才更新,期間會一直判定成「快播完」——
+  // 沒有 loopGuard 就是每 100ms 送一次 seek
+  const LOOP_MARGIN_SEC = 5;
+  const MIN_TAIL_SEC = 20;   // 隨機起點至少要留這麼多秒,繞的那一圈才夠聽 (見 seekForQuestion)
+  let loopGuard = 0;
+  function keepQuestionPlaying() {
+    if (S.answered || !track.dur || !track.playing) return;
+    if (trackPos() < track.dur - LOOP_MARGIN_SEC || Date.now() < loopGuard) return;
+    loopGuard = Date.now() + 5000;
+    expectPlaying();
+    post('/api/seek', { position: S.startPos }).catch(() => {});
   }
   function stopTimer() { if (S.timerId) clearInterval(S.timerId); S.timerId = null; }
 
@@ -274,11 +329,14 @@
   // 沒有時長 (瀏覽器來源 currentDuration() 回 null) 就整條收起來
   let track = { at: 0, base: 0, dur: 0, playing: false };
   const fmtClock = (sec) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
+  const trackPos = () => {
+    const drift = track.playing ? (Date.now() - track.at) / 1000 : 0;
+    return Math.max(0, Math.min(track.dur, track.base + drift));
+  };
   function paintTrack() {
     el.track.classList.toggle('hidden', !track.dur);
     if (!track.dur) return;
-    const drift = track.playing ? (Date.now() - track.at) / 1000 : 0;
-    const pos = Math.max(0, Math.min(track.dur, track.base + drift));
+    const pos = trackPos();
     el.trackFill.style.width = `${(pos / track.dur) * 100}%`;
     el.trackPos.textContent = fmtClock(pos);
     el.trackDur.textContent = fmtClock(track.dur);
@@ -294,7 +352,7 @@
         <i class="fa-solid ${r.correct ? 'fa-check' : 'fa-xmark'}"></i>
         <span class="game-log-sec">${r.sec}s</span>
         <span class="game-log-title">${escapeHtml(r.title)}</span>
-        <span class="game-log-pt">${r.gained ? `+${fmtPts(r.gained)}` : ''}</span>
+        <span class="game-log-pt">${r.gained ? fmtDelta(r.gained) : ''}</span>
       </div>`).join('');
     el.log.scrollTop = el.log.scrollHeight;
   }
@@ -432,8 +490,11 @@
     // 播放列與封面也寫著答案。syncPlayerBar 每秒把歌名寫回 DOM,所以用 class 讓 CSS 去遮
     document.body.classList.add('game-masked');
     sendActive(true);
-    // 不隨機的話 next 會照專輯順序跑,題目很好猜。結束後不會自動改回來
-    await control('shuffle').catch(() => {});
+    // 不隨機的話 next 會照專輯順序跑,題目很好猜。結束後不會自動改回來。
+    // **已經開著就不要送** —— pytools 那支是 toggle 不是 setter,再送一次等於關掉,
+    // 然後 next 照專輯順序走到最後一首,播放器就沒有下一首可播、自己停下來
+    if (!shuffleOn) await control('shuffle').catch(() => {});
+    expectPlaying();
     await control('next').catch(() => {});
   }
 

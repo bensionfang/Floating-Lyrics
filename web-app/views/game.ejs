@@ -36,9 +36,9 @@
 
             <div class="game-guide-block">
                 <h3>怎麼算分</h3>
-                <p>答對 = <b>基本 1＋速度＋連勝</b>，三項相加，<b>沒有扣分</b>；答錯或跳過 0 分。</p>
+                <p>答對 = <b>基本 1＋速度＋連勝</b>，三項相加；<b>答錯 −1</b>，<b>跳過 0</b>（不扣也不加）。</p>
                 <p><b>速度</b>最多 +5，<b>每 10 秒剩一半</b>（1 秒 +4.7、5 秒 +3.5、10 秒 +2.5、30 秒 +0.6），
-                    吃實際秒數，永遠不歸零。<b>連勝</b>第 2 題起每題 +1，上限 +5，答錯歸零。</p>
+                    吃實際秒數，永遠不歸零，<b>答得慢不扣分</b>。<b>連勝</b>第 2 題起每題 +1，上限 +5，答錯歸零。</p>
                 <p class="game-note">遊戲中的播放<b>不會</b>寫進聆聽紀錄；隨機播放結束後不會改回原設定。</p>
             </div>
         </div>
@@ -160,7 +160,7 @@
 </div>
 
 <script src="/js/song-key.js?v=1"></script>
-<script src="/js/game-score.js?v=2"></script>
-<script src="/js/game.js?v=10"></script>
+<script src="/js/game-score.js?v=3"></script>
+<script src="/js/game.js?v=14"></script>
 
 <%- include('footer') %>

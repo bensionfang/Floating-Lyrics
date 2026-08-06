@@ -2603,6 +2603,8 @@ span[data-tip] {
 .game-log-sec { color: var(--text-dim); font-variant-numeric: tabular-nums; }
 .game-log-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); }
 .game-log-pt { text-align: right; color: var(--accent-main); font-weight: 600; }
+/* 倒扣那格跟著叉叉用同一個紅 (跳過是 0,不印分數所以不會走到這) */
+.game-log-row.no .game-log-pt { color: #e0245e; }
 
 .game-hint-line {
     font-size: 19px;
