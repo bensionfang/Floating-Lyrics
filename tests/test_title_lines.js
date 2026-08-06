@@ -102,5 +102,34 @@ nameCase('歌名 / 未提供歌名則跳過',
   '[00:00.00]作词 : 甲\n[00:00.50]某某\n[00:20.00]歌詞',
   undefined, { idx: 1, want: false });
 
+// --- 規則 5:「歌名 - 歌手」標頭。QQ/酷狗放在第 1 行,規則 4 接不到 (全庫 19 首漏標) ---
+// 該標:QQ 的形狀,歌名在前
+nameCase('標頭 / 第1行 歌名-歌手 (QQ)',
+  '[00:00.58]AIZO - King Gnu\n[00:01.25]詞：常田大希\n[00:10.10]歌詞',
+  'AIZO', { idx: 0, want: true });
+// 該標:酷狗的形狀,歌手在前
+nameCase('標頭 / 第1行 歌手-歌名 (酷狗)',
+  '[00:00.00]Official髭男dism - バッドフォーミー\n[00:00.92]作词：藤原聡\n[00:03.89]歌詞',
+  'バッドフォーミー', { idx: 0, want: true });
+// 該標:歌名帶括號附註、歌手帶讀音,都要能剝
+nameCase('標頭 / 歌名帶括號附註',
+  '[00:00.00]バッドフォーミー (《Good Bye》日劇主題曲) - Official髭男dism\n[00:03.89]歌詞',
+  'バッドフォーミー', { idx: 0, want: true });
+nameCase('標頭 / 切成三段也算 (- Anime Edit -)',
+  '[00:00.00]たりない - Anime Edit - muque\n[00:03.89]歌詞',
+  'たりない', { idx: 0, want: true });
+// 不該標:破折號沒有前後空白 —— 那多半是名字本身 (n-buna、go!go!vanillas)
+nameCase('標頭 / 無空白連字號不算',
+  '[00:00.00]go!go!vanillas\n[00:03.89]歌詞',
+  'go!go!vanillas', { idx: 0, want: false });
+// 不該標:比的是整段相等,不是互相包含 —— 單字母歌名不能把任何一行都吃掉
+nameCase('標頭 / 短歌名不可用包含法',
+  '[00:00.00]Fix You - Coldplay\n[00:03.89]歌詞',
+  'x', { idx: 0, want: false });
+// 不該標:標頭區塊關閉之後 (前面出現過真歌詞) 不再認
+nameCase('標頭 / 真歌詞之後不再認',
+  '[00:00.00]歌詞一\n[00:03.89]AIZO - King Gnu',
+  'AIZO', { idx: 1, want: false });
+
 console.log(`\n${fail === 0 ? '全部通過' : `${fail} 項失敗`} (${pass}/${pass + fail})`);
 process.exit(fail === 0 ? 0 : 1);

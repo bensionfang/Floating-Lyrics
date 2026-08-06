@@ -83,6 +83,31 @@ function isSongNameLine(text, songTitle) {
 }
 
 /**
+ * 規則 5:標頭行 (`AIZO - King Gnu`、`Official髭男dism - バッドフォーミー`)。
+ * QQ 與酷狗把「歌名 - 歌手」放在**第 1 行**,排在製作人員列前面 —— 規則 4 要求前面至少有一行
+ * 製作人員列,所以它永遠接不到這種行 (全庫 454 首裡有 19 首,一首都沒標到)。
+ *
+ * 這種行不需要那個證據:**同一行同時寫著歌名與另一段文字**,沒有人會這樣唱。所以只要
+ * 破折號切出來的某一段「就是歌名」(沿用規則 4 的同一個比對,含剝版本尾綴) 就算標頭。
+ *
+ * 兩個刻意的限制:
+ * - **破折號兩邊都要有空白** —— 沒空白的連字號多半是名字本身 (`n-buna`、`go!go!vanillas`),
+ *   同 utaten.clean_title 的判準。
+ * - 比的是**整段相等**而不是互相包含:包含法會被短歌名 (單字母、`x`) 誤判成任何一行。
+ *
+ * 歌名本身帶破折號的 (`怪獣の花唄 - replica -`) 會切散而漏標 —— 寧可漏標,同規則 4。
+ */
+function isTitleArtistHeader(text, songTitle) {
+  if (!songTitle) return false;
+  const parts = text.split(/\s+[-–—]\s+/).map((s) => s.trim()).filter(Boolean);
+  if (parts.length < 2) return false;
+  // 括號附註在**行**這一側 (`バッドフォーミー (《Good Bye》日劇主題曲) - …`),而 isSongNameLine
+  // 只剝歌名那一側的,所以這裡自己再剝一次
+  return parts.some((p) => isSongNameLine(p, songTitle) ||
+    isSongNameLine(p.replace(/[(（].*$/, '').trim(), songTitle));
+}
+
+/**
  * @param {string} lrcText  LRC 全文
  * @param {string} [songTitle]  歌名。沒給就只跑規則 1~3 (歌名行需要它才判斷得了)
  */
@@ -108,7 +133,9 @@ function autoMarkTitleLines(lrcText, songTitle) {
       let isTitle = already ||
         isCopyrightClaim(text) || isCreditLabel(text) || isCreditPlain(text);
 
-      if (!isTitle && headerIntact && creditsSoFar > 0 && isSongNameLine(text, songTitle)) {
+      if (!isTitle && headerIntact &&
+          (isTitleArtistHeader(text, songTitle) ||
+           (creditsSoFar > 0 && isSongNameLine(text, songTitle)))) {
         isTitle = true;
       }
       if (isTitle) {
@@ -125,4 +152,4 @@ function autoMarkTitleLines(lrcText, songTitle) {
   return newLines.join('\n');
 }
 
-module.exports = { autoMarkTitleLines, isCreditLabel, isCreditPlain, isCopyrightClaim, isSongNameLine };
+module.exports = { autoMarkTitleLines, isCreditLabel, isCreditPlain, isCopyrightClaim, isSongNameLine, isTitleArtistHeader };
