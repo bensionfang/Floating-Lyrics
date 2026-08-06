@@ -17,7 +17,7 @@ const fs = require('fs');
 const os = require('os');
 const { spawn } = require('child_process');
 const { toTraditional, toSimplified } = require('./s2t');   // 簡體歌詞轉繁 (日文歌會跳過,見該檔註解)
-const { hasInlineRuby } = require('./lyric-quality');       // 內嵌注音的爛歌詞,抓取階段就換下一家
+const { badLyric } = require('./lyric-quality');            // 內嵌注音 / 羅馬字轉寫的爛歌詞,抓取階段就換下一家
 const { cleanBrowserQuery, isMusicAppSource } = require('./browser-query');   // 瀏覽器來源的影片標題去噪
 const { autoMarkTitleLines } = require('./title-lines');   // 製作人員/版權列標記 #TITLE#
 const { mergeTranslations } = require('./translations');   // 中文譯文合併 #TRANS# (注音之後才做)
@@ -1210,16 +1210,18 @@ async function searchBestLyric(title, artist, searchTitle, searchArtist) {
   let fallbackSearched = false;
   let finalSource = "";
 
-  // 每一家回來的候選都先過這道:內嵌注音 (漢字後面黏著讀音) 的版本整份沒救,當作沒抓到,
-  // 讓後面的來源接手 (網易 → fallback → lrclib)。全部都這樣才真的沒歌詞,那也比一份標爛的好。
-  // 全部來源都只有這種版本時,擋到最後會變成「找不到歌詞」—— 那比一份難讀的歌詞更糟,
-  // 所以擋下來的第一份留著當墊底,跑完整條鏈都沒有乾淨的才拿出來用。
-  let inlineBackup = "";
-  let inlineSource = "";
+  // 每一家回來的候選都先過這道:內嵌注音 (漢字後面黏著讀音) 與羅馬字轉寫的版本整份沒救,
+  // 當作沒抓到,讓後面的來源接手 (網易 → fallback → lrclib)。全部都這樣才真的沒歌詞,
+  // 那也比一份標爛的好。全部來源都只有這種版本時,擋到最後會變成「找不到歌詞」——
+  // 那比一份難讀的歌詞更糟,所以擋下來的第一份留著當墊底,跑完整條鏈都沒有乾淨的才拿出來用。
+  let rejectedBackup = "";
+  let rejectedSource = "";
+  let rejectedReason = "";
   const usable = (lyric, src) => {
-    if (!hasInlineRuby(lyric)) return true;
-    console.log(`歌詞內嵌注音,判為不可用略過:${src} / ${title}`);
-    if (!inlineBackup) { inlineBackup = lyric; inlineSource = src; }
+    const reason = badLyric(lyric, title);
+    if (!reason) return true;
+    console.log(`歌詞${reason},判為不可用略過:${src} / ${title}`);
+    if (!rejectedBackup) { rejectedBackup = lyric; rejectedSource = src; rejectedReason = reason; }
     return false;
   };
 
@@ -1291,10 +1293,10 @@ async function searchBestLyric(title, artist, searchTitle, searchArtist) {
   }
 
   if (!bestLyric && plainBackup) bestLyric = plainBackup;
-  if (!bestLyric && inlineBackup) {
-    console.log(`只找得到內嵌注音的版本,照用:${inlineSource} / ${title}`);
-    bestLyric = inlineBackup;
-    finalSource = inlineSource;
+  if (!bestLyric && rejectedBackup) {
+    console.log(`只找得到${rejectedReason}的版本,照用:${rejectedSource} / ${title}`);
+    bestLyric = rejectedBackup;
+    finalSource = rejectedSource;
   }
   if (!bestLyric) return { lyric: "", source: "" };
 
@@ -1392,18 +1394,20 @@ app.get('/api/lyrics/fetch', async (req, res) => {
     
     console.log("DB returned:", row ? "found" : "not found");
     if (row && row.lyrics) {
-      // 改版前抓的內嵌注音爛歌詞:重抓一次,別家有乾淨版本就換掉。
+      // 改版前抓的爛歌詞 (內嵌注音、羅馬字轉寫):重抓一次,別家有乾淨版本就換掉。
+      // `cache` 沒有時間戳也不會自己重驗,所以一份壞歌詞寫進去之後就永遠是它 ——
+      // 這條是它唯一的出口 (羅馬字那種尤其:來源網站現在多半已經給得出正常日文版了)。
       // **一個 process 只試一首一次** (`inlineRetried`):只有這種版本的歌重抓也還是同一份,
       // 沒有這道記號就會變成「每次播都重抓」。也**不先刪快取** —— 重抓沒有更好的話還要靠它顯示。
-      // **`[source:ManualEdit]` 不碰**:那是使用者自己編輯或親手套用的備選歌詞,即使是內嵌注音版
+      // **`[source:ManualEdit]` 不碰**:那是使用者自己編輯或親手套用的備選歌詞,即使是爛版本
       // 也是他選的 (整個網路只有這種版本時就得這樣用),自動換掉等於推翻他的決定。
       const inlineKey = `${artist}|||${title}`;
       if (!row.lyrics.startsWith('[source:ManualEdit]') && !inlineRetried.has(inlineKey)
-          && hasInlineRuby(row.lyrics)) {
+          && badLyric(row.lyrics, title)) {
         inlineRetried.add(inlineKey);
-        console.log('快取裡的歌詞是內嵌注音,重抓一次看有沒有更好的:', artist, title);
+        console.log(`快取裡的歌詞是${badLyric(row.lyrics, title)},重抓一次看有沒有更好的:`, artist, title);
         const { lyric } = await searchBestLyric(title, artist, searchTitle, searchArtist);
-        if (lyric && !hasInlineRuby(lyric)) {
+        if (lyric && !badLyric(lyric, title)) {
           db.run('INSERT OR REPLACE INTO cache (artist, title, lyrics) VALUES (?, ?, ?)', [artist, title, lyric]);
           invalidateFurigana(artist, title);
           row.lyrics = lyric;
