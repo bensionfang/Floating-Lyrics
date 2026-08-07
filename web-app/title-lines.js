@@ -111,9 +111,22 @@ function isTitleArtistHeader(text, songTitle) {
  * @param {string} lrcText  LRC 全文
  * @param {string} [songTitle]  歌名。沒給就只跑規則 1~3 (歌名行需要它才判斷得了)
  */
+/**
+ * 時間戳的第三段統一成點號:網易有些歌給的是 `[00:04:03]` 而不是 `[00:04.03]`
+ * (實測 muque / tape 是 44/46 行都這樣)。只有 `app.js` 的正規式兩種都吃,
+ * 靈動島、行動版、以及譯文/羅馬字/逐字三個合併模組全部只認點號 ——
+ * 症狀是「網頁有歌詞、島是空的」,而且沒有任何錯誤訊息。
+ * 正規化集中在兩個匯流點 (這裡 = 所有寫入路徑,server.js 的 injectFurigana = 所有讀取路徑),
+ * **不要改成去各家的正規式加 `[\.:]`** —— 那是六份要同步改的東西。
+ * 三段都是數字才換,所以 `[source:NetEase]`、`[ar:…]` 與 `#WORDS#` 的 `索引:毫秒` 都不受影響。
+ */
+function normalizeLrcTime(text) {
+  return text ? text.replace(/\[(\d+):(\d+):(\d+)\]/g, '[$1:$2.$3]') : text;
+}
+
 function autoMarkTitleLines(lrcText, songTitle) {
   if (!lrcText) return lrcText;
-  const lines = lrcText.split('\n');
+  const lines = normalizeLrcTime(lrcText).split('\n');
   const newLines = [];
   // 標頭區塊的狀態:一旦遇到「不是製作人員列」的內容行就永久關閉
   let headerIntact = true;
@@ -152,4 +165,4 @@ function autoMarkTitleLines(lrcText, songTitle) {
   return newLines.join('\n');
 }
 
-module.exports = { autoMarkTitleLines, isCreditLabel, isCreditPlain, isCopyrightClaim, isSongNameLine, isTitleArtistHeader };
+module.exports = { autoMarkTitleLines, normalizeLrcTime, isCreditLabel, isCreditPlain, isCopyrightClaim, isSongNameLine, isTitleArtistHeader };

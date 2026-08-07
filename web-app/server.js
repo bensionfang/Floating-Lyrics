@@ -19,7 +19,7 @@ const { spawn } = require('child_process');
 const { toTraditional, toSimplified } = require('./s2t');   // 簡體歌詞轉繁 (日文歌會跳過,見該檔註解)
 const { badLyric } = require('./lyric-quality');            // 內嵌注音 / 羅馬字轉寫的爛歌詞,抓取階段就換下一家
 const { cleanBrowserQuery, isMusicAppSource } = require('./browser-query');   // 瀏覽器來源的影片標題去噪
-const { autoMarkTitleLines } = require('./title-lines');   // 製作人員/版權列標記 #TITLE#
+const { autoMarkTitleLines, normalizeLrcTime } = require('./title-lines');   // 製作人員/版權列標記 #TITLE#
 const { mergeTranslations } = require('./translations');   // 中文譯文合併 #TRANS# (注音之後才做)
 const { mergeRomaji } = require('./romaji');               // 羅馬拼音合併 #ROMAJI# (讀音直接取自注音結果)
 const { mergeWordTimes } = require('./word-times');        // 逐字時間合併 #WORDS# (卡拉OK填色)
@@ -889,6 +889,9 @@ function applyWordTimes(artist, title, html) {
  *           用 CSS 藏,所以要重跑 python (手機那邊的快取鍵也跟著分開)。
  */
 function injectFurigana(artist, title, lyrics, opts = {}) {
+  // 時間戳統一成 `[mm:ss.xx]`。這是所有客戶端 (歌詞區/靈動島/行動版) 唯一的匯流點,
+  // 改版前就寫進快取的冒號式歌詞也在這裡被救回來 —— 不必 migration。
+  lyrics = normalizeLrcTime(lyrics);
   return injectFuriganaRaw(artist, title, lyrics, opts.kata)
     .then((html) => applyTranslations(artist, title, html, opts.force))
     // 羅馬字要在譯文之後 —— 兩者都插在歌詞行後面,後插的會排在前面,順序才是 歌詞/羅馬字/譯文
