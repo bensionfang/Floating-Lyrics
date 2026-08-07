@@ -36,7 +36,12 @@ db.all('SELECT artist, title, lyrics FROM cache', (err, rows) => {
   const changes = [];
   let skipped = 0;
   for (const r of rows) {
-    const out = autoMarkTitleLines(r.lyrics, r.title);
+    // **先把舊的 `#TITLE#` 全部剝掉再重標。** `autoMarkTitleLines` 對已標的行是無條件保留
+    // (`already` 那條短路),不剝的話規則收緊時舊的誤標永遠洗不掉 —— 實測有 11 行英文歌詞正文
+    // 因為含 music/bass/lyric 被標成製作人員列。`onlyAddedMarks` 兩邊都會忽略這個前綴,
+    // 所以守門仍然只准「標記變動」,歌詞本體照樣一個字都不能改。
+    const bare = r.lyrics ? r.lyrics.replace(/(\])#TITLE#/g, '$1') : r.lyrics;
+    const out = autoMarkTitleLines(bare, r.title);
     if (out === r.lyrics) continue;
     if (!onlyAddedMarks(r.lyrics, out)) { skipped++; continue; }
     const added = out.split('\n').filter((l) => /\]#TITLE#/.test(l)).length

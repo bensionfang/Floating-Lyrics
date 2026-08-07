@@ -682,8 +682,13 @@ function updatePlaybackProgress(position) {
  * 而「一行一行換」至少永遠是對的。
  */
 function karaokeFill(lineEl, lyric, position) {
+    // **要把 WEB_APP_LYRICS_ADVANCE 減回去。** 傳進來的 position 是「提早 0.25 秒的換行用位置」,
+    // 那個提前量是為了讓下一句早一點上畫面 (補償視覺延遲),不是真實播放位置 —— 拿它填色
+    // 就是整首歌的每一個字都比聽到的早 250ms,症狀正是「逐字歌詞一直比歌快」。
+    // 靈動島早就這樣做了 (island.ejs 的 `now - LEAD`),網頁版一直漏掉這一減。
     // firstElementChild = 歌詞本體那顆 <span>,譯文/羅馬字是後面的 div 所以自然排除
-    karaokePaint(lineEl.firstElementChild, lyric.words, (position - lyric.time) * 1000);
+    const real = position - WEB_APP_LYRICS_ADVANCE;
+    karaokePaint(lineEl.firstElementChild, lyric.words, (real - lyric.time) * 1000);
 }
 
 function syncLyricsToTime(position) {

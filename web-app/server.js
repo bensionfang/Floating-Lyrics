@@ -864,6 +864,28 @@ function applyTranslations(artist, title, html, force) {
  * 走的是同一支 ensureTranslations (它是 source:'all',三家都跑、pytools 一次把讀音提示/
  * 譯文/逐字時間全寫進去)。**不要另外開一條抓取路徑。**
  */
+/**
+ * 「有逐字資料,但快取裡的歌詞本體與它對不上」—— 對不上就回傳那份逐字資料 (呼叫端要拿它
+ * 去驗重抓回來的新本體),對得上、沒資料、或資料是負快取就回 null。
+ *
+ * 比對直接餵原始 LRC 而不是注音後的 HTML:`mergeWordTimes` 本來就會 `stripRuby`,
+ * 兩者算出來的字元流相同,而這裡在注音之前就要判斷 (判完可能整份本體都要換掉)。
+ */
+function wordTimesMismatch(artist, title, lrc) {
+  return new Promise((resolve) => {
+    db.get('SELECT data FROM word_times WHERE artist = ? AND title = ?', [artist, title], (err, row) => {
+      if (err || !row) return resolve(null);
+      try {
+        const wt = JSON.parse(row.data);
+        if (!wt || !wt.flow || !wt.flow.length) return resolve(null);   // 空 {} 是負快取
+        resolve(mergeWordTimes(lrc, wt) === lrc ? wt : null);
+      } catch (e) {
+        resolve(null);
+      }
+    });
+  });
+}
+
 function applyWordTimes(artist, title, html) {
   return new Promise((resolve) => {
     db.get('SELECT data FROM word_times WHERE artist = ? AND title = ?', [artist, title], (err, row) => {
@@ -1404,13 +1426,23 @@ app.get('/api/lyrics/fetch', async (req, res) => {
       // 沒有這道記號就會變成「每次播都重抓」。也**不先刪快取** —— 重抓沒有更好的話還要靠它顯示。
       // **`[source:ManualEdit]` 不碰**:那是使用者自己編輯或親手套用的備選歌詞,即使是爛版本
       // 也是他選的 (整個網路只有這種版本時就得這樣用),自動換掉等於推翻他的決定。
+      // 第二個重抓的理由:**逐字時間抓到了,但本體與它對不上**。逐字只有 QQ 的 QRC 有,
+      // 而改版前存下來的本體多半是網易的 —— 兩份不同源就有幾行對不上,`mergeWordTimes`
+      // 是全有或全無,那首歌就整個不逐字。`searchBestLyric` 的 `cnOrder` 早就會在「QQ 那份
+      // 帶逐字」時改用 QQ 的本體,但那只發生在**快取 miss** 時,所以舊歌再聽一百次也不會換
+      // (全庫實測 352 首有逐字資料,177 首卡在這裡)。這條是它們唯一的出口。
       const inlineKey = `${artist}|||${title}`;
-      if (!row.lyrics.startsWith('[source:ManualEdit]') && !inlineRetried.has(inlineKey)
-          && badLyric(row.lyrics, title)) {
+      const retriable = !row.lyrics.startsWith('[source:ManualEdit]') && !inlineRetried.has(inlineKey);
+      const reason = retriable && badLyric(row.lyrics, title);
+      // 對得上就不要白重抓 —— 只有真的對不上才拿它當理由 (回傳的就是要拿去驗新本體的那份)
+      const wt = retriable && !reason ? await wordTimesMismatch(artist, title, row.lyrics) : null;
+      if (reason || wt) {
         inlineRetried.add(inlineKey);
-        console.log(`快取裡的歌詞是${badLyric(row.lyrics, title)},重抓一次看有沒有更好的:`, artist, title);
+        console.log(`快取裡的歌詞${reason ? `是${reason}` : '與逐字時間對不上'},重抓一次看有沒有更好的:`, artist, title);
         const { lyric } = await searchBestLyric(title, artist, searchTitle, searchArtist);
-        if (lyric && !badLyric(lyric, title)) {
+        // 換本體是有代價的 (斷句會變),所以新的那份要真的解決問題才換:壞歌詞那條看它不壞,
+        // 逐字這條看它真的併得進去 —— 不驗的話會為了一份同樣對不上的本體白換一次。
+        if (lyric && !badLyric(lyric, title) && (reason || mergeWordTimes(lyric, wt) !== lyric)) {
           db.run('INSERT OR REPLACE INTO cache (artist, title, lyrics) VALUES (?, ?, ?)', [artist, title, lyric]);
           invalidateFurigana(artist, title);
           row.lyrics = lyric;

@@ -60,7 +60,11 @@ function isCreditPlain(text) {
   });
 }
 
-const normalizeName = (s) => s.toLowerCase().replace(/[\s　]/g, '');
+// 比對歌名時把整行的引號/書名號剝掉:網易與 QQ 的標頭常寫成 `「夜の踊り子」`、`《歌名》`,
+// 不剝就永遠對不上 (全庫實測漏標 2 首:サカナクション/夜の踊り子、SPITZ/チェリー)。
+// 只影響「這一行是不是歌名」的比對,而那個判斷還壓著「前面每一行都是製作人員列」這道閘門,
+// 所以真的唱出來的 `「ありがとう」` 這種行不會被誤判。
+const normalizeName = (s) => s.toLowerCase().replace(/[\s　「」『』《》〈〉“”"']/g, '');
 
 /**
  * 規則 4:歌名行 (整行就是歌名,中國平台常夾在製作人員列中間)。
@@ -72,14 +76,28 @@ const normalizeName = (s) => s.toLowerCase().replace(/[\s　]/g, '');
  * 還要求前面**至少有一行**製作人員列 —— 否則第 1 行就是歌名的情況無從判斷是標頭還是
  * 開口就唱歌名 (WurtS「分かってないよ」第 1、2 行都是歌名,顯然是唱的)。寧可漏標。
  */
+/**
+ * 歌名的幾種寫法。版本尾綴在**歌名這一側**是括號 (`クリームで会いにいけますか (Live)`) 還是
+ * 破折號 (`クズリ念 - Live in Studio_温蔵庫`) 取決於播放器,而歌詞來源那一側常常用另一種 ——
+ * QQ 的標頭就寫成 `クズリ念 (Live in Studio_温蔵庫) - ずっと真夜中でいいのに。`,兩邊形狀不同
+ * 就整行漏標。所以四種變體都拿去比。
+ *
+ * **破折號兩邊都要有空白** —— 沒空白的連字號多半是名字本身 (`n-buna`、`go!go!vanillas`),
+ * 同 utaten.clean_title 的判準。
+ */
+function titleVariants(songTitle) {
+  const out = [];
+  for (const s of [songTitle, songTitle.replace(/\s[-–—]\s.*$/, '')]) {
+    out.push(s.trim(), s.replace(/[(（].*$/, '').trim());
+  }
+  return out.filter(Boolean);
+}
+
 function isSongNameLine(text, songTitle) {
   if (!songTitle) return false;
   const t = normalizeName(text);
   if (!t) return false;
-  if (t === normalizeName(songTitle)) return true;
-  // 「クリームで会いにいけますか (Live)」這種版本尾綴要剝掉再比
-  const base = songTitle.replace(/[(（].*$/, '').trim();
-  return !!base && t === normalizeName(base);
+  return titleVariants(songTitle).some((v) => t === normalizeName(v));
 }
 
 /**
@@ -143,8 +161,14 @@ function autoMarkTitleLines(lrcText, songTitle) {
       const tags = match[1];
       let text = match[2].trim();
       const already = text.startsWith("#TITLE#");
+      // **無冒號式只在標頭區塊內才算數。** `music`/`bass`/`lyric`/`drum` 這些關鍵字在英文歌詞
+      // 正文裡到處都是,不設限就會把唱出來的句子當成製作人員列藏掉 —— 全庫實測誤殺 11 行,
+      // 全部是正文 (`Greatest music saves the day`、`君へのlyric 隠したlipstick`、
+      // `Turn it bass turn it beats`)。有冒號的標籤式與版權聲明不受限:它們的訊號夠強,
+      // 而收在歌尾的製作人員列 (實測 TEST/FAST、Kroi/Hyper) 正是那種寫法。
+      // ponytail: 代價是「歌尾的無冒號製作人員列」會漏標,全庫目前一首都沒有,真的出現再說。
       let isTitle = already ||
-        isCopyrightClaim(text) || isCreditLabel(text) || isCreditPlain(text);
+        isCopyrightClaim(text) || isCreditLabel(text) || (headerIntact && isCreditPlain(text));
 
       if (!isTitle && headerIntact &&
           (isTitleArtistHeader(text, songTitle) ||
