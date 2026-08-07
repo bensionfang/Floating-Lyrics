@@ -4,7 +4,7 @@
 <head>
 <meta charset="UTF-8">
 <title>Kanaric Island</title>
-<link rel="stylesheet" href="/css/island.css?v=17">
+<link rel="stylesheet" href="/css/island.css?v=21">
 <!-- 逐字卡拉OK填色:與歌詞區、行動版共用同一份實作 -->
 <script src="/js/karaoke.js?v=2"></script>
 </head>
@@ -23,10 +23,11 @@
     <!-- 右端的播放狀態:跟左端封面等寬,版面才左右平衡 (播放中跳動、暫停時定住) -->
     <div id="state"><i></i><i></i><i></i></div>
   </div>
-  <!-- 展開 (hover) 才出現的控制列。島沒有載任何 icon font,圖示直接 inline SVG -->
-  <div id="ctrl">
+  <!-- 展開 (hover) 才出現的控制列。島沒有載任何 icon font,圖示直接 inline SVG。
+       外層 #ctrl 是「高度補間 + 裁切」的殼 (高度由 JS 設成真實 px 才補間得起來),
+       內層 #ctrl-in 永遠保持自然高度 —— 展開前要先知道它多高,視窗才來得及長高。 -->
+  <div id="ctrl"><div id="ctrl-in">
     <div id="btns">
-      <button data-act="prev" title="上一首"><svg viewBox="0 0 24 24"><path d="M6 6h2.5v12H6zm3.5 6L19 6v12z"/></svg></button>
       <button data-act="playpause" title="播放/暫停"><svg id="pp-icon" viewBox="0 0 24 24"><path d="M8 5h3v14H8zm5 0h3v14h-3z"/></svg></button>
       <button data-act="next" title="下一首"><svg viewBox="0 0 24 24"><path d="M15.5 6H18v12h-2.5zM5 6l9.5 6L5 18z"/></svg></button>
     </div>
@@ -34,9 +35,9 @@
       <div id="bar-track"><div id="bar-fill"></div></div>
       <span id="bar-time">0:00 / 0:00</span>
     </div>
-  </div>
+  </div></div>
 </div>
-<div id="measure"><div id="m1"></div><div id="m2"></div></div>
+<div id="measure"></div>
 
 <script>
 const el = {
@@ -44,72 +45,129 @@ const el = {
   song: document.getElementById('song'), l1: document.getElementById('l1'), l2: document.getElementById('l2'),
   l0: document.getElementById('l0'), state: document.getElementById('state'),
   top: document.getElementById('top'),
-  ctrl: document.getElementById('ctrl'), btns: document.getElementById('btns'),
+  ctrl: document.getElementById('ctrl'), ctrlIn: document.getElementById('ctrl-in'),
+  btns: document.getElementById('btns'),
   bar: document.getElementById('bar'), track: document.getElementById('bar-track'),
   fill: document.getElementById('bar-fill'), time: document.getElementById('bar-time'),
   ppIcon: document.getElementById('pp-icon'),
-  m1: document.getElementById('m1'), m2: document.getElementById('m2')
+  measure: document.getElementById('measure')
 };
 
-// 展開時控制列本身要放得下 (三顆按鈕 + 進度條),歌詞比它短時視窗不能縮到切掉按鈕
-const CTRL_MIN_W = 240;
+// 展開時控制列本身要放得下,歌詞比它短時視窗不能縮到切掉按鈕。
+// 控制列收成一行之後進度條要跟按鈕與時間共用寬度,240 只剩 96px 的軌道,點不太準 —— 300 才夠。
+const CTRL_MIN_W = 300;
 // 提早換行的補償秒數 (見 frame())。等於 .lyric-anim 的長度,不要再放大 ——
 // 每一句的最後 LEAD 秒是填不到色的,放大就是把逐字填色的尾巴吃掉。
 const LEAD = 0.2;
+// 沒內容的佔位行:展開時用來把行數固定住 (見 updateL0 / setLine2)
+const BLANK = '&nbsp;';
 
-// 量一組 (line1,line2) 的藥丸外框寬 (含封面/等化器/gap/padding)。純量測,不動畫面。
-// 寬度量在 #measure (絕對定位) 上,視窗此刻多窄都不影響量到的自然寬度。
-function measurePillW(line1, line2, firstEl) {
-  // 字重也要跟著複製:主行是 500,量在預設 400 上會少算幾 px,長句就會被切掉尾巴
-  const copyFont = (node, from) => {
-    const cs = getComputedStyle(from);
-    node.style.fontSize = cs.fontSize;
-    node.style.fontWeight = cs.fontWeight;
-  };
-  el.m1.innerHTML = line1 || '';
-  copyFont(el.m1, firstEl || el.l1);
-  el.m2.innerHTML = line2 || '';
-  copyFont(el.m2, el.l2);
-  const textW = Math.max(el.m1.offsetWidth, el.m2.offsetWidth);
-  const cs = getComputedStyle(el.island);
-  const gap = parseFloat(getComputedStyle(el.top).gap || 12);   // 封面/歌詞/等化器的間距現在掛在 #top
-  const chrome = el.art.offsetWidth + el.state.offsetWidth + gap * 2
-    + parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
-  return Math.ceil(textW + chrome) + 2;   // +2 避免尾字被四捨五入切掉
-}
-
-// 換歌時一次量完全部歌詞行,取最寬 —— 視窗寬度整首定死在這個值 (零閃);逐行切換只動藥丸
-// 的 CSS 寬度、不動視窗。每一句都可能當 line1 或 line2 出現,所以量所有 html 與譯文取最大。
+// ── 量測:一首歌只量一次,結果存起來 ────────────────────────────
+// **重點是「換行那一幀不再量任何東西」**,不是量得比較快:量一次是「寫 innerHTML →
+// 讀 offsetWidth」的成對操作,每一次讀都強制一次 layout,而換行那一幀同時還在跑淡入動畫
+// 與逐字填色。改成查表之後換行那一幀只剩一次 layout (實測 0.4ms)。
+let wMain = new Map();   // 這句當「主行」(#song/#l1 的字級字重) 時的自然寬
+let wSub = new Map();    // 這句當「上一句/第二行」(#l0/#l2 的字級) 時的自然寬
+let chromeW = 0;         // 封面 + 等化器 + 兩個 gap + 左右 padding,字級固定所以是常數
 let songMaxW = 0;
-function computeSongMaxW() {
-  let w = 0;
-  for (const it of lyrics) if (it.html) w = Math.max(w, measurePillW(it.html, '', el.l1));
-  for (const t in translations) w = Math.max(w, measurePillW(translations[t], '', el.l1));
-  for (const t in romajis) w = Math.max(w, measurePillW(romajis[t], '', el.l1));
-  songMaxW = w;
+
+function measureChrome() {
+  const cs = getComputedStyle(el.island);
+  const gap = parseFloat(getComputedStyle(el.top).gap) || 12;   // 三個元素的間距掛在 #top
+  chromeW = el.art.offsetWidth + el.state.offsetWidth + gap * 2
+    + parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
 }
+
+const pillFor = (w) => Math.ceil(w + chromeW) + 2;   // +2 避免尾字被四捨五入切掉
+const pillForLines = (line1, line2) =>
+  pillFor(Math.max(line1 ? textW(line1, false) : 0, line2 ? textW(line2, true) : 0));
+
+// 一次量完一批字串:先全部寫進 DOM,再一次讀完所有寬度。
+// 每個字串量兩份:同一句當主行與當第二行的字級不同,寬度也不同。
+// (量過:100 行 + 譯文 + 羅馬字 = 300 個字串,批次 40ms、兩顆節點交錯讀寫 43ms —— 兩者
+//  差不多,成本在 HTML parse 與 ruby 排版,不在 layout 次數。換歌一首才跑一次,夠用。)
+function measureAll(strings) {
+  if (!strings.length) return;
+  const f1 = getComputedStyle(el.l1), f2 = getComputedStyle(el.l2);
+  const frag = document.createDocumentFragment();
+  const nodes = [];
+  for (const s of strings) {
+    for (const f of [f1, f2]) {
+      const d = document.createElement('div');
+      d.innerHTML = s;
+      d.style.fontSize = f.fontSize;
+      d.style.fontWeight = f.fontWeight;   // 主行是 500,量在預設 400 上會少算幾 px
+      frag.appendChild(d);
+      nodes.push(d);
+    }
+  }
+  el.measure.appendChild(frag);
+  for (let i = 0; i < strings.length; i++) {
+    wMain.set(strings[i], nodes[i * 2].offsetWidth);
+    wSub.set(strings[i], nodes[i * 2 + 1].offsetWidth);
+  }
+  el.measure.textContent = '';
+}
+
+// 查表拿自然寬。查不到的 (歌名、換歌詞前的殘留字串) 現場補量一次當退路
+function textW(html, sub) {
+  const map = sub ? wSub : wMain;
+  if (!map.has(html)) measureAll([html]);
+  return map.get(html) || 0;
+}
+
+// 換歌時一次量完整首:視窗寬度整首定死在最寬那一行 (零閃),逐行切換只動藥丸的 CSS 寬度、
+// 不動視窗。每一句都可能當 line1 或 line2 出現,所以歌詞、譯文、羅馬字全都要量。
+function measureSong() {
+  wMain = new Map();
+  wSub = new Map();
+  measureChrome();
+  const all = new Set();
+  for (const it of lyrics) if (it.html) all.add(it.html);
+  for (const t in translations) all.add(translations[t]);
+  for (const t in romajis) all.add(romajis[t]);
+  measureAll([...all]);
+  songMaxW = 0;
+  for (const w of wMain.values()) songMaxW = Math.max(songMaxW, pillFor(w));
+  // 這首歌有沒有注音 —— 決定「沒有 ruby 的行要不要補高度」(見 island.css 的 .no-ruby)。
+  // 中文歌整首都沒有 ruby,不判斷的話每一行都補,整個島白白高一截。
+  el.island.classList.toggle('has-ruby', [...all].some((s) => s.includes('<rt')));
+}
+
+let lastResize = '';   // 上一次真的送出去的尺寸,一樣就不再送 (見下面)
 
 // 高度直接量 #island 自己 (height:auto),ruby、行數、字級都自動貼合。
 // windowW 給定時 (歌詞模式) 視窗寬固定為整首最寬,藥丸的 CSS 寬照樣是本行實際寬 → 短行居中、
 // 兩側透明,不留黑空隙。沒給 (歌名/前奏/設定) 就用本行寬,視窗剛好貼合。
-function fitSize(line1, line2, firstEl, growOnly = false, windowW = null) {
-  let pillW = measurePillW(line1, line2, firstEl);
+function fitSize(pillW, growOnly = false, windowW = null) {
   if (expanded) {
-    // 展開時多了「上一句」與控制列,兩者都可能比本句寬 —— 不算進去按鈕就會被切掉
-    if (el.l0.classList.contains('has')) pillW = Math.max(pillW, measurePillW(el.l0.innerHTML, '', el.l2));
-    pillW = Math.max(pillW, CTRL_MIN_W);
+    // 展開時藥丸寬**固定成整首最寬**(至少放得下控制列):hover 期間換句時按鈕與進度條
+    // 不可以左右跳,而使用者正要去點它們。
+    pillW = Math.max(pillW, songMaxW, CTRL_MIN_W);
     if (windowW != null) windowW = Math.max(windowW, pillW);
-    growOnly = false;   // 收合時高度要縮回去,grow-only 會讓島永遠停在展開的高度
   }
   // 藥丸寬度用 CSS transition 平滑補間
   el.island.style.width = pillW + 'px';
-  bridge.resize({ width: windowW != null ? windowW : pillW, height: Math.ceil(el.island.offsetHeight), growOnly });
+  // 展開動畫還在跑時 #ctrl 只有一半高,量到的島高會偏小 —— 視窗一律照「完全展開」算,
+  // 免得動畫中途有換行進來、把控制列切在視窗外面。兩個讀都在同一次 layout 之後,不多花成本。
+  const height = Math.ceil(el.island.offsetHeight)
+    + (expanded ? Math.max(0, ctrlH - el.ctrl.offsetHeight) : 0);
+  const width = windowW != null ? windowW : pillW;
+  // 三個值都沒變就不送:主進程雖然有 8px 死區會丟掉,但那是「送完才丟」,白花一次跨進程訊息。
+  // **growOnly 也要比對** —— 它會改主進程的 maxW/maxH 狀態,值一樣但旗標不同時不可以省。
+  const sig = width + '|' + height + '|' + growOnly;
+  if (sig === lastResize) return;
+  lastResize = sig;
+  bridge.resize({ width, height, growOnly });
 }
 
-// 依目前畫面上顯示的是歌名還是歌詞,重新回報尺寸 (展開/收合、l0 出現消失時用)
-function refit() {
-  if (!el.song.classList.contains('hidden')) return fitSize(el.song.textContent, '', el.song);
-  fitSize(el.l1.innerHTML, el.l2.classList.contains('hidden') ? '' : el.l2.innerHTML, null, false, songMaxW);
+// 依目前畫面上顯示的是歌名還是歌詞,重新回報尺寸 (展開/收合、l0 出現消失時用)。
+// hold = 收合動畫期間先不要縮視窗 (走 growOnly),多出來的那段是透明的,看不見。
+function refit(hold = false) {
+  if (!el.song.classList.contains('hidden')) {
+    return fitSize(pillForLines(el.song.textContent, ''), hold);
+  }
+  fitSize(pillForLines(lastLine1, lastLine2), hold, songMaxW);
 }
 
 // preload 只有在 Electron 島視窗裡才存在;用瀏覽器直接開 /island 除錯時降級成空實作
@@ -136,28 +194,67 @@ bridge.onDocked(d => el.island.classList.toggle('docked', d));
 
 // ── 展開模式:滑鼠移上去 = 上一句 + 控制列 + 進度條,移開收回 ──
 // 掛在 #island 而不是 body:視窗左右各有 --edge 透明邊,掛 body 會滑過空白處就展開。
-el.island.addEventListener('mouseenter', () => setExpanded(true));
-el.island.addEventListener('mouseleave', () => setExpanded(false));
+// **進出都要延遲**:沒有延遲的話滑鼠掃過螢幕上緣就彈開一次,停在藥丸邊緣還會展開/收合
+// 來回彈 (島的寬度本來就會隨歌詞變)。
+const HOVER_IN = 180, HOVER_OUT = 220;
+const CTRL_ANIM = 300;   // 收合動畫跑完才縮視窗,要 ≥ CSS 的 transition 長度
+let hoverIn = null, hoverOut = null, shrinkTimer = null, ctrlH = 0;
+
+el.island.addEventListener('mouseenter', () => {
+  clearTimeout(hoverOut); hoverOut = null;
+  if (expanded || hoverIn) return;
+  hoverIn = setTimeout(() => { hoverIn = null; setExpanded(true); }, HOVER_IN);
+});
+el.island.addEventListener('mouseleave', () => {
+  clearTimeout(hoverIn); hoverIn = null;
+  if (!expanded || hoverOut) return;
+  hoverOut = setTimeout(() => { hoverOut = null; setExpanded(false); }, HOVER_OUT);
+});
 
 function setExpanded(on) {
   // 猜歌中不展開:控制列的「下一首」會打亂遊戲自己的切歌流程 (game.js 用同一支 API)
   if (on && gameMask) return;
   if (on === expanded) return;
+  clearTimeout(shrinkTimer);
   expanded = on;
   el.island.classList.toggle('expanded', on);
   updateL0();
+  setLine2(lastLine2);
   updateProgress();
-  refit();
+  // 控制列的高度由 JS 設成真實 px,CSS 才補間得動 (height:auto 不會補間)。
+  // 量的是內層那顆 —— 外層被裁成 0 高,量它永遠是 0。
+  ctrlH = el.ctrlIn.offsetHeight || ctrlH;
+  el.ctrl.style.height = on ? ctrlH + 'px' : '0px';
+  // 展開:視窗高度要在動畫**開始前**就到位,否則控制列會被視窗下緣切掉 (fitSize 自己補)。
+  // 收合:動畫期間先維持現在的高度 (growOnly),跑完再縮回去。
+  refit(!on);
+  if (!on) shrinkTimer = setTimeout(() => refit(), CTRL_ANIM);
 }
 
-// 上一句:往回找最近一句有字的。顯示歌名 (前奏/剛換歌) 時不顯示 —— 那時「上一句」沒有意義
+// 上一句:往回找最近一句有字的。顯示歌名 (前奏/剛換歌) 時不顯示 —— 那時「上一句」沒有意義。
+// 展開時即使找不到 (還在第一句) 也要留一列空的,否則唱到第二句時控制列會整個往下跳。
 function updateL0() {
+  const onLyrics = expanded && el.song.classList.contains('hidden');
   let html = '';
-  if (expanded && curIdx > 0 && el.song.classList.contains('hidden')) {
+  if (onLyrics && curIdx > 0) {
     for (let k = curIdx - 1; k >= 0; k--) if (lyrics[k].html) { html = lyrics[k].html; break; }
   }
-  el.l0.innerHTML = html;
-  el.l0.classList.toggle('has', !!html);
+  el.l0.innerHTML = html || (onLyrics ? BLANK : '');
+  markRuby(el.l0, html);
+  el.l0.style.width = html ? textW(html, true) + 'px' : '0px';
+  el.l0.classList.toggle('has', !!html || onLyrics);
+}
+
+// 第二行:有內容就畫。沒有內容時,展開狀態下照樣要佔一列 —— 理由同 updateL0,
+// hover 期間換到「沒有下一句」的那行時,控制列不可以往上跳。
+function setLine2(html) {
+  if (html) return paint(el.l2, html, true);
+  if (expanded && islandLines === 2 && el.song.classList.contains('hidden')) {
+    el.l2.innerHTML = BLANK;
+    markRuby(el.l2, BLANK);
+    el.l2.style.width = '0px';
+    el.l2.classList.remove('hidden', 'lyric-anim');
+  } else el.l2.classList.add('hidden');
 }
 
 function fmtTime(s) {
@@ -177,7 +274,9 @@ function updateProgress() {
   el.bar.classList.toggle('hidden', !duration);
   if (!duration) return;
   const t = Math.min(duration, playPos());
-  el.fill.style.width = (t / duration * 100) + '%';
+  // **用 transform 不用 width** —— 這是每一幀都在寫的東西,寫 width 每幀都要重新排版
+  // #bar,寫 transform 只動合成層。代價是 2px 的圓角端點會被橫向壓扁,4px 高的細條看不出來。
+  el.fill.style.transform = 'scaleX(' + (t / duration) + ')';
   const txt = fmtTime(t) + ' / ' + fmtTime(duration);
   if (txt !== lastTimeText) el.time.textContent = lastTimeText = txt;   // 每秒才變,不必每幀寫
 }
@@ -207,7 +306,7 @@ let lyrics = [], songKey = '', pos = 0, playing = false, lastSync = 0, offset = 
 let expanded = false, curIdx = -1;   // curIdx = 目前唱到第幾句 (展開時要往回找上一句)
 let lastThumb = null;   // 已套用的封面 —— 縮圖可能換歌後晚一拍才由 media_monitor 補送
 let gameMask = false;   // 猜歌遊戲進行中:歌名與歌詞都要遮起來,否則島直接公布答案
-let islandLines = 2, lastLine1 = null, idleTimer = null, wasPlaying = null, wasHasSession = null;
+let islandLines = 2, lastLine1 = null, lastLine2 = '', idleTimer = null, wasPlaying = null, wasHasSession = null;
 // 第二行顯示什麼:'next' 下一句歌詞 (預設) / 'translation' 本句翻譯
 let islandLine2 = 'next';
 // 時間戳 -> 譯文。譯文行不進 lyrics[],否則會被當成獨立一句輪播過去
@@ -236,12 +335,12 @@ function applySettings(s) {
   islandLine2 = (s.island_line2 === 'translation' || s.island_line2 === 'romaji') ? s.island_line2 : 'next';
   // 行數只在「換行時」才會被套用 (frame() 判到 line1 沒變就提早 return),
   // 所以這裡要自己收掉第二行,並清掉 lastLine1 讓下一幀重畫 (1 → 2 行時把內容補回來)
-  if (islandLines === 1) el.l2.classList.add('hidden');
+  if (islandLines === 1) { el.l2.classList.add('hidden'); lastLine2 = ''; }
   lastLine1 = null;
-  // 假名開關會改變每行的 ruby 寬度,整首最寬要重算,否則零閃的視窗寬會用到舊值
-  if (lyrics.length) computeSongMaxW();
+  // 假名開關會改變每行的 ruby 寬度,整首的行寬要全部重量,否則零閃的視窗寬會用到舊值
+  if (lyrics.length) measureSong();
   // 有歌詞的話下一幀重畫時就會回報尺寸;停在歌名畫面 (前奏/剛換歌) 沒有重畫,自己報一次
-  if (!el.song.classList.contains('hidden')) fitSize(el.song.textContent, '', el.song);
+  if (!el.song.classList.contains('hidden')) showName(el.song.textContent);
 }
 
 // ── WebSocket:歌曲狀態、歌詞、設定、時間軸偏移全部靠推播 ──
@@ -303,12 +402,7 @@ async function onMediaState(m) {
     if (songKey !== '') {
       songKey = ''; lyrics = []; lastLine1 = null; lastThumb = '';
       el.art.style.backgroundImage = '';
-      el.song.textContent = '等待播放…';
-      el.song.classList.remove('hidden');
-      el.l1.classList.add('hidden');
-      el.l2.classList.add('hidden');
-      curIdx = -1; updateL0();
-      fitSize(el.song.textContent, '', el.song);
+      showName('等待播放…');
     }
     return;
   }
@@ -339,20 +433,27 @@ async function onMediaState(m) {
   } catch (e) {}
 }
 
-function showSongName(title, artist) {
-  // 猜歌遊戲進行中,島直接寫著答案 —— 一律換成固定字樣
-  el.song.textContent = gameMask ? '猜歌中' : (artist ? `${title} - ${artist}` : title);
+// 切到「顯示歌名」的畫面:前奏、剛換歌、沒有播放來源共用這一支
+function showName(text) {
+  el.song.textContent = text;
+  el.song.style.width = textW(text, false) + 'px';
   el.song.classList.remove('hidden');
   el.l1.classList.add('hidden');
   el.l2.classList.add('hidden');
+  lastLine2 = '';
   curIdx = -1; updateL0();
-  fitSize(el.song.textContent, '', el.song);
+  fitSize(pillForLines(text, ''));
+}
+
+function showSongName(title, artist) {
+  // 猜歌遊戲進行中,島直接寫著答案 —— 一律換成固定字樣
+  showName(gameMask ? '猜歌中' : (artist ? `${title} - ${artist}` : title));
 }
 
 function setLyrics(text) {
   lyrics = parseLrc(text);
   lastLine1 = null;
-  computeSongMaxW();   // 整首最寬先算好,視窗寬度整首定死在這 → 逐行零閃
+  measureSong();   // 整首的行寬先量好存起來 → 換行那一幀不必再量 (零閃、不掉幀)
 }
 
 function parseLrc(text) {
@@ -415,15 +516,21 @@ function pickLines(i) {
   return [line1, line2, idx];
 }
 
-function paint(node, html) {
+// 換一行的內容。**寬度要寫死成這一行的自然寬** —— 藥丸寬度補間的那 0.32 秒,行本身的
+// layout 就不會跟著變,ruby 與逐字 span 不必每幀重排 (#lines 只負責把超出的裁掉)。
+// 重播淡入動畫需要的那次強制 reflow 由呼叫端統一做一次 (見 frame())。
+// 沒有 ruby 的行,展開時要自己補上注音佔的那一截高度 (見 island.css 的 .no-ruby)
+const markRuby = (node, html) => node.classList.toggle('no-ruby', !html.includes('<rt'));
+
+function paint(node, html, sub) {
   node.innerHTML = html;
+  markRuby(node, html);
+  node.style.width = textW(html, sub) + 'px';
   // innerHTML 換掉了,karaokeSplit 記在元素上的那份切分結果全是死掉的節點 —— 一定要作廢,
   // 不然填色會去改上一句的 span (畫面上什麼都不會動,而且沒有錯誤訊息)
   node.__kc = null;
   node.__kcNow = null;
   node.classList.remove('hidden', 'lyric-anim');
-  void node.offsetWidth;          // 強制 reflow,動畫才會重播
-  node.classList.add('lyric-anim');
 }
 
 // 島沒有 DevTools 可開 (無邊框視窗),留一個查狀態的入口:瀏覽器開 /island 或主進程都能問
@@ -444,10 +551,7 @@ function frame() {
   //           那會讓每個字都亮得比唱得早,不划算。
   const now = pos + (playing ? (performance.now() - lastSync) / 1000 : 0) - offset + LEAD;
   if (now < lyrics[0].t) {                    // 前奏:顯示歌名
-    if (lastLine1 !== 'INTRO') { lastLine1 = 'INTRO'; el.song.classList.remove('hidden');
-      el.l1.classList.add('hidden'); el.l2.classList.add('hidden');
-      curIdx = -1; updateL0();
-      fitSize(el.song.textContent, '', el.song); }
+    if (lastLine1 !== 'INTRO') { lastLine1 = 'INTRO'; showName(el.song.textContent); }
     return;
   }
   let i = -1;
@@ -460,19 +564,27 @@ function frame() {
     lastLine1 = line1;
     curIdx = i;
     el.song.classList.add('hidden');
-    paint(el.l1, line1);
+    paint(el.l1, line1, false);
     updateL0();
-    const showLine2 = !!line2 && islandLines === 2;
-    if (showLine2) paint(el.l2, line2);
-    else el.l2.classList.add('hidden');
-    // 逐行切換:視窗寬固定為整首最寬 (零閃),藥丸靠 CSS 縮到本行寬;高度 grow-only
-    fitSize(line1, showLine2 ? line2 : '', null, fromLyric, songMaxW);
+    lastLine2 = (line2 && islandLines === 2) ? line2 : '';
+    setLine2(lastLine2);
+    // 逐行切換:視窗寬固定為整首最寬 (零閃),藥丸靠 CSS 縮到本行寬;高度 grow-only。
+    // **展開中不回報尺寸** —— 幾何是凍結的 (見 fitSize 與 updateL0/setLine2 的佔位行),
+    // 每句改一次視窗會讓按鈕在使用者手下移位,而且透明視窗改尺寸會閃。
+    // 但「歌名 → 第一句歌詞」那次要報:行數從 1 變 3,不報的話控制列會被視窗切掉。
+    if (!expanded || !fromLyric) fitSize(pillForLines(line1, lastLine2), fromLyric, songMaxW);
+    else void el.island.offsetWidth;
+    // 淡入動畫要重播,必須讓瀏覽器看到「class 被移除過」的狀態 —— 上面那次讀 layout
+    // (fitSize 量高度 / void offsetWidth) 就是那道分隔,兩件事共用同一次 reflow。
+    el.l1.classList.add('lyric-anim');
+    if (lastLine2) el.l2.classList.add('lyric-anim');
   }
   // 卡拉OK填色:**每一幀都要跑,而且要排在重繪之後** (換行那一幀 el.l1 的內容剛換掉)。
   // 用 now - 0.5 而不是 now —— 那 0.5 秒是「提早換行來抵銷淡入動畫」的補償,
   // 不是真實播放位置,拿它去填色整句會快半秒。
   if (idx >= 0) karaokePaint(el.l1, words[lyrics[idx].t], (now - LEAD - lyrics[idx].t) * 1000);
 }
+measureChrome();   // 字級固定,所以量一次就夠 (measureSong 換歌時會再確認一次)
 requestAnimationFrame(frame);
 </script>
 </body>

@@ -183,11 +183,18 @@ One Node.js backend, multiple thin clients, with Python scripts as helpers spawn
   - **`--island-bg` 的 alpha 就是 `--island-opacity` 本身,不要再乘係數。** 乘 0.9 的話設定裡的「100%」其實是 90%,底下的桌面永遠透出來一點。
   - **`LEAD` (提早換行的補償) 直接吃掉逐字填色的尾巴**:島提早 LEAD 秒換行,而填色用的是真實播放位置,所以每句最後 LEAD 秒永遠填不到。舊值 0.5 是 C# 島時代沿用的 (那時沒有逐字填色),快歌一句才 1.2 秒 = 最後四成的字沒亮就跳下一句。現在是 0.2,等於 `.lyric-anim` 的實際長度。**要調大之前先想清楚這件事。**
   - 島也是**設定的寫入方** (拖曳結束存 `island_x/island_y/island_docked`),所以主進程走 `global.updateSettings()` —— 那是 `POST /api/settings` 的同一支實作,才會一起發 `settings_updated`,不會島與網頁各存各的。同理主進程讀設定用 `global.readSettings`。
-  - **hover = 展開模式** (`.expanded`):上一句 (`#l0`) + 控制列 (⏮⏯⏭,打 `/api/media-control`) + 進度條 (點擊 seek,打 `/api/seek`)。三件事共用同一個狀態,因為島沒有多餘的手勢可用 (mousedown 給拖曳、單擊給切吸附)。
+  - **每一行的寬度是 JS 量完寫死在元素上的 (`paint` 的 `style.width`),`#lines` 只負責置中與裁切。** 讓行寬跟著藥丸伸縮的話,那 0.32 秒的 width 補間期間裡面的 `<ruby>` 與逐字 span 每一幀都要重排,而那正是淡入動畫與卡拉OK填色在跑的時候 —— 症狀就是「換行不順」。整首歌的行寬在 `measureSong()` 換歌時一次量完存進 Map (歌詞/譯文/羅馬字,主行與第二行兩種字級各一份),換行那一幀只查表,實測 0.4ms。
+    - `#measure > div` **一定要 `width: max-content`**:`#measure` 是絕對定位、寬度 shrink-to-fit,裡面的 block 子元素會全部被撐成「最寬那一行」的寬度,逐行量出來的值就全一樣了。
+    - `#lines` 的 `overflow: hidden` 要配 **`padding: 5px 0` + `margin: -5px 0`**:`line-height: 1.15` 比字體實際的墨水盒窄,英文下伸部 (`g j p q y _`) 會超出行盒 3.3px、括號與逗號 2.3px,`rt` 又有 `translateY(-2px)` 往上跑 —— 切在行盒邊緣就是「第二句是英文時 g 的尾巴不見了」(2026-08-07 回報)。padding 撐開裁切框、負 margin 原數抵銷,島的高度一格都不變。**只加上下**,左右要繼續貼著藥丸切。
+    - `chromeW`(封面+等化器+gap+padding)的 `gap` 要讀 `#top` 而不是 `#island`(`#island` 是直向、gap 0)。
+  - **hover = 展開模式** (`.expanded`,進出各有 180/220ms 延遲,不然滑鼠掃過螢幕上緣就彈開):上一句 (`#l0`) + 控制列 (⏯⏭ 一列,打 `/api/media-control`) + 進度條 (點擊 seek,打 `/api/seek`)。三件事共用同一個狀態,因為島沒有多餘的手勢可用 (mousedown 給拖曳、單擊給切吸附)。
+    - **展開時幾何要整個凍結**:藥丸寬固定成 `max(songMaxW, CTRL_MIN_W)`、換行不回報視窗尺寸、`#l0`/`#l2` 沒內容時留空位、沒有 ruby 的行用 `.no-ruby` 補上注音那一截高度。少一項,hover 期間換句時控制列就在使用者手下移位,而他正要去點它。
+    - **`.no-ruby` 的高度補償不可以改用 flex + `align-items: center` 置中** —— flex 會把 `display: ruby` 的子元素 blockify,注音整個掉到漢字那一行、把漢字往下擠 (2026-08-07 回報)。補 `padding-top` 才對,而且補在**上面**,漢字的位置才跟隔壁行對齊。要靠 `.has-ruby`(整首歌真的有注音)當閘門,否則中文歌每一行都補、整個島白白高一截。
     - **上排 (`#top`) 一定要是自己一個容器,不可以改回 `#island { flex-wrap: wrap }` 讓控制列自己換行。** flex-wrap 的規則是「放不下就整行換行」而不是「先壓縮」,而島的寬度有 0.32s 的 CSS transition —— 過渡中島比內容窄的那幾幀,封面/歌詞/等化器會各自跳成一列。後果不只是難看:`fitSize` 就是在設完 `style.width` 的當下量 `offsetHeight`,量到的是換行後的高度 (實測 157px 變 242px),那個值會直接 `setBounds` 到視窗上。
-    - `measurePillW` 的 `gap` 因此要讀 `#top` 而不是 `#island`(`#island` 現在是直向、gap 0)。
+    - `#lines` 要 `flex: 1` 吃掉多餘的寬度:展開時藥丸寬是固定的而本句可能短很多,不吃掉的話多出來的空間全被推到右邊,封面與歌詞擠在左半邊。
     - **`document` 的 mousedown 要 `if (e.target.closest('#ctrl')) return`** —— 不擋的話按鈕按下去是在拖島,放開還會被當成單擊去切吸附。連帶好處:`downAt` 留 null,mouseup 自己早退。
-    - **進度條的位置不套 `offset`、也不套那 +0.5 秒補償** (`playPos()` 與 `frame()` 的 `now` 是兩件事):那兩個是歌詞對齊用的,不是真實播放位置。進度更新要放在 `frame()` 對 `lyrics.length` 的早退**之前**,找不到歌詞的歌也要會動。時長是 0 (瀏覽器來源,`currentDuration()` 回 null) 就整條收起來。
+    - **進度條的位置不套 `offset`、也不套那 +0.5 秒補償** (`playPos()` 與 `frame()` 的 `now` 是兩件事):那兩個是歌詞對齊用的,不是真實播放位置。進度更新要放在 `frame()` 對 `lyrics.length` 的早退**之前**,找不到歌詞的歌也要會動。時長是 0 (瀏覽器來源,`currentDuration()` 回 null) 就整條收起來。填色用 **`transform: scaleX()` 不用 `width`**,那是每一幀都在寫的東西。
+    - 「上一首」刻意拿掉,控制列是**一列**:`[⏯][⏭] 進度條 時間`。`CTRL_MIN_W` 因此要 300 而不是 240 —— 一列的話進度條要跟按鈕與時間共用寬度,240 只剩 96px 的軌道,點不太準。
     - 猜歌中 (`gameMask`) 不展開:控制列的「下一首」會打亂 `game.js` 自己的切歌流程 (同一支 API)。
   - **多螢幕位置記憶**:位置判定全在 **`web-app/island-position.js`** (純函式,不 require electron,理由同 `s2t.js`;**`build.files` 白名單要記得加**)。設定 `island_pos` 是「每台螢幕一組座標」,`island_display` 記最後用的那台。
     - **鍵是工作區幾何 (`x,y,WxH`) 而不是 `display.id`** —— Windows 的 id 是每次列舉時生成的,重開機或重接線就可能變,存進 settings.json 後對不上等於沒記。

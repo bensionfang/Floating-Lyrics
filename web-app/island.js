@@ -20,7 +20,9 @@ const BASE_HEIGHT = 64;
 const MIN_WIDTH = 220;
 const MIN_HEIGHT = 36;
 const DOCK_THRESHOLD = 2;   // 視窗頂端離工作區頂端多近就算吸附
-const DRAG_HZ = 120;         // 游標取樣頻率,高於螢幕更新率才不會是動畫瓶頸
+// 游標取樣頻率。**不要再往上調** —— 每一次取樣就是一次 setBounds,而透明視窗改尺寸/位置
+// 是這支程式裡最容易閃的操作;超過螢幕更新率的那幾次畫面根本吃不到,只是多閃。
+const DRAG_HZ = 60;
 
 let win = null;
 let dragTimer = null;
@@ -161,7 +163,9 @@ function animateY(targetY, ms = 260, done) {
     const b = win.getBounds();
     win.setBounds({ ...b, y: Math.round(startY + (targetY - startY) * ease) });
     if (t >= 1) { clearInterval(dockAnim); if (done) done(); }
-  }, 8);
+    // 16ms ≈ 60Hz。舊值 8ms 是 125Hz,多出來的那一半螢幕根本畫不出來,
+    // 卻是實打實多一倍的 setBounds (透明視窗最容易閃的操作)。
+  }, 16);
 }
 
 ipcMain.on('island:drag-start', () => {

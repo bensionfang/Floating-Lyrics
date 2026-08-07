@@ -122,12 +122,28 @@ body {
   background: #222 center/cover no-repeat;
 }
 
+/* 每一行的寬度由 JS 寫死成「這一行的自然寬」(見 island.ejs 的 paint),這裡只負責置中與裁切。
+   **行本身不可以跟著藥丸寬度伸縮** —— 藥丸有 0.32 秒的 width 補間,行寬跟著變的話裡面的
+   <ruby> 與逐字 span 每一幀都要重排,補間期間正好也在跑淡入與卡拉OK填色,那就是掉幀的來源。
+   現在補間只改「看得到多少」,行的 layout 全程不動。 */
 #lines {
   min-width: 0;
-  text-align: center;
+  /* **要 flex:1 吃掉多餘的寬度** —— 展開時藥丸寬是固定的 (整首最寬),而本句可能短很多,
+     不吃掉的話多出來的空間全被推到右邊,封面與歌詞擠在左半邊。 */
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   /* 藥丸收窄的補間過程中,歌詞比藥丸寬的那幾幀要裁掉、不能溢出圓角
      (封面/等化器是 flex:none 定在兩端,被裁的只有中間的字) */
   overflow: hidden;
+  /* 裁切框上下各外擴 5px。`line-height: 1.15` 比字體實際的墨水盒窄,英文下伸部
+     (g j p q y _) 會超出行盒 3.3px、括號與逗號 2.3px,而 rt 還有 translateY(-2px)
+     往上跑 —— 直接切在行盒邊緣就是「第二句是英文時 g 的尾巴不見了」(2026-08-07 回報)。
+     padding 撐開裁切框、負 margin 原數抵銷,**島的高度一格都不變** (外框高 = 內容 +10 −10)。
+     **只加上下** —— 左右要繼續貼著藥丸切,那才是這個 overflow 存在的理由。 */
+  padding: 5px 0;
+  margin: -5px 0;
 }
 
 /* 播放狀態:三根等化器條。**盒寬要比封面寬一點**——封面是實心方塊、等化器只有三根細線,
@@ -184,27 +200,31 @@ body {
   }
 }
 
-/* 量「這句歌詞不換行要多寬」用的隱形節點:絕對定位,所以量得到超出視窗的自然寬度 */
+/* 量「這句歌詞不換行要多寬」用的隱形節點:絕對定位,所以量得到超出視窗的自然寬度。
+   換歌時一次塞進整首歌的所有行,量完清空 (見 island.ejs 的 measureAll)。 */
 #measure {
   position: absolute;
   top: -9999px;
   left: 0;
-  white-space: nowrap;
   visibility: hidden;
   pointer-events: none;
 }
 
+/* **width: max-content 不可以省** —— #measure 是絕對定位、寬度是 shrink-to-fit,
+   裡面的 block 子元素會全部撐成「最寬那一行」的寬度,逐行量出來的值就全一樣了。 */
 #measure>div {
+  width: max-content;
   white-space: nowrap;
 }
 
+/* 裁切一律交給 #lines,行自己**不要** overflow:hidden —— 行的寬度是 JS 量出來寫死的,
+   逐字填色把文字節點切成一堆 span 之後實際寬度可能差個一兩 px,行自己裁的話就是尾字被切掉。 */
 #song,
 #l0,
 #l1,
 #l2 {
+  flex: none;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   line-height: 1.15;
   text-align: center;
 }
@@ -238,28 +258,60 @@ body {
   display: block;
 }
 
+/* 沒有 ruby 的行要自己補上「注音佔的那一截」高度:同一首歌裡有 ruby 的行比純假名的行高 12px
+   (實測 24px 字:40px vs 28px)。不補的話展開時控制列會隨著換句上下跳 (而使用者正要去點它們),
+   收合時則是藥丸的下緣每隔幾句跳一次。補在**上面**,漢字的位置才跟隔壁行對齊。
+
+   三個開關缺一不可:
+   - `.no-ruby` 由 island.ejs 換內容時掛 (判斷字串裡有沒有 `<rt`)。
+   - `.has-ruby` 是「這首歌真的有注音」(measureSong 時判斷) —— 中文歌整首都沒有 ruby,
+     每一行都補等於整個島白白高 12px。
+   - 假名關掉時每一行本來就一樣高,補了反而變成沒有 ruby 的行比較高。
+
+   **不可以改用 flex + align-items 置中** —— flex 會把 `display: ruby` 的子元素 blockify,
+   注音就掉到漢字那一行去、把漢字整排往下擠 (2026-08-07 回報)。 */
+html:not(.hide-furigana) #island.has-ruby .no-ruby {
+  /* 實測的注音高度:24px 字 12.4px、22px 字 10.7px (rt 的 0.55em 各自被進位過),
+     取 0.5em 讓兩種字級的誤差都在 0.4px 以內 */
+  padding-top: 0.5em;
+}
+
 .hidden {
   display: none;
 }
 
 /* ── 展開模式:控制列 + 進度條 ───────────────────────────────
-   flex-basis:100% 讓它自己換到第二列,上面那排 [封面][歌詞][等化器] 不受影響。 */
+   外層是「高度補間 + 裁切」的殼,內層保持自然高度。
+   **高度由 JS 設成真實 px** (island.ejs 的 setExpanded):height:auto 補間不了,
+   而寫死一個常數會跟按鈕/進度條的實際高度漂掉。
+   收合期間視窗先不縮 (growOnly),多出來的那段是透明的,看不見。 */
 #ctrl {
-  display: none;
-  flex-direction: column;
-  gap: 7px;
-  padding-top: 4px;
+  height: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition: height 0.28s cubic-bezier(0.32, 0.72, 0, 1), opacity 0.18s ease;
 }
 
 #island.expanded #ctrl {
+  opacity: 1;
+}
+
+/* 一整列:[播放/暫停][下一首] 進度條 時間。
+   justify-content 只在進度條被收起來時 (瀏覽器來源沒有時長) 才看得出作用 —— 那時剩兩顆按鈕,
+   置中比靠左好看。有進度條時它 flex:1 吃光空間,置中與否沒差。 */
+#ctrl-in {
   display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding-top: 8px;
 }
 
 #btns {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 20px;
+  gap: 12px;
+  flex: none;
 }
 
 #btns button {
@@ -289,6 +341,8 @@ body {
 }
 
 #bar {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 9px;
@@ -314,10 +368,14 @@ body {
   background: rgba(255, 255, 255, 0.2);
 }
 
+/* 進度由 JS 每幀寫 transform: scaleX() (不是 width,見 island.ejs 的 updateProgress),
+   所以這裡是滿寬 + 從左邊縮放。**不要掛 transition** —— 會跟每幀的寫入打架而變黏。 */
 #bar-fill {
   position: relative;
   height: 4px;
-  width: 0;
+  width: 100%;
+  transform: scaleX(0);
+  transform-origin: left center;
   border-radius: 2px;
   background: rgba(255, 255, 255, 0.85);
 }
