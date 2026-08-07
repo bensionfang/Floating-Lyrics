@@ -31,9 +31,13 @@
             // 迷你導覽進行中要框住選單裡的元素,點導覽卡 (在選單外) 不能把選單收掉
             if (tourIndex >= 0 && currentTour !== tourSteps) return;
             const menu = document.getElementById('settings-menu');
-            if (menu && menu.classList.contains('show') && !menu.contains(e.target)) {
-                closeSettingsMenu();
-            }
+            if (!menu || !menu.classList.contains('show')) return;
+            // `.sel-pop` 是 select-menu.js 自己畫的下拉清單,為了 position: fixed 不被選單的
+            // overflow 裁掉,它掛在 <body> 底下而不是選單裡 —— 所以點選項時 `menu.contains`
+            // 是 false,整個設定選單會跟著被收掉 (它在畫面上明明就疊在選單裡面)。
+            // 判斷加一條:清單本身算選單的一部分。
+            if (e.target.closest && e.target.closest('.sel-pop')) return;
+            if (!menu.contains(e.target)) closeSettingsMenu();
         });
 
         // 子選單直接在設定選單旁展開。三個飛出面板共用同一個定位點,
