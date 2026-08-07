@@ -52,6 +52,7 @@
       "island.js",
       "island-position.js",
       "preload-island.js",
+      "win-corners.js",
       "views/**",
       "public/**"
     ],

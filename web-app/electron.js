@@ -140,6 +140,9 @@ function createWindow() {
   });
   mainWindow.loadURL(`http://localhost:${PORT}`);
 
+  // 貼齊螢幕 (半螢幕 / 1/4 螢幕 / 最大化) 時把圓角收成直角,離開再變回來
+  require('./win-corners.js').watch(mainWindow);
+
   // did-fail-load 重試時 ready-to-show 不會再觸發,所以用 did-finish-load;
   // 保險起見再壓一個 8 秒 timeout,server 真的起不來也不會卡在啟動畫面
   const reveal = () => {
