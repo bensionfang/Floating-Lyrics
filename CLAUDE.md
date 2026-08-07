@@ -179,6 +179,13 @@ One Node.js backend, multiple thin clients, with Python scripts as helpers spawn
   - `search_fallback.py` — one-shot fallback lyrics scraper (syncedlyrics providers + iTunes JP-title retry) when the preferred source misses. QQ is not fetched here; `cn_music._fetch_qqmusic` (working `musicu.fcg` endpoint) owns QQ. The old `fetch_qqmusic()` here (dead `client_search_cp` endpoint, HTTP 500) was removed.
 - **靈動島 (`web-app/island.js` + `preload-island.js` + `views/island.ejs` + `public/css/island.css`)** — Electron 的 frameless 透明置頂視窗,載入 server 的 `/island`,靠 WebSocket 廣播吃資料,是純顯示端。
   - **視窗歸主進程管,頁面只負責畫。** 拖曳時 renderer 只在 mousedown/mouseup 各送一次 IPC,移動期間由主進程自己輪詢 `screen.getCursorScreenPoint()` 並 `setBounds` —— 逐幀送 IPC 會掉幀,`-webkit-app-region: drag` 則沒有拖曳結束事件、做不了吸附判定。吸附動畫是 easeOutQuart,沿用舊 C# 島的曲線。
+    - **拖曳取樣與吸附動畫的間隔跟著 `display.displayFrequency` 走 (`frameMs`),不要寫回 60Hz/16ms。** 原則 (超過螢幕更新率的取樣畫面吃不到) 沒變,但寫死等於假設所有人都是 60Hz 螢幕 —— 開發機實測 Electron 回報 **180Hz**,寫死 60 就是把畫面砍成三分之一。成本量過:一次 `setBounds` 中位數 **0.68ms**、p95 1.18ms (透明視窗、1080p),180Hz 的 5.5ms 預算裡很寬鬆。夾在 60~240Hz 之間:低的擋驅動回報 0,高的擋 4ms 以下的 timer (那時瓶頸換成 `setBounds` 本身,只是空燒 CPU)。
+  - **視窗比藥丸大是刻意的,但那圈透明邊不該吃掉點擊。** 大出來的來源有兩個:左右各 `EDGE` (docked 的外擴角畫在那裡)、換行時「只長不縮」的高度。解法**不是**把視窗縮回去 —— 那正是那兩條規則要避免的閃爍 —— 而是整扇窗預設 `setIgnoreMouseEvents(true)`,游標真的落在藥丸上時才打開 (`startHitTest` in island.js)。實測:視窗 739px 寬時收合的藥丸只有 473px,兩側各 133px 從「會被島吃掉」變成穿透。
+    - **命中判定是主進程輪詢游標 (30Hz),不要改用 `setIgnoreMouseEvents(true, { forward: true })` + renderer 的 mousemove。** Electron 33 實測那個選項在這個視窗上**一則 mousemove 都沒送進 renderer** (在 `ipcMain` 那端加 log 量過,0 則),而沒有 forward 就等於「一旦切成穿透就永遠回不來」,整個功能靜默失效。輪詢跟拖曳是同一招 (`screen.getCursorScreenPoint`),一次取樣只是點在不在矩形內,沒有 `setBounds` 那種成本。
+    - **hover 展開因此也改由主進程驅動 (`island:hover`),不再用 `#island` 的 mouseenter/mouseleave。** 藥丸以外是穿透的、收不到事件,而且離開藥丸的那一瞬間正好會被切成穿透 —— DOM 那條有機會整個收不到 `mouseleave`,島就卡在展開狀態。用瀏覽器直接開 `/island` 除錯時沒有主進程,`if (!window.islandBridge)` 退回 DOM 事件。
+    - **藥丸尺寸要另外送 (`island:pill`),不可以併進 `island:resize`**:那支有「尺寸沒變就不送」的早退,而歌詞模式下視窗寬固定為整首最寬、逐句不變,**藥丸寬卻是逐句在變的**,跟著早退就送不出去,短行的兩側會一直被當成島。
+    - **貼齊頂端時要補 `EDGE` 的外擴角**:那兩塊是 `#island` 的 `::before`/`::after`,畫在藥丸矩形之外、高度只有 `EDGE`,不補的話最左最右那兩個角點不到。
+    - **拖曳中 (`dragTimer` 有值) 不切換**:島被螢幕邊緣卡住時游標會滑出藥丸,那時切成穿透就收不到 `mouseup`,拖曳卡在按下狀態。
   - **`body` 是 `align-items: flex-start`,不可以改回 `center`。** 逐句換行時視窗高度是「只長不縮」的 (`island.js` 的 `growOnly`,為了不讓透明視窗每句都改尺寸而閃),所以兩行變一行之後視窗會比島高一截 —— 置中的話那一截平分到上下兩邊,吸附狀態下島就浮在螢幕頂端下面貼不上去 (2026-08-04 回報)。對齊上緣則多出來的高度全留在下面,那裡是透明的。
   - **`--island-bg` 的 alpha 就是 `--island-opacity` 本身,不要再乘係數。** 乘 0.9 的話設定裡的「100%」其實是 90%,底下的桌面永遠透出來一點。
   - **`LEAD` (提早換行的補償) 直接吃掉逐字填色的尾巴**:島提早 LEAD 秒換行,而填色用的是真實播放位置,所以每句最後 LEAD 秒永遠填不到。舊值 0.5 是 C# 島時代沿用的 (那時沒有逐字填色),快歌一句才 1.2 秒 = 最後四成的字沒亮就跳下一句。現在是 0.2,等於 `.lyric-anim` 的實際長度。**要調大之前先想清楚這件事。**

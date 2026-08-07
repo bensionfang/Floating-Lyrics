@@ -153,6 +153,10 @@ function fitSize(pillW, growOnly = false, windowW = null) {
   const height = Math.ceil(el.island.offsetHeight)
     + (expanded ? Math.max(0, ctrlH - el.ctrl.offsetHeight) : 0);
   const width = windowW != null ? windowW : pillW;
+  // 藥丸自己的尺寸給主進程做「游標在不在島上」的命中判定 (透明區點擊穿透)。
+  // **要在下面那個早退之前送** —— 視窗寬在歌詞模式下固定為整首最寬、逐句不變,
+  // 但藥丸寬是逐句在變的,跟著早退就送不出去,短行的兩側會一直被當成島。
+  bridge.pill({ w: pillW, h: height });
   // 三個值都沒變就不送:主進程雖然有 8px 死區會丟掉,但那是「送完才丟」,白花一次跨進程訊息。
   // **growOnly 也要比對** —— 它會改主進程的 maxW/maxH 狀態,值一樣但旗標不同時不可以省。
   const sig = width + '|' + height + '|' + growOnly;
@@ -172,7 +176,8 @@ function refit(hold = false) {
 
 // preload 只有在 Electron 島視窗裡才存在;用瀏覽器直接開 /island 除錯時降級成空實作
 const bridge = window.islandBridge || {
-  dragStart() {}, dragEnd() {}, toggleDock() {}, resize() {}, onDocked() {}
+  dragStart() {}, dragEnd() {}, toggleDock() {}, resize() {}, onDocked() {},
+  pill() {}, onHover() {}
 };
 
 // ── 拖曳:自己判斷有沒有真的移動,幾乎沒動就當成單擊 (切換吸附) ──
@@ -193,23 +198,32 @@ document.addEventListener('mouseup', (e) => {
 bridge.onDocked(d => el.island.classList.toggle('docked', d));
 
 // ── 展開模式:滑鼠移上去 = 上一句 + 控制列 + 進度條,移開收回 ──
-// 掛在 #island 而不是 body:視窗左右各有 --edge 透明邊,掛 body 會滑過空白處就展開。
+// 「在不在藥丸上」由主進程輪詢游標算 (見 island.js 的透明區點擊穿透):藥丸以外的地方
+// 是穿透的,收不到 mouseenter/mouseleave,而且離開藥丸的那一瞬間正好會被切成穿透 ——
+// 用 DOM 事件的話 mouseleave 有機會整個收不到,島就卡在展開狀態。
 // **進出都要延遲**:沒有延遲的話滑鼠掃過螢幕上緣就彈開一次,停在藥丸邊緣還會展開/收合
 // 來回彈 (島的寬度本來就會隨歌詞變)。
 const HOVER_IN = 180, HOVER_OUT = 220;
 const CTRL_ANIM = 300;   // 收合動畫跑完才縮視窗,要 ≥ CSS 的 transition 長度
 let hoverIn = null, hoverOut = null, shrinkTimer = null, ctrlH = 0;
 
-el.island.addEventListener('mouseenter', () => {
-  clearTimeout(hoverOut); hoverOut = null;
-  if (expanded || hoverIn) return;
-  hoverIn = setTimeout(() => { hoverIn = null; setExpanded(true); }, HOVER_IN);
-});
-el.island.addEventListener('mouseleave', () => {
-  clearTimeout(hoverIn); hoverIn = null;
-  if (!expanded || hoverOut) return;
-  hoverOut = setTimeout(() => { hoverOut = null; setExpanded(false); }, HOVER_OUT);
-});
+function onHover(on) {
+  if (on) {
+    clearTimeout(hoverOut); hoverOut = null;
+    if (expanded || hoverIn) return;
+    hoverIn = setTimeout(() => { hoverIn = null; setExpanded(true); }, HOVER_IN);
+  } else {
+    clearTimeout(hoverIn); hoverIn = null;
+    if (!expanded || hoverOut) return;
+    hoverOut = setTimeout(() => { hoverOut = null; setExpanded(false); }, HOVER_OUT);
+  }
+}
+bridge.onHover(onHover);
+// 用瀏覽器直接開 /island 除錯時沒有主進程,退回 DOM 事件 (那裡也沒有穿透問題)
+if (!window.islandBridge) {
+  el.island.addEventListener('mouseenter', () => onHover(true));
+  el.island.addEventListener('mouseleave', () => onHover(false));
+}
 
 function setExpanded(on) {
   // 猜歌中不展開:控制列的「下一首」會打亂遊戲自己的切歌流程 (game.js 用同一支 API)

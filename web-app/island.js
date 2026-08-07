@@ -20,9 +20,17 @@ const BASE_HEIGHT = 64;
 const MIN_WIDTH = 220;
 const MIN_HEIGHT = 36;
 const DOCK_THRESHOLD = 2;   // 視窗頂端離工作區頂端多近就算吸附
-// 游標取樣頻率。**不要再往上調** —— 每一次取樣就是一次 setBounds,而透明視窗改尺寸/位置
-// 是這支程式裡最容易閃的操作;超過螢幕更新率的那幾次畫面根本吃不到,只是多閃。
-const DRAG_HZ = 60;
+// 拖曳取樣與吸附動畫的更新間隔 = **螢幕的更新率**,不要寫死。
+// 原則沒變 (超過螢幕更新率的取樣畫面吃不到,只是多一次 setBounds),但寫死 60/16ms 等於
+// 假設所有人都是 60Hz 螢幕 —— 120/180Hz 的機器上那是把畫面砍成一半到三分之一。
+// 成本量過 (透明視窗、1080p):一次 setBounds 中位數 0.68ms、p95 1.18ms、最差 2.06ms,
+// 180Hz 的 5.5ms 預算裡很寬鬆。上下都夾住:低的擋住驅動回報 0/怪值,高的擋住 240Hz 以上
+// 排出 4ms 以下的 timer (那時瓶頸換成 setBounds 本身,只是空燒 CPU)。
+// ponytail: 拖曳中途跨到另一台更新率不同的螢幕不會重算,開始拖時是哪台就用哪台。
+function frameMs(point) {
+  const hz = screen.getDisplayNearestPoint(point).displayFrequency || 60;
+  return Math.round(1000 / Math.min(Math.max(hz, 60), 240));
+}
 
 let win = null;
 let dragTimer = null;
@@ -90,9 +98,11 @@ function openIsland(port) {
   win.once('ready-to-show', () => {
     if (!win) return;
     win.show();
+    setIgnore(true);
+    startHitTest();
     win.webContents.send('island:docked', docked);
   });
-  win.on('closed', () => { stopDrag(); win = null; });
+  win.on('closed', () => { stopDrag(); stopHitTest(); win = null; });
   return win;
 }
 
@@ -100,6 +110,7 @@ function closeIsland() {
   if (win) win.destroy();   // close 事件沒人攔,destroy 比較直接;closed 會清掉 win
   win = null;
   stopDrag();
+  stopHitTest();
   clearInterval(dockAnim);
 }
 
@@ -163,9 +174,9 @@ function animateY(targetY, ms = 260, done) {
     const b = win.getBounds();
     win.setBounds({ ...b, y: Math.round(startY + (targetY - startY) * ease) });
     if (t >= 1) { clearInterval(dockAnim); if (done) done(); }
-    // 16ms ≈ 60Hz。舊值 8ms 是 125Hz,多出來的那一半螢幕根本畫不出來,
-    // 卻是實打實多一倍的 setBounds (透明視窗最容易閃的操作)。
-  }, 16);
+    // 跟拖曳同一個間隔 (見 frameMs)。放手後的吸附動畫比拖曳更容易看出卡頓 —— 拖曳的位置
+    // 有游標當參考,吸附是純動畫,只跑 60Hz 的話在高更新率螢幕上是唯一會被看出來的那段。
+  }, frameMs({ x: win.getBounds().x, y: startY }));
 }
 
 ipcMain.on('island:drag-start', () => {
@@ -190,7 +201,7 @@ ipcMain.on('island:drag-start', () => {
       wasDocked = docked;
       win.webContents.send('island:docked', docked);
     }
-  }, Math.round(1000 / DRAG_HZ));
+  }, frameMs(cursor));
 });
 
 ipcMain.on('island:drag-end', () => {
@@ -213,6 +224,73 @@ ipcMain.on('island:toggle-dock', () => {
   const docked = b.y - workArea.y < DOCK_THRESHOLD;
   win.webContents.send('island:docked', !docked);
   animateY(docked ? workArea.y + 28 : workArea.y, 260, () => savePosition(!docked));
+});
+
+// ── 透明區點擊穿透 ──
+// 視窗刻意比藥丸大 (左右各 EDGE 的外擴角空間、換行時只長不縮的高度),代價是那圈透明邊
+// 照樣吃掉點擊。解法不是把視窗縮回去 —— 那正是那兩條規則在避免的閃爍 —— 而是整扇窗預設
+// setIgnoreMouseEvents(true),游標真的落在藥丸上時才打開。
+//
+// **命中判定跟拖曳走同一招:主進程自己讀游標,不靠 `forward: true`。**
+// Electron 33 實測那個選項在這個視窗上一則 mousemove 都沒送進 renderer (加 log 量過,0 則),
+// 而沒有 forward 就等於「一旦穿透就永遠回不來」。改成主進程輪詢游標之後也順便沒有了
+// 「離開藥丸的瞬間剛好被切成穿透、mouseleave 收不到」的競態,所以 hover 展開也由這裡驅動。
+const HIT_HZ = 30;   // 一次取樣只是點在不在矩形內,不像拖曳那樣每次都 setBounds,不必省
+let hitTimer = null, pillW = 0, pillH = 0, ignoring = false, hovering = false;
+
+// 藥丸在視窗裡的位置:body 是 justify-content:center + align-items:flex-start,
+// 所以水平置中、上緣貼齊視窗頂端 (那兩條 CSS 是刻意的,見 island.css)。
+function overPill(c) {
+  const b = win.getBounds();
+  const w = Math.min(pillW, b.width);
+  const x = b.x + Math.round((b.width - w) / 2);
+  if (c.y < b.y || c.y > b.y + pillH) return false;
+  if (c.x >= x && c.x <= x + w) return true;
+  // 貼齊頂端時左右長出去的「外擴角」是 #island 的 ::before/::after,畫在藥丸矩形之外,
+  // 高度只有 EDGE —— 不補這一段,吸附狀態下最左最右那兩個角會點不到。
+  const wa = screen.getDisplayNearestPoint({ x: b.x, y: b.y }).workArea;
+  if (b.y - wa.y >= DOCK_THRESHOLD || c.y > b.y + EDGE) return false;
+  return c.x >= x - EDGE && c.x <= x + w + EDGE;
+}
+
+function startHitTest() {
+  if (hitTimer) return;
+  hitTimer = setInterval(() => {
+    if (!win) return;
+    // 拖曳中不切換:島被螢幕邊緣卡住時游標會滑出藥丸,那時切成穿透就收不到 mouseup,
+    // 拖曳會卡在按下狀態。
+    if (dragTimer) return;
+    // **還不知道藥丸多大時整扇窗都吃滑鼠 (fail open)** —— 反過來的話,頁面若在送出第一次
+    // island:pill 之前卡住,島就完全點不到也拖不動,而且沒有任何徵兆。hover 則維持關閉,
+    // 不然開島的第一個 tick 會在游標根本不在島上時就展開。
+    const known = pillH > 0;
+    const on = known && overPill(screen.getCursorScreenPoint());
+    setIgnore(known && !on);
+    if (on === hovering) return;
+    hovering = on;
+    win.webContents.send('island:hover', on);
+  }, Math.round(1000 / HIT_HZ));
+}
+
+function setIgnore(ignore) {
+  if (!win || ignore === ignoring) return;
+  ignoring = ignore;
+  win.setIgnoreMouseEvents(ignore);
+}
+
+function stopHitTest() {
+  clearInterval(hitTimer);
+  hitTimer = null;
+  ignoring = hovering = false;
+  pillW = pillH = 0;
+}
+
+// 藥丸自己的尺寸 (不是視窗的:歌詞模式下視窗寬固定為整首最寬,短行的藥丸窄很多)。
+// **不能併進 island:resize** —— 那支有「尺寸沒變就不送」的早退,而藥丸寬是逐句在變的。
+ipcMain.on('island:pill', (_e, s) => {
+  if (!s) return;
+  pillW = Math.round(s.w);
+  pillH = Math.round(s.h);
 });
 
 // 頁面量完內容要多大就回報,視窗跟著縮放 —— 島才會「貼著歌詞」而不是一個固定的大黑框。

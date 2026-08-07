@@ -8,5 +8,7 @@ contextBridge.exposeInMainWorld('islandBridge', {
   dragEnd: () => ipcRenderer.send('island:drag-end'),
   toggleDock: () => ipcRenderer.send('island:toggle-dock'),
   resize: (size) => ipcRenderer.send('island:resize', size),
-  onDocked: (cb) => ipcRenderer.on('island:docked', (_e, docked) => cb(docked))
+  pill: (size) => ipcRenderer.send('island:pill', size),
+  onDocked: (cb) => ipcRenderer.on('island:docked', (_e, docked) => cb(docked)),
+  onHover: (cb) => ipcRenderer.on('island:hover', (_e, on) => cb(on))
 });
