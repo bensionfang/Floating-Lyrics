@@ -13,7 +13,7 @@
     <link rel="stylesheet" href="/vendor/fonts.css?v=1">
     <link rel="stylesheet" href="/vendor/fa/css/all.min.css?v=1">
     <!-- Style -->
-    <link rel="stylesheet" href="/css/style.css?v=110">
+    <link rel="stylesheet" href="/css/style.css?v=115">
     <!-- 各頁共用:吐司 + 備選歌詞 + 重新載入歌詞 -->
     <script src="/js/lyrics-tools.js?v=12" defer></script>
     <!-- 設定選單的下拉:自己畫彈出清單 (原生 select 的 hover 底色改不了,見該檔說明) -->
@@ -308,6 +308,10 @@
                 <a href="/leaderboard" class="nav-item nav-stats-item<%= hideStats %> <%= activePage === 'leaderboard' ? 'active' : '' %>">
                     <i class="fa-solid fa-trophy"></i>
                     <span>排行榜</span>
+                </a>
+                <a href="/karaoke" class="nav-item <%= activePage === 'karaoke' ? 'active' : '' %>">
+                    <i class="fa-solid fa-microphone-lines"></i>
+                    <span>卡拉OK</span>
                 </a>
                 <a href="/editor" class="nav-item <%= activePage === 'editor' ? 'active' : '' %>">
                     <i class="fa-solid fa-pen-to-square"></i>

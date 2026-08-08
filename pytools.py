@@ -6,6 +6,7 @@ Node.js 後端以子命令呼叫本腳本;打包發布時由 PyInstaller 將此�
   pytools.py furigana                       stdin 收 JSON、stdout 回注音後歌詞
   pytools.py fallback <title> <artist> [--all]  備用歌詞搜尋
   pytools.py cnlyrics                       stdin 收 JSON、抓網易/酷狗歌詞 (順便存讀音提示)
+  pytools.py ytsearch                       stdin 收 JSON、搜 YouTube 回 MV 候選 (卡拉OK背景)
   pytools.py romaji <text>                  羅馬拼音轉平假名 (jaconv)
   pytools.py minimize                       最小化目前前景視窗
   pytools.py sessions                       列出目前系統上的媒體來源 (stdout JSON)
@@ -126,6 +127,17 @@ def main():
                     print(json.dumps({"success": False, "error": "Not found"}))
         except Exception as e:
             print(json.dumps({"success": False, "error": str(e)}))
+    elif cmd == "ytsearch":
+        # 卡拉OK模式的 MV 背景:用歌曲資訊搜 YouTube,回候選清單讓使用者挑。
+        # 抓不到一律回空 list —— YouTube 改版時該安靜退回純黑底,不是讓那一頁掛掉
+        import json
+        import yt_search
+
+        data = json.loads(sys.stdin.read())
+        results = yt_search.search(
+            data.get("title", ""), data.get("artist", ""),
+            duration=data.get("duration") or None)
+        print(json.dumps(results, ensure_ascii=False))
     elif cmd == "romaji":
         import jaconv
         print(jaconv.alphabet2kana(args[0]))

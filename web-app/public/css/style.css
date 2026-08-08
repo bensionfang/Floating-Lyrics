@@ -2717,3 +2717,259 @@ body.game-masked .app-container {
     padding-left: 0;
 }
 body.game-masked .main-content { border-radius: 8px; }
+
+/* ============================================================
+   卡拉OK字幕機模式 (/karaoke)
+   ------------------------------------------------------------
+   側欄收掉的理由同猜歌 (grid 的列/欄要一起收,不然留下空行與空白欄),
+   但**播放列不能 display:none** —— 備選歌詞浮層是 position:absolute 錨在播放列
+   裡面那顆按鈕上,藏掉播放列會連它一起藏掉。所以改成 fixed 的自動隱藏浮條,
+   滑鼠動了才滑出來 (karaoke-mode.js 的 body.bar-visible)。
+   ============================================================ */
+body.karaoke-page .sidebar { display: none; }
+body.karaoke-page .app-container {
+    grid-template-areas: "main";
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr;
+    padding-left: 0;
+    gap: 0;
+}
+body.karaoke-page .main-content {
+    border-radius: 0;
+    background: #08080a;
+}
+body.karaoke-page .content-body { padding: 0; height: 100%; min-height: 0; }
+
+/* 控制列:平常收在畫面外,滑鼠一動滑出來 */
+body.karaoke-page .player-bar {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    z-index: 60;
+    background: rgba(10, 10, 12, 0.92);
+    backdrop-filter: blur(14px);
+    border-radius: 0;
+    transform: translateY(105%);
+    transition: transform 0.25s ease;
+}
+body.karaoke-page.bar-visible .player-bar { transform: none; }
+/* 段落循環/編輯假名/放大模式在這一頁都是「點了跳回首頁」(common.js),放著只會誤觸 */
+body.karaoke-page #loop-mode-btn,
+body.karaoke-page #toggle-ruby-mode-btn,
+body.karaoke-page .fullscreen-btn { display: none; }
+
+/* ── 舞台 ── */
+/* 歌詞貼著畫面下緣 (照一般卡拉OK的版面),上面整片留給 MV。
+   下緣留 14vh:控制列滑出來時是 90px 高,不能疊在歌詞上。 */
+#karaoke-stage {
+    position: relative;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-end;
+    padding-bottom: 14vh;
+    overflow: hidden;
+    background: #08080a;
+}
+
+/* MV 背景 (沒挑 MV 時整個是空的)。pointer-events 關掉,免得 iframe 吃走滑鼠事件 ——
+   那會讓控制列的自動隱藏收不到 mousemove */
+#karaoke-mv {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+}
+/* 16:9 鋪滿:兩個維度都取到滿,超出的部分裁掉。
+   **單位要用 cqw/cqh 不能用 vw/vh** —— 這個舞台不是整個視窗 (app-container 還留著
+   上下左右的內距),用視窗單位算出來的尺寸會比容器小一圈,左右露出黑邊。 */
+#karaoke-mv { container-type: size; }
+#karaoke-mv iframe {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    width: 100cqw; height: 56.25cqw;
+    min-height: 100cqh; min-width: 177.78cqh;
+    border: 0;
+}
+
+/* ── 兩行歌詞 ── */
+#karaoke-lines {
+    position: relative;
+    z-index: 2;
+    width: min(1400px, 92vw);
+    text-align: center;
+}
+/* 只有當前句與下一句露臉,其餘全部收起來 —— 靠 class 切換而不是重寫 innerHTML,
+   karaokeSplit 記在 .__kc 上的字元 span 才不會每句作廢一次 */
+.kline { display: none; }
+.kline.cur, .kline.next { display: block; }
+.kline.cur {
+    font-size: clamp(34px, 4.6vw, 76px);
+    font-weight: 700;
+    line-height: 1.35;
+    color: #fff;
+    margin-bottom: 0.35em;
+}
+.kline.next {
+    font-size: clamp(22px, 2.6vw, 42px);
+    font-weight: 600;
+    line-height: 1.35;
+    color: rgba(255, 255, 255, 0.45);
+}
+.kline > span { white-space: pre-wrap; }
+.kline rt {
+    font-size: 0.45em;
+    transform: translateY(-2px);
+    color: rgba(255, 255, 255, 0.75);
+}
+.kline.next rt { color: rgba(255, 255, 255, 0.4); }
+body.hide-furigana .kline rt { display: none; }
+
+/* 壓在沒有暗化的 MV 上時,歌詞刻意**什麼裝飾都不加**,就是純白的字。
+   試過兩種都被打回:`-webkit-text-stroke` 的黑框圈著日文細筆畫很醜 (假名的小字更糟);
+   疊層 text-shadow 的暗暈也不要。可讀性怎麼處理待定,不要自作主張加回來。 */
+
+/* 逐字填色:漸層要套在**每一顆** .kc 上,不是只給正在唱的那顆 ——
+   background-clip: text 會關掉次像素抗鋸齒,只套一顆的話那個字比旁邊暗一截。
+   (三端同一條規則,見 public/js/karaoke.js 檔尾的說明) */
+.kline.cur > span .kc {
+    --k: 0%;
+    background-image: linear-gradient(90deg, #fff var(--k), rgba(255,255,255,0.45) var(--k));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+}
+.kline.cur > span .kc.sung { --k: 100%; }
+.kline.cur rt.rt-pending,
+.kline.cur rt.rt-now,
+.kline.cur rt.rt-sung {
+    --k: 0%;
+    background-image: linear-gradient(90deg, #fff var(--k), rgba(255,255,255,0.45) var(--k));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    transition: none;
+}
+.kline.cur rt.rt-sung { --k: 100%; }
+
+/* ── 倒數 ── */
+#karaoke-countin {
+    position: relative;
+    z-index: 2;
+    margin-bottom: 22px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: rgba(255, 255, 255, 0.75);
+    font-size: 15px;
+    letter-spacing: 1px;
+    /* 沒有暗化層,秒數會壓在亮的影片上 */
+    text-shadow: 0 1px 6px rgba(0, 0, 0, 0.9);
+}
+#karaoke-countin.hidden { display: none; }
+.kdot {
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.18);
+    transition: background 0.15s linear, transform 0.15s linear;
+}
+.kdot.on { background: var(--primary-color, #1db954); transform: scale(1.12); }
+
+/* ── 狀態 / 降級提示 / 離開 ── */
+/* 空狀態 (等待播放 / 找不到歌詞) 要留在畫面正中央 —— 舞台已經改成貼下緣,
+   跟著歌詞擠在下面會看起來像壞掉 */
+#karaoke-status {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 2;
+    text-align: center;
+    color: rgba(255, 255, 255, 0.45);
+}
+#karaoke-status.hidden { display: none; }
+#karaoke-status i { font-size: 42px; margin-bottom: 14px; display: block; }
+#karaoke-status p { font-size: 17px; }
+
+#karaoke-degraded {
+    position: absolute;
+    left: 20px; bottom: 20px;
+    z-index: 3;
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 14px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 13px;
+}
+#karaoke-degraded.hidden { display: none; }
+#karaoke-degraded button {
+    background: none; border: 0; padding: 0;
+    color: var(--primary-color, #1db954);
+    font-size: 13px; cursor: pointer;
+}
+#karaoke-degraded button:hover { text-decoration: underline; }
+
+#karaoke-exit {
+    position: absolute;
+    top: 18px; right: 22px;
+    z-index: 3;
+    width: 38px; height: 38px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 50%;
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 17px;
+    opacity: 0;
+    transition: opacity 0.25s ease, background 0.15s ease;
+}
+body.karaoke-page.bar-visible #karaoke-exit { opacity: 1; }
+#karaoke-exit:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
+
+/* ── MV 挑選面板 ── */
+#karaoke-mv-mask {
+    position: fixed; inset: 0; z-index: 90;
+    background: rgba(0, 0, 0, 0.6);
+}
+#karaoke-mv-mask.hidden, #karaoke-mv-picker.hidden { display: none; }
+#karaoke-mv-picker {
+    position: fixed;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 91;
+    width: min(760px, 92vw);
+    max-height: 78vh;
+    display: flex; flex-direction: column;
+    background: var(--panel-hover, #1f1f1f);
+    border: 1px solid var(--panel-border, #333);
+    border-radius: 10px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+.kmv-head, .kmv-foot {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px;
+    font-size: 14px;
+}
+.kmv-head { border-bottom: 1px solid var(--panel-border, #333); font-weight: 600; }
+.kmv-foot { border-top: 1px solid var(--panel-border, #333); }
+.kmv-note { color: rgba(255, 255, 255, 0.4); font-size: 12px; }
+.kmv-close, #kmv-clear {
+    background: none; border: 0; cursor: pointer;
+    color: rgba(255, 255, 255, 0.55); font-size: 13px;
+}
+.kmv-close:hover, #kmv-clear:hover { color: #fff; }
+#kmv-list { overflow-y: auto; padding: 8px; }
+.kmv-item {
+    display: flex; gap: 12px; align-items: center;
+    padding: 8px; border-radius: 8px;
+    cursor: pointer;
+}
+.kmv-item:hover { background: rgba(255, 255, 255, 0.08); }
+.kmv-item.on { background: rgba(29, 185, 84, 0.16); }
+.kmv-item img { width: 120px; height: 68px; object-fit: cover; border-radius: 4px; flex-shrink: 0; }
+.kmv-meta { min-width: 0; }
+.kmv-name {
+    font-size: 14px; color: #fff;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.kmv-sub { font-size: 12px; color: rgba(255, 255, 255, 0.45); margin-top: 4px; }
+.kmv-empty { padding: 28px; text-align: center; color: rgba(255, 255, 255, 0.4); font-size: 14px; }

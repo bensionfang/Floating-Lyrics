@@ -60,7 +60,7 @@ gh release create v1.1.0 \
 tag 沒帶 `v` 或漏推,純 node 模式的更新提醒也抓不到新版。安裝檔未簽章,`gh release create` 會直接
 公開發布,屬於「發布公開內容」的動作,不要自動執行,要使用者自己按。
 - 靈動島 = Electron 的一個視窗 (`web-app/island.js`),由 `npm run app` 一起帶起,沒有獨立進程也沒有 build 步驟。
-- 沒有 test runner 或 linter。零星的獨立測試檔直接用直譯器跑:`node tests/test_origin_guard.js` (同源守門)、`node tests/test_s2t.js` (簡轉繁)、`node tests/test_lyric_quality.js` (內嵌注音的歌詞守門)、`node tests/test_search_query.js` (繁轉簡 + 瀏覽器標題去噪)、`node tests/test_title_lines.js` (製作人員/版權列標記)、`node tests/test_translations.js` (中文譯文合併)、`node tests/test_romaji.js` (羅馬拼音)、`node tests/test_itunes_resolving.js` (iTunes 原名還原的時序)、`node tests/test_history_toggle.js` (聆聽紀錄開關 + 清除白名單)、`node tests/test_backup_restore.js` (備份/還原 + 還原前的驗證守門)、`node tests/test_scroll_zone.js` (歌詞自動捲動的三段判定)、`node tests/test_game.js` (猜歌的干擾選項挑選)、`node tests/test_island_position.js` (靈動島的多螢幕位置記憶)、`node tests/test_word_times.js` (逐字卡拉OK的跨來源比對)、`node tests/test_loop_end.js` (段落循環的尾段間奏防護)、`node tests/test_lrclib_duration.js` (lrclib 的時長守門)、`node tests/test_lyrics_delete.js` (單首歌詞刪除)、`node tests/test_no_lyrics.js` (標記無歌詞)、`node tests/test_cloud_guard.js` (雲端 B1~B4)、`node tests/test_pkce.js` (行動版的 OAuth PKCE)、`node tests/test_mobile_playback.js` (行動版的播放位置插值)、`node tests/test_mobile_lyrics.js` (行動版的 LRC 解析)、`node tests/test_mobile_color.js` (行動版的封面主色採樣)、`python tests/test_pick_session.py`、`python tests/test_furigana_hint.py` (Python 的要用 `venv/Scripts/python.exe`,系統 python 沒裝 fugashi)。
+- 沒有 test runner 或 linter。零星的獨立測試檔直接用直譯器跑:`node tests/test_origin_guard.js` (同源守門)、`node tests/test_s2t.js` (簡轉繁)、`node tests/test_lyric_quality.js` (內嵌注音的歌詞守門)、`node tests/test_search_query.js` (繁轉簡 + 瀏覽器標題去噪)、`node tests/test_title_lines.js` (製作人員/版權列標記)、`node tests/test_translations.js` (中文譯文合併)、`node tests/test_romaji.js` (羅馬拼音)、`node tests/test_itunes_resolving.js` (iTunes 原名還原的時序)、`node tests/test_history_toggle.js` (聆聽紀錄開關 + 清除白名單)、`node tests/test_backup_restore.js` (備份/還原 + 還原前的驗證守門)、`node tests/test_scroll_zone.js` (歌詞自動捲動的三段判定)、`node tests/test_game.js` (猜歌的干擾選項挑選)、`node tests/test_island_position.js` (靈動島的多螢幕位置記憶)、`node tests/test_word_times.js` (逐字卡拉OK的跨來源比對)、`node tests/test_loop_end.js` (段落循環的尾段間奏防護)、`node tests/test_lrclib_duration.js` (lrclib 的時長守門)、`node tests/test_lyrics_delete.js` (單首歌詞刪除)、`node tests/test_no_lyrics.js` (標記無歌詞)、`node tests/test_cloud_guard.js` (雲端 B1~B4)、`node tests/test_pkce.js` (行動版的 OAuth PKCE)、`node tests/test_mobile_playback.js` (行動版的播放位置插值)、`node tests/test_mobile_lyrics.js` (行動版的 LRC 解析)、`node tests/test_mobile_color.js` (行動版的封面主色採樣)、`node tests/test_karaoke_mode.js` (卡拉OK模式:LRC 解析 + 兩行版面與倒數)、`python tests/test_pick_session.py`、`python tests/test_furigana_hint.py`、`python tests/test_yt_search.py` (MV 背景的 YouTube 搜尋解析) (Python 的要用 `venv/Scripts/python.exe`,系統 python 沒裝 fugashi)。
 - `ROADMAP.md` (repo 根,**本機檔案,不進版控**) 記著 v1.0.0 之後的規劃與**明確不做的事**。動到「未來要做什麼」的討論先看它,免得重新提案已經否決過的方向 (雲端同步、換 tokenizer、離線辭典、Steam 式強制更新)。clone 下來沒有這個檔屬正常。
   主軸是**歌詞體驗**,不是學日文 —— 翻譯/查詞這類功能要進來,得先過「它讓歌詞更好讀嗎」這一關。
 
@@ -452,6 +452,73 @@ GitHub repo 也已改名 `bensionfang/Kanaric`,`server.js` 的 `GITHUB_REPO` 跟
   會往上溢出蓋到頁首,而且捲不到。
 - 回歸測試:`node tests/test_game.js` (干擾選項 + iTunes 曲目清洗 + 計分公式)、`node tests/test_history_toggle.js`
   最後兩項 (遊戲中不寫入 + 關頁後恢復)。
+
+### 卡拉OK模式 (`/karaoke`)
+
+字幕機版面:**當前句 (大字、逐字填色) + 下一句 (小字、灰)**,固定位置不捲動,間奏有倒數點。
+主歌詞頁本來就有逐字填色 (`public/js/karaoke.js` 三端共用),缺的不是填色而是版面 ——
+那一頁是「跟著聽」的捲動式歌詞 (提前 0.25 秒換行、活動行置中、側欄與播放列常駐),
+唱歌要的是「眼睛不追、知道何時開口」。獨立成一頁而不是在首頁加模式:兩者幾乎不共用顯示邏輯
+(不需要 auto-scroll、ruby 編輯、段落循環、點擊 seek),塞進 `app.js` 只會讓
+`renderLyrics`/`syncLyricsToTime` 到處長分支。
+
+- **這一頁的 `<script>` 一定要等 `DOMContentLoaded`** (`karaoke-mode.js`、`karaoke-mv.js` 整支
+  包在裡面)。它們排在 `include('footer')` 之前,而 `window.onMediaMessage` (WebSocket 的 handler
+  註冊點,在 `common.js`) 與 `.player-bar` 都在 footer 裡 —— 立即執行就是
+  `onMediaMessage is not a function`,**整支腳本死掉、畫面永遠停在「等待播放」**。實作時真的踩到。
+  `app.js` 把初始化放在 `DOMContentLoaded` 是同一個理由。
+- **這一頁沒有提前量。** `WEB_APP_LYRICS_ADVANCE` 是為了讓下一句早 0.25 秒上畫面,而字幕機的
+  下一句本來就一直在畫面上。所以 `pos = 內插位置 - syncOffset`,換行與填色吃同一個值,
+  不必像首頁那樣在填色前再減回去 (那一減漏掉過,整首歌填色快 0.25 秒,很難指認)。
+- **整份歌詞一次渲染,靠 class 切換顯示哪兩行 (`.kline` / `.cur` / `.next`),不換 `innerHTML`。**
+  `karaokeSplit` 把字元 span memo 在 `root.__kc` 上且不還原,換行時重寫 innerHTML 就必須手動
+  作廢那個 memo (靈動島踩過:填色去改上一句那批死掉的 span,畫面完全不動且沒有錯誤訊息)。
+  每行各自一顆就沒有這個問題,換行那一幀零重建。
+- **控制列 = 重新樣式化現有的 `.player-bar`,不新做一條。** 備選歌詞浮層
+  (`views/modals/lyrics-options.ejs`) 是 `position: absolute` 錨在播放列裡那顆按鈕上,
+  `display:none` 掉播放列會**連它一起藏掉**。所以改成 `position: fixed` + `translateY(105%)`
+  的自動隱藏浮條 (`body.bar-visible`),⏯/⏭/進度條/備選歌詞/重新載入全部現成。
+  段落循環與編輯假名那兩顆在這一頁 CSS 藏起來 —— 非首頁時 `common.js` 把它們接成「跳回首頁」。
+- 版面數學在 **`public/js/karaoke-slots.js`** (`karaokeSlots`,純函式,理由同 `scroll-zone.js`)。
+  兩條規則:**當前句永遠是有字的那一句** (落在 `♫` 上就把後面那句真歌詞提上來,那時
+  `pos < cur.time`,`karaokePaint` 自己算出 0%);**間隔夠長才倒數**,而且「這是間奏」的門檻
+  (`KARAOKE_GAP_SEC` 6 秒) 與「倒數窗」(`KARAOKE_COUNT_IN_SEC` 3 秒) **是兩個數** ——
+  一般句距的中位數就是 4 秒上下,兩者相等的話每一句都會倒數、整首歌都在閃。
+  分成兩個數也讓**沒有 `♫` 標記的歌詞** (很多來源不寫間奏行) 一樣有倒數。
+- LRC 解析抽成 **`public/js/lrc-parse.js`** 的 `parseLrc()`,首頁與這一頁共用
+  (`app.js` 的 `parseLrcLyrics` 變成寫回全域變數的薄包裝)。**第 4 份抄本就是靜默失效的來源** ——
+  島與行動版各有一份,那兩份回傳的形狀不同 (以時間戳為鍵的對照表),刻意不動。
+- 沒有逐字時間的歌**照樣進**,整句一起亮,角落標「無逐字資料」+ 備選歌詞入口
+  (`lines.some(l => l.words)` 判斷)。歌詞沒有時間軸 (`unsynced`) 才拒絕,那時字幕機沒有意義。
+- 回歸測試 `node tests/test_karaoke_mode.js` (`parseLrc` + `karaokeSlots`)。
+
+**MV 背景 (`karaoke-mv.js` + `yt_search.py`)**:用歌曲資訊搜 YouTube、使用者挑一支,影片鋪滿
+背景、歌詞蓋在上面。
+
+- **影片一律靜音,聲音永遠是 Spotify。** 歌詞位置照舊來自媒體監控,現有管線一行都沒改。
+  **不要提案把歌詞位置改從 YouTube 播放器讀** —— 那是在媒體監控之外接第二條時間軸。
+- **用 IFrame API 不用純 `<iframe src=".../embed/ID">`**:純嵌入沒有 `seekTo`,而 MV 有前奏/
+  對白、長度與音源對不上,不能 seek 就等於沒做。這是**全 app 唯一的外部腳本**
+  (其餘第三方資源一律自架在 `public/vendor/`),所以**只在使用者真的挑了 MV 之後才動態插入**:
+  沒挑 MV 或斷網時整頁行為與沒有這個功能時完全一樣。
+- **搜尋走抓搜尋頁 HTML (`ytInitialData`) 不走 Data API** —— 官方 API 要使用者自己去 Google Cloud
+  申請,app 又多一個密鑰要保管 (BYOK 那套已經整組拆掉)。代價是 YouTube 改版會壞,所以
+  **解析失敗一律回空 list、絕不拋例外**:那時安靜地退回純黑底。`fetch_html` 與 `parse_results`
+  分開,測試只打後者 (`tests/test_yt_search.py`,不打真站);`python yt_search.py` 是打真站的
+  自我檢查,動到解析時跑它。
+- **不做自動挑選**:搜尋結果混著翻唱、演唱會、歌ってみた、鋼琴譜、AMV,猜錯的代價是唱到一半
+  畫面完全不對。排序只做兩件輕的 (`- Topic` 頻道往後 —— 那是靜態封面的自動上傳;時長差 30 秒
+  內往前),其餘讓使用者挑一次,記進 `mv_choices`,下次自動播。
+- **搜尋只在挑選面板打開時才打**,不在換歌時背景預搜 —— 每首歌自動抓一次 YouTube 是找封鎖。
+  server 端 `mvSearchCache` (TTL 6 小時,形狀同 `gameArtistCache`) 擋反覆開面板。
+- 對齊:`mvSync(pos, playing)` 掛在同一個 rAF 迴圈上,**差 0.5 秒才 `seekTo`** 且 seek 後有
+  800ms 冷卻 —— 每幀 seek 會讓影片一直重新緩衝,而 `getCurrentTime` 在 seek 後要一會兒才跟上。
+  影片偏移是**每首歌各自一個值** (`mv_choices.offset`,MV 的前奏長度每首都不同)。
+- **鋪滿的算式要用容器單位 `cqw/cqh` 不能用 `vw/vh`** —— 舞台不是整個視窗 (`.app-container`
+  還留著內距),用視窗單位算出來的尺寸比容器小一圈,左右露黑邊。
+- `mv_choices` **屬使用者資料,不進 `CLEAR_TARGETS`** (同 `search_overrides`);備份靠
+  `VACUUM INTO` 自動涵蓋。三支端點 (`GET /api/mv/search`、`GET /api/mv`、`POST /api/mv`)
+  **桌面專用** —— 雲端的 B1 允許清單是預設拒絕,它們在那台照舊 404 (`test_cloud_guard.js` 蓋得到)。
 
 ### Furigana editing (web frontend)
 

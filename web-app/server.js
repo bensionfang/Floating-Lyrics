@@ -253,6 +253,10 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
     // 逐字時間快取 (data 為 JSON: {flow, ms} = 整首歌的字元流與每字毫秒;空 {} = 三家都問過、沒有逐字)。
     // Python 端 db.py 也會建同一張,改一邊要改兩邊
     db.run(`CREATE TABLE IF NOT EXISTS word_times (artist TEXT, title TEXT, data TEXT, PRIMARY KEY (artist, title))`);
+    // 卡拉OK模式的 MV 背景:每首歌一支使用者親手挑的 YouTube 影片 + 影片偏移 (秒)。
+    // **屬使用者資料** (跟 search_overrides 同類):不進 CLEAR_TARGETS,任何清除路徑都不准碰。
+    // Python 端不碰這張表,所以 db.py 不必跟著建。
+    db.run(`CREATE TABLE IF NOT EXISTS mv_choices (artist TEXT, title TEXT, video_id TEXT, offset REAL, PRIMARY KEY (artist, title))`);
     // 猜歌遊戲的每題紀錄。Python 端不碰這張表,所以 db.py 不必跟著建。
     db.run(`CREATE TABLE IF NOT EXISTS game_history (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -632,6 +636,11 @@ app.get('/editor', (req, res) => {
 
 app.get('/game', (req, res) => {
   res.render('game', { activePage: 'game' });
+});
+
+// 卡拉OK字幕機模式 (兩行大字 + 逐字填色 + 可選的 MV 背景)
+app.get('/karaoke', (req, res) => {
+  res.render('karaoke', { activePage: 'karaoke' });
 });
 
 // 靈動島視窗的內容 (由 Electron 主進程的 island.js 載入,見該檔說明)
@@ -2252,6 +2261,57 @@ app.post('/api/game/artist', async (req, res) => {
 });
 
 
+// ── 卡拉OK模式的 MV 背景 ──────────────────────────────────────────────
+// 一次搜尋 = 一個 Python 程序 + 一次對 YouTube 的請求,而挑選面板每開一次就會問一次
+// (使用者會反覆開來換影片)。所以跟 gameArtistCache 一樣放一層記憶體快取,TTL 也一樣 6 小時。
+const mvSearchCache = new Map();
+const MV_SEARCH_TTL = 6 * 60 * 60 * 1000;
+
+app.get('/api/mv/search', async (req, res) => {
+  const title = String(req.query.title || '').trim();
+  const artist = String(req.query.artist || '').trim();
+  if (!title) return res.status(400).json({ error: 'bad_title' });
+
+  const key = `${artist}|||${title}`.toLowerCase();
+  const hit = mvSearchCache.get(key);
+  if (hit && Date.now() - hit.at < MV_SEARCH_TTL) return res.json({ results: hit.results });
+
+  const duration = Number(req.query.duration) || currentDuration(title, artist) || null;
+  const results = await spawnPyJson(['ytsearch'], {
+    stdin: JSON.stringify({ title, artist, duration }),
+    onJson: (parsed) => (Array.isArray(parsed) ? parsed : []),
+  });
+  if (!results) return res.status(502).json({ error: 'search_failed' });
+  mvSearchCache.set(key, { at: Date.now(), results });   // 失敗不進快取
+  res.json({ results });
+});
+
+app.get('/api/mv', (req, res) => {
+  const title = String(req.query.title || '');
+  const artist = String(req.query.artist || '');
+  db.get('SELECT video_id, offset FROM mv_choices WHERE title=? AND artist=?', [title, artist], (err, row) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(row ? { videoId: row.video_id, offset: row.offset || 0 } : {});
+  });
+});
+
+app.post('/api/mv', (req, res) => {
+  const { title, artist, videoId, offset } = req.body || {};
+  if (!title) return res.status(400).json({ error: 'bad_title' });
+  // videoId 空字串 = 取消這首歌的 MV
+  if (!videoId) {
+    return db.run('DELETE FROM mv_choices WHERE title=? AND artist=?', [title, artist || ''], (err) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ success: true });
+    });
+  }
+  db.run('INSERT OR REPLACE INTO mv_choices (artist, title, video_id, offset) VALUES (?, ?, ?, ?)',
+    [artist || '', title, videoId, Number(offset) || 0], (err) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ success: true });
+    });
+});
+
 app.post('/api/game/result', (req, res) => {
   const { title, artist, correct, hints, answer_ms, mode } = req.body || {};
   if (!title || !artist) return res.status(400).json({ error: 'title and artist are required' });
@@ -2588,52 +2648,65 @@ wss.on('connection', (ws) => {
   ws.send(JSON.stringify({ type: 'init', state: currentMediaState, settings: currentSettings }));
   ws.send(JSON.stringify({ type: 'game_state', active: isGameActive() }));
 
-  // 「猜歌遊戲進行中」綁在遊戲頁自己的連線上,不用旗標檔也不用逾時 ——
-  // 關頁/重整/當掉都會斷線,旗標自動歸零,不會卡成「聆聽紀錄永久停寫」。
+  // 「猜歌遊戲進行中」與「卡拉OK頁開著」都綁在那一頁自己的連線上,不用旗標檔也不用逾時 ——
+  // 關頁/重整/當掉都會斷線,旗標自動歸零,不會卡成「聆聽紀錄永久停寫」或「島再也不回來」。
   ws.on('message', (raw) => {
     let msg;
     try { msg = JSON.parse(raw); } catch (e) { return; }
-    if (!msg || msg.type !== 'game_active') return;
-    const active = !!msg.active;
-    if (ws.isGame === active) return;
-    ws.isGame = active;
-    const on = isGameActive();
-    global.broadcast({ type: 'game_state', active: on });
-    syncIslandForGame(on);
+    if (!msg) return;
+    if (msg.type === 'game_active') {
+      const active = !!msg.active;
+      if (ws.isGame === active) return;
+      ws.isGame = active;
+      // game_state 只跟猜歌有關 (島上的字要換成「猜歌中」),卡拉OK不發這則
+      global.broadcast({ type: 'game_state', active: isGameActive() });
+      syncIslandHidden();
+      return;
+    }
+    if (msg.type === 'karaoke_active') {
+      const active = !!msg.active;
+      if (ws.isKaraoke === active) return;
+      ws.isKaraoke = active;
+      syncIslandHidden();
+    }
   });
 
   ws.on('close', () => {
     console.log('WebSocket client disconnected');
-    // 遊戲頁直接關掉時,島要自己開回來並解除遮蔽
-    if (ws.isGame) {
-      const on = isGameActive();
-      global.broadcast({ type: 'game_state', active: on });
-      syncIslandForGame(on);
-    }
+    // 那兩種頁直接關掉時,島要自己開回來 (猜歌還要解除遮蔽)
+    if (ws.isGame) global.broadcast({ type: 'game_state', active: isGameActive() });
+    if (ws.isGame || ws.isKaraoke) syncIslandHidden();
   });
 });
 
-// 任何一個連線掛著遊戲旗標就算進行中 (同時開兩個遊戲頁不會互相取消)
+// 任何一個連線掛著旗標就算進行中 (同時開兩個遊戲頁/卡拉OK頁不會互相取消)
 function isGameActive() {
   for (const c of wss.clients) if (c.isGame && c.readyState === 1) return true;
   return false;
 }
+function isKaraokeActive() {
+  for (const c of wss.clients) if (c.isKaraoke && c.readyState === 1) return true;
+  return false;
+}
 
-// 猜歌開始就把靈動島整個收起來。島上的字雖然已經換成「猜歌中」,但它是置頂視窗,
-// 遊戲期間擋在畫面上沒有任何用處。**只有「是我們收起來的」才自動開回來** ——
-// 使用者本來就沒開島的話,結束時不該自作主張生一個出來。
-let islandHiddenByGame = false;
-function syncIslandForGame(active) {
+// 猜歌開始、或卡拉OK頁開著,就把靈動島整個收起來。
+//   猜歌:島上的字雖然已經換成「猜歌中」,但它是置頂視窗,遊戲期間擋在畫面上沒有任何用處。
+//   卡拉OK:那一頁本身就是一個更大的歌詞畫面,島是重複的,而且它置頂會蓋在上面。
+// **只有「是我們收起來的」才自動開回來** —— 使用者本來就沒開島的話,離開時不該自作主張
+// 生一個出來。兩個來源共用同一個旗標:先進猜歌再進卡拉OK也只會開回來一次。
+let islandHiddenByPage = false;
+function syncIslandHidden() {
   if (typeof global.isIslandOpen !== 'function') return;   // 純 node (npm start) 沒有主進程
+  const hide = isGameActive() || isKaraokeActive();
   try {
-    if (active && global.isIslandOpen()) {
-      islandHiddenByGame = true;
+    if (hide && global.isIslandOpen()) {
+      islandHiddenByPage = true;
       global.closeIsland();
-    } else if (!active && islandHiddenByGame) {
-      islandHiddenByGame = false;
+    } else if (!hide && islandHiddenByPage) {
+      islandHiddenByPage = false;
       global.openIsland();
     }
-  } catch (e) { console.error('猜歌切換靈動島失敗:', e.message); }
+  } catch (e) { console.error('切換靈動島失敗:', e.message); }
 }
 
 global.broadcast = function(message) {

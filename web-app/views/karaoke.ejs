@@ -1,0 +1,54 @@
+<%- include('header') %>
+<%# 在 header 之後、繪製之前打上 class,不會閃一下側欄 %>
+<script>document.body.classList.add('karaoke-page');</script>
+
+<div id="karaoke-stage">
+    <%# MV 背景:YouTube 的 iframe 由 karaoke-mv.js 動態插進來,沒挑 MV 時這裡是空的。
+        **刻意不蓋暗化層** —— 影片要保持原本的亮度,歌詞的可讀性靠自己的描邊 (見 style.css) %>
+    <div id="karaoke-mv"></div>
+
+    <%# 前奏/間奏倒數:排在歌詞**上面** (歌詞貼著畫面下緣,倒數放下面會擠到控制列) %>
+    <div id="karaoke-countin" class="hidden">
+        <span class="kdot"></span><span class="kdot"></span><span class="kdot"></span>
+        <span class="kdot"></span><span class="kdot"></span>
+        <span id="karaoke-countin-sec"></span>
+    </div>
+
+    <div id="karaoke-lines"></div>
+
+    <%# 等待播放 / 找不到歌詞 / 歌詞沒有時間軸 %>
+    <div id="karaoke-status">
+        <i class="fa-solid fa-microphone-lines"></i>
+        <p>等待播放...</p>
+    </div>
+
+    <%# 這首歌沒有逐字時間 (只有行級 LRC):整句一起亮,標一下並給備選歌詞的入口 %>
+    <div id="karaoke-degraded" class="hidden">
+        <i class="fa-solid fa-circle-info"></i>
+        <span>無逐字資料,整句一起亮</span>
+        <button type="button" onclick="karaokeFindLyrics()">找別份歌詞</button>
+    </div>
+
+    <a id="karaoke-exit" href="/" data-tip="離開卡拉OK"><i class="fa-solid fa-xmark"></i></a>
+</div>
+
+<%# MV 挑選面板:置中的浮層,不錨在按鈕上,所以不受播放列自動隱藏影響 %>
+<div id="karaoke-mv-mask" class="hidden" onclick="karaokeCloseMvPicker()"></div>
+<div id="karaoke-mv-picker" class="hidden">
+    <div class="kmv-head">
+        <span id="kmv-title">MV 背景</span>
+        <button type="button" class="kmv-close" onclick="karaokeCloseMvPicker()"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <div id="kmv-list"></div>
+    <div class="kmv-foot">
+        <span class="kmv-note">影片會靜音播放,聲音仍然來自播放器</span>
+        <button type="button" id="kmv-clear" onclick="karaokeClearMv()">取消 MV</button>
+    </div>
+</div>
+
+<script src="/js/karaoke.js?v=2"></script>
+<script src="/js/lrc-parse.js?v=1"></script>
+<script src="/js/karaoke-slots.js?v=1"></script>
+<script src="/js/karaoke-mv.js?v=1"></script>
+<script src="/js/karaoke-mode.js?v=2"></script>
+<%- include('footer') %>

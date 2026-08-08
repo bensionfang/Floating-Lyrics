@@ -852,11 +852,24 @@
         // 連線活著時保底輪詢整個不要打 —— 那支回的是整份狀態,問一次就是 171 KB,
         // 「反正只有 2 秒一次」仍然是常態 85 KB/s。兩個輪詢 (這裡與 app.js) 都看這個旗標。
         window.__mediaSocketAlive = false;
+        // 「這一頁正開著」這類旗標要送回 server (卡拉OK頁靠它讓靈動島讓開)。**一定要 sticky** ——
+        // 連線 3 秒後會自動重連,只送一次的話重連後 server 那邊的旗標就永遠是關的,
+        // 而斷線本身沒有任何徵兆 (症狀:島自己跑回來)。重連時整份重送。
+        window.__stickyMsgs = new Map();
+        window.sendMediaSocket = (msg, stickyKey) => {
+            if (stickyKey) window.__stickyMsgs.set(stickyKey, msg);
+            const ws = window.__mediaSocket;
+            if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg));
+        };
         (function connectMediaSocket() {
             const connect = () => {
                 let ws;
                 try { ws = new WebSocket(`ws://${location.host}`); } catch (e) { return setTimeout(connect, 3000); }
-                ws.onopen = () => { window.__mediaSocketAlive = true; };
+                window.__mediaSocket = ws;
+                ws.onopen = () => {
+                    window.__mediaSocketAlive = true;
+                    window.__stickyMsgs.forEach((m) => { try { ws.send(JSON.stringify(m)); } catch (e) {} });
+                };
                 ws.onmessage = (ev) => {
                     let msg;
                     try { msg = JSON.parse(ev.data); } catch (e) { return; }
