@@ -49,6 +49,16 @@
   .icon-btn:active { opacity: 1; background: rgba(255,255,255,.12); }
 
   /* --- 歌詞 --- */
+  /* 包一層只為了讓「回到目前這句」浮在歌詞上而不佔版面 —— #lyrics 自己是捲動容器,
+     按鈕放進去會跟著捲走;放進 body 那條 flex 又會在出現/消失時把歌詞區的高度推來推去。
+     **#lyrics 的 position: relative 一個字都沒動**,它仍然是子元素的 offsetParent */
+  .lyrics-wrap { flex: 1; min-height: 0; position: relative; display: flex; }
+  .resync-pill {
+    position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%);
+    background: rgba(255,255,255,.92); color: #000; border: 0; white-space: nowrap;
+    border-radius: 999px; padding: 8px 16px; font-size: 13px; font-weight: 600;
+    cursor: pointer; -webkit-appearance: none; box-shadow: 0 3px 14px rgba(0,0,0,.45);
+  }
   /* position 不可以拿掉:置中是靠 el.offsetTop 算的,沒有它 offsetParent 會變成 <body>,
      量到的是「離整頁頂端」的距離 (多算了頂列),當前行就被推到畫面上方外 */
   .lyrics {
@@ -84,6 +94,15 @@
   .lyrics p.on ~ p { color: var(--lyric-dim); }
   .lyrics.before-start p { color: var(--lyric-dim); }
   .lyrics p.loop { background: rgba(29,185,84,.16); border-radius: 10px; }
+  /* 長按 500ms = 設循環點,但按下去的那半秒本來完全沒有回饋,分不出「按夠久了」還是手滑。
+     **transition-delay 150ms 是關鍵**:一般點擊在那之前 class 就被移掉了,完全看不到它;
+     撐過 150ms 之後背景用 350ms 浮起來,浮滿正好是觸發的那一刻。
+     要排在 .loop 後面 (同特異度,後者勝) —— 長按已經在循環段內的句子時才會蓋過綠底。
+     移除 class 時回到 .lyrics p 的 transition (不含 background),所以是瞬間收掉,那是對的 */
+  .lyrics p.pressing {
+    background: rgba(255,255,255,.16); border-radius: 10px;
+    transition: background .35s ease .15s;
+  }
   /* 逐字卡拉OK填色 (../js/karaoke.js 掛的 class,三個端共用同一份實作)。
      當前句本來就是亮的,所以是「還沒唱到的先暗下去」。沒有逐字資料的歌一個 class
      都不會掛上,整句照舊一起變亮。.kc 不設 transition:逐字要銳利,補間會把「唱到哪」糊掉 */
@@ -146,8 +165,9 @@
   .track-title { font-size: 20px; font-weight: 700; }
   .track-artist { font-size: 16px; opacity: .75; margin-top: 2px; }
   /* 進度條由 rAF 每幀寫 width,所以刻意不加 CSS transition —— 兩邊會互相打架而變黏。
-     外面包一層高一點的 .hit 是為了好按:視覺 4px、觸控區 20px */
-  .hit { padding: 8px 0; cursor: pointer; }
+     外面包一層高一點的 .hit 是為了好按:視覺 4px、觸控區 20px。
+     touch-action: none 是拖曳的前提:不設的話瀏覽器會先把手勢判成捲動,pointermove 就斷了 */
+  .hit { padding: 8px 0; cursor: pointer; touch-action: none; }
   .bar { height: 4px; background: rgba(255,255,255,.28); border-radius: 2px; overflow: hidden; }
   .bar > i { display: block; height: 100%; width: 0; background: var(--text); }
   .times { display: flex; justify-content: space-between; margin-top: 4px;
@@ -217,6 +237,27 @@
     padding: 10px 0; font-size: 14px; cursor: pointer; -webkit-appearance: none;
   }
   .opt small { display: block; color: var(--dim); font-size: 11px; margin-top: 3px; }
+  /* 格式標籤與桌面同一套三分法 (lyrics-tools.js 的 optFormat):標的是**那份檔案本身的格式**,
+     不是「選了它才有卡拉OK」—— 逐字時間是跨來源比對回來的,選 LRC 那份照樣會填 */
+  .fmt { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 10px;
+         font-weight: 700; vertical-align: 1px; }
+  .fmt.word { background: rgba(240,190,60,.22); color: #f0be3c; }
+  .fmt.synced { background: rgba(29,185,84,.22); color: var(--accent); }
+  .fmt.plain { background: rgba(255,255,255,.12); color: var(--dim); }
+  /* 自訂關鍵字:兩欄並排。input 本身是 width:100%,要靠 min-width:0 才縮得下去 */
+  .mrow { display: flex; gap: 8px; }
+  .mrow input { min-width: 0; }
+
+  /* --- 手勢說明 (第一次開啟時蓋在歌詞上) --- */
+  .guide {
+    position: absolute; inset: 12px 14px auto; z-index: 8;
+    background: #1e1e1eee; border: 1px solid var(--border); border-radius: 14px;
+    padding: 16px 18px; box-shadow: 0 8px 30px rgba(0,0,0,.55);
+    -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+  }
+  .guide h3 { margin: 0 0 10px; font-size: 15px; }
+  .guide ul { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.75; color: #ddd; }
+  .guide .btn { margin-top: 14px; }
   .hint { font-size: 11px; color: var(--dim); margin: 10px 0 0; word-break: break-all; }
   code { background: #000; padding: 2px 5px; border-radius: 4px; }
 </style>
@@ -242,7 +283,22 @@
   </button>
 </div>
 
-<div id="lyrics" class="lyrics"></div>
+<div class="lyrics-wrap">
+  <div id="lyrics" class="lyrics"></div>
+  <!-- 活動行被使用者捲出畫面時才出現 (scroll-zone.js 判的 offscreen) —— 沒有它就只能
+       自己捲回去找,而歌詞每幾秒還在往下走 -->
+  <button id="resync" class="resync-pill hidden">回到目前這句</button>
+  <!-- 手勢全是隱形的 (長按、連點、左滑),桌面有整套使用說明導覽,這裡至少要講一次 -->
+  <div id="guide" class="guide hidden">
+    <h3>三個手勢</h3>
+    <ul>
+      <li><b>點</b>一句 → 跳到那裡</li>
+      <li><b>長按</b>一句 → 設段落循環的起點,再長按另一句設終點</li>
+      <li>反白的那幾句上<b>連點兩下</b> → 取消循環</li>
+    </ul>
+    <button id="guide-ok" class="btn">知道了</button>
+  </div>
+</div>
 
 <div id="tools" class="tools hidden">
   <div class="trow"><span>歌詞時間軸</span>
@@ -321,7 +377,20 @@
 
   <button id="opts-btn" class="btn ghost">搜尋備選歌詞</button>
   <button id="reload-btn" class="btn ghost">重新載入歌詞</button>
+  <!-- 自動搜出來的都不對時自己打 (桌面的 manualSearchLyrics)。手機上更常需要:Spotify 給的
+       常是羅馬字名,iTunes 還原失敗整首就查不到。留空 = 用歌名本身 -->
+  <label>搜不到?自己打關鍵字</label>
+  <div class="mrow">
+    <input id="manual-title" type="text" placeholder="歌名"
+           autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <input id="manual-artist" type="text" placeholder="歌手"
+           autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+  </div>
   <div id="opts"></div>
+
+  <div class="srow"><span>手勢說明</span>
+    <button id="guide-btn" class="tbtn">再看一次</button>
+  </div>
 
   <label for="client-id">Spotify Client ID</label>
   <input id="client-id" type="text" autocomplete="off" autocapitalize="off"
@@ -344,6 +413,8 @@
 <script src="color.js"></script>
 <!-- 逐字卡拉OK填色:與歌詞區、靈動島共用同一份實作 (刻意不複製進 mobile/) -->
 <script src="../js/karaoke.js"></script>
+<!-- 自動捲動的三段判定:與桌面歌詞區共用同一支純函式,同上 (兩邊各寫一份就是靜默失效) -->
+<script src="../js/scroll-zone.js"></script>
 <script>
 (() => {
   'use strict';
@@ -362,6 +433,8 @@
   const LS_SCOPE   = 'kanaric.mobile.scope';
   const LS_PREFS   = 'kanaric.mobile.prefs';      // 純顯示偏好,一個鍵存一個物件
   const LS_OFFSETS = 'kanaric.mobile.offsets';    // 每首歌的歌詞時間偏移 (秒)
+  const LS_SEARCH  = 'kanaric.mobile.search';     // 每首歌的自訂搜尋關鍵字
+  const LS_GUIDE   = 'kanaric.mobile.guideSeen';  // 手勢說明看過了
   const SS_VERIFIER = 'kanaric.mobile.verifier';
   const SS_STATE    = 'kanaric.mobile.state';
 
@@ -442,6 +515,7 @@
 
   function openSheet() {
     showShellVersion();
+    fillManual();
     $('client-id').value = clientId();
     $('api-token').value = localStorage.getItem(LS_TOKEN) || '';
     // 「連接 Spotify」與「登出」是互斥的,同時出現只會讓人猶豫該按哪顆。
@@ -764,6 +838,9 @@
   let lyricsFor = null;    // 目前這份歌詞是哪個 track id 的 (慢回應蓋掉新歌的守門)
   let lyricsMeta = null;   // server 還原後的 (title, artist) —— 備選歌詞那兩支端點的鍵是它,不是 Spotify 給的原字串
   let gapMs = 0;           // 這首歌「一句多長」的中位數,段落循環的間奏防護要用
+  // 「現在還跟著歌走嗎」。使用者一用手指捲動就變 false,活動行自己漂回中間帶再黏回來
+  // (與桌面 app.js 的 autoCenter 同一套心智模型,判定共用 scroll-zone.js)
+  let autoCenter = true;
 
   const showEmpty = (text) => { $('lyrics').innerHTML = `<p class="empty">${escapeHtml(text)}</p>`; };
 
@@ -774,6 +851,8 @@
   async function loadLyrics(t) {
     lines = [];
     activeLine = -1;
+    autoCenter = true;
+    $('resync').classList.add('hidden');
     lyricsFor = t && t.id;
     lyricsMeta = null;
     clearLoop();            // 行號只對得上同一份歌詞
@@ -852,10 +931,13 @@
   function showLyrics(data) {
     lines = parseLrc(data.lyrics);
     gapMs = medianGap(lines);
+    autoCenter = true;                              // 新的一份歌詞:重新黏上
+    $('resync').classList.add('hidden');
     // 備選歌詞的鍵要用 server 還原過的名字 (Spotify 給的是 Haru Dorobou / 魚韻),
     // 那兩支端點查的是同一個 optionJobs 鍵。lrclib 備援沒有這兩欄,退回原字串
     lyricsMeta = { title: data.title || (track && track.title), artist: data.artist || (track && track.artist) };
     $('lyrics-source').textContent = lines.length ? data.source : '找不到歌詞';
+    fillManual();   // 換歌了,輸入框要跟著換成新這首的 (抽屜開著時也要對)
     if (!lines.length) return showEmpty('找不到這首歌的歌詞');
     // 歌詞是 furigana_inject.py 逃逸過的 <ruby> HTML,譯文則由 translations.js 的
     // escapeHtml 逃逸過 —— 兩邊都逃逸過了才敢直接 innerHTML
@@ -864,13 +946,29 @@
       `${l.trans ? `<span class="tr">${l.trans}</span>` : ''}</p>`).join('');
   }
 
-  /** 高亮 + 置中。只在換行時動,不然每幀寫 scrollTop 會把手動捲動整個吃掉 */
+  /** 活動行離開畫面時才顯示「回到目前這句」。可見性判定重用 scrollZoneAction 的 offscreen,
+      不要另外寫一份幾何 —— 兩份一定會漂,而漂掉的症狀是按鈕該出來時不出來 */
+  function updateResync() {
+    const pane = $('lyrics'), el = pane.children[activeLine];
+    const off = !!el && scrollZoneAction(
+      el.offsetTop - pane.scrollTop, el.offsetHeight, pane.clientHeight, true) === 'offscreen';
+    $('resync').classList.toggle('hidden', !off);
+  }
+
+  function centerLine(el) {
+    const pane = $('lyrics');
+    pane.scrollTo({ top: el.offsetTop - pane.clientHeight / 2 + el.offsetHeight / 2, behavior: 'smooth' });
+  }
+
+  /** 高亮 + 捲動。只在換行時動,不然每幀寫 scrollTop 會把手動捲動整個吃掉 */
   function syncLyrics(posMs) {
     const pane = $('lyrics');
-    const i = activeIndex(lines, posMs);
+    // hint = 上一幀的答案。每幀重掃整首歌是純浪費 (見 lyrics.js 那邊的註解)
+    const i = activeIndex(lines, posMs, activeLine);
     if (i !== activeLine) {
       const prev = pane.children[activeLine];
       if (prev) { prev.classList.remove('on'); karaokeClear(prev); }
+      const adjacent = i === activeLine + 1;   // seek / 換歌 / 重畫都不是,那些一律置中
       activeLine = i;
       // 還沒唱到第一句 (i = -1:前奏,或 seek 回開頭)。「唱過的留白」是靠預設色亮 +
       // `p.on ~ p` 壓暗做的,那時整份沒有 .on,不掛這個 class 就會整頁全白
@@ -878,7 +976,13 @@
       const el = pane.children[i];
       if (!el) return;
       el.classList.add('on');
-      pane.scrollTo({ top: el.offsetTop - pane.clientHeight / 2 + el.offsetHeight / 2, behavior: 'smooth' });
+      // **不要改回無條件置中**:那樣使用者往下翻看後面的歌詞,下一句一到 (幾秒內) 就被
+      // 拉回來。三段規則:中間帶置中 / 上下半只換高亮讓行往下漂 / 離開畫面就停手並跳出按鈕
+      const st = nextScrollState(autoCenter, el.offsetTop - pane.scrollTop,
+                                 el.offsetHeight, pane.clientHeight, adjacent);
+      autoCenter = st.autoCenter;
+      if (st.action === 'center') centerLine(el);
+      updateResync();
     }
     // 卡拉OK填色**在換行判斷之外**:同一句的每一幀都要更新,那才是「逐字」的意思。
     // 沒有逐字資料的歌 karaokePaint 自己早退,整句照舊一起變白。
@@ -987,8 +1091,32 @@
 
   let optPoll = null;
 
+  /** 備選歌詞三支端點共用的鍵。**一定是 server 還原後的 (title, artist),不含自訂關鍵字** ——
+      server 的 jobKey 就是 `artist|||title`,帶別的東西進來 state/pick 就查不到那個 job */
   function optQuery() {
     return new URLSearchParams({ title: lyricsMeta.title, artist: lyricsMeta.artist });
+  }
+
+  // 自訂搜尋關鍵字。桌面存 DB 的 search_overrides (那要 POST,雲端是 GET-only),手機存自己的
+  // localStorage。**只影響「搜尋備選歌詞」那條路** —— /api/lyrics 不吃 searchTitle;但挑中的
+  // 那份本來就會寫進本機快取 (loadLyrics 的第一順位),所以效果一樣是持久的
+  const SEARCH_MAX = 100;
+  const readSearches = () => { try { return JSON.parse(localStorage.getItem(LS_SEARCH) || '{}'); } catch (e) { return {}; } };
+
+  function saveSearch(id, val) {
+    const all = readSearches();
+    if (val) all[id] = val; else delete all[id];
+    for (const k of Object.keys(all).slice(0, -SEARCH_MAX)) delete all[k];
+    try { localStorage.setItem(LS_SEARCH, JSON.stringify(all)); } catch (e) { /* 配額滿了就這次不存 */ }
+  }
+
+  /** 兩個輸入框填成「這首歌上次打的關鍵字」,沒打過就填歌名本身 (與桌面同樣的判準:
+      跟歌名不一樣才算自訂) */
+  function fillManual() {
+    const saved = (track && readSearches()[track.id]) || null;
+    const base = lyricsMeta || track || {};
+    $('manual-title').value = (saved && saved.t) || base.title || '';
+    $('manual-artist').value = (saved && saved.a) || base.artist || '';
   }
 
   /**
@@ -1000,8 +1128,22 @@
     if (!lyricsMeta || !track) return;
     const id = track.id;
     const q = optQuery();
+    // 使用者改過輸入框才帶 searchTitle/searchArtist,兩件事跟著來:
+    //  - **一定要一起帶 force=1** —— startOptionsJob 對同一個 (artist,title) 有現成的 job 就
+    //    直接回傳,不 force 的話換了關鍵字什麼都不會發生,而且沒有任何錯誤 (靜默失效)。
+    //  - 帶了就是 server 那邊的 explicit,它刻意不寫快取:那兩張表的鍵是「正在播的這首」,
+    //    而輸入框讓人打任何歌名,寫下去等於把別首歌的譯文與逐字時間蓋到這首上。
+    const mt = $('manual-title').value.trim(), ma = $('manual-artist').value.trim();
+    const manual = (!!mt && mt !== lyricsMeta.title) || (!!ma && ma !== lyricsMeta.artist);
+    const start = new URLSearchParams(q);
+    if (manual) {
+      start.set('searchTitle', mt || lyricsMeta.title);
+      start.set('searchArtist', ma || lyricsMeta.artist);
+      start.set('force', '1');
+    }
+    saveSearch(id, manual ? { t: mt, a: ma } : null);   // 改回歌名本身 = 清掉這首的覆蓋
     $('opts').innerHTML = '<p class="hint">搜尋中…(冷啟動時最多要一分鐘)</p>';
-    apiGet(`/api/lyrics/options?${q}`).catch(() => {});   // 失敗也不用管,state 那邊看得到
+    apiGet(`/api/lyrics/options?${start}`).catch(() => {});   // 失敗也不用管,state 那邊看得到
     clearInterval(optPoll);
     const started = Date.now();
     optPoll = setInterval(async () => {
@@ -1018,12 +1160,18 @@
     }, 2500);
   }
 
+  // 與桌面 lyrics-tools.js 的 optFormat 同一套三分法。舊版只分 LRC / 純文字,分不出哪一份
+  // 帶逐字時間 (QQ 的 QRC),而那正是卡拉OK填色最準的來源。**brief=1 只拔 lyrics 本體**,
+  // hasWords / isSynced 本來就在回應裡,不必動 server
+  const optFormat = (o) => o.hasWords ? ['word', '逐字'] : o.isSynced ? ['synced', 'LRC'] : ['plain', 'TXT'];
+
   function renderOptions(options) {
     if (!options || !options.length) return;   // 還沒有結果就留著「搜尋中」那行
-    $('opts').innerHTML = options.map((o, i) =>
-      `<button class="opt" data-i="${i}">${escapeHtml(o.title)}` +
-      `<small>${escapeHtml(o.artist)} · ${escapeHtml(o.provider)} · ${o.isSynced ? 'LRC' : '純文字'}</small></button>`
-    ).join('');
+    $('opts').innerHTML = options.map((o, i) => {
+      const [cls, label] = optFormat(o);
+      return `<button class="opt" data-i="${i}">${escapeHtml(o.title)}` +
+        `<small><span class="fmt ${cls}">${label}</span> ${escapeHtml(o.artist)} · ${escapeHtml(o.provider)}</small></button>`;
+    }).join('');
   }
 
   async function pickOption(i) {
@@ -1058,6 +1206,13 @@
     // **不要拿救援鈕的可見性當旗標** —— `render()` 只要收到 track 就把它藏起來 (「有歌在播就
     // 不需要那顆」),而叫不動的當下 /me/player 照樣回得出一首暫停中的歌,條件永遠是 false。
     if (wait !== Infinity && performance.now() - wantPlaybackAt < 60000) wait = Math.min(wait, 3000);
+    // 快播完了就把下一次輪詢排在歌曲結束的那一刻。平常 3 秒一次 = 換歌最慢要 3 秒才發現,
+    // 歌詞也跟著晚 3 秒才開始抓。**不是無腦調高頻率** —— 只有「播放中而且知道長度」時才縮,
+    // 而且一首歌只會踩到一次。+400ms 是給 Spotify 那邊換好曲目的餘裕,太準會拿到舊的那首
+    if (wait !== Infinity && track && track.isPlaying && track.durationMs) {
+      const left = track.durationMs - positionAt(track, performance.now());
+      if (left > 0 && left + 400 < wait) wait = Math.max(left + 400, 500);
+    }
     if (wait === Infinity) return;
     pollTimer = setTimeout(tick, wait);
   }
@@ -1090,13 +1245,29 @@
     }
   }
 
+  // 元素抓一次就好:下面兩個是 rAF 每幀都要用的,每幀 getElementById 純浪費
+  const elBar = $('bar-fill'), elPos = $('pos-fmt');
+  let lastPct = -1, lastPosText = '';
+  let dragRatio = null;   // 拖曳進度條中:畫面歸手指管,frame() 不准覆寫
+
+  /**
+   * 寫進度條與時間。**值沒變就不寫** —— rAF 是每幀跑的,而暫停時位置根本不動,
+   * 無條件寫 style/textContent 等於每秒白做一百多次版面失效,而這一頁的 Wake Lock
+   * 正壓著螢幕不熄。小數點後一位是進度條實際看得出來的解析度。
+   */
+  function paintProgress(pos) {
+    const pct = (track && track.durationMs) ? Math.round((pos / track.durationMs) * 1000) / 10 : 0;
+    if (pct !== lastPct) { elBar.style.width = `${pct}%`; lastPct = pct; }
+    const t = formatTime(pos);
+    if (t !== lastPosText) { elPos.textContent = t; lastPosText = t; }
+  }
+
   // 進度條:rAF 每幀用 performance.now() 插值。分頁隱藏時瀏覽器自己會停掉 rAF,不必自己管
   function frame() {
     if (track) {
       const now = performance.now();
       const pos = positionAt(track, now);
-      $('bar-fill').style.width = track.durationMs ? `${(pos / track.durationMs) * 100}%` : '0';
-      $('pos-fmt').textContent = formatTime(pos);
+      if (dragRatio === null) paintProgress(pos);
       // 偏移只調歌詞,**進度條與時間不能減** —— 那是真實的播放位置 (桌面也是只調歌詞)
       syncLyrics(pos - offsetMs);
       // 段落循環。那個 2 秒的窗是必要的,不是防禦性程式:seek() 是樂觀更新,本地位置立刻
@@ -1134,7 +1305,9 @@
     if (art.getAttribute('src') !== url) {
       if (url) art.setAttribute('src', url); else { art.removeAttribute('src'); paintBg(FALLBACK); }
     }
-    if (!t) { $('bar-fill').style.width = '0'; $('pos-fmt').textContent = '0:00'; }
+    // 走 paintProgress 而不是直接寫 —— 它記著「上次寫了什麼」,繞過去的話那份記錄會過期,
+    // 下一首歌開頭剛好也算出 0% 時就不寫了,進度條停在上一首的位置
+    if (!t) paintProgress(0);
   }
 
   // --- 封面主色 -------------------------------------------------------------
@@ -1174,6 +1347,9 @@
     closeSheet();
     $('playbar').classList.remove('hidden');
     keepAwake();
+    // 長按設循環、連點取消、左滑關抽屜全是隱形的手勢 —— 桌面有整套使用說明導覽,
+    // 這裡至少第一次要講一次 (之後從抽屜的「再看一次」叫得回來)
+    if (!localStorage.getItem(LS_GUIDE)) $('guide').classList.remove('hidden');
   }
 
   // --- 進場 -----------------------------------------------------------------
@@ -1207,14 +1383,33 @@
     $('play-btn').addEventListener('click', togglePlay);
     $('resume-btn').addEventListener('click', resumeOnSpotify);
 
-    // 進度條點一下跳轉。**只做點擊不做拖曳** —— 拖曳要另外管 pointer 事件、還要在拖曳
-    // 期間擋掉 rAF 對 width 的覆寫,多一整截程式碼;手機上點也比拖好按。
-    // ponytail: 要拖曳的話在這裡加 pointerdown/move/up 並在拖曳中設一個旗標讓 frame() 早退
-    $('prog-hit').addEventListener('click', (e) => {
+    // 進度條:按下去就跟著手指走,放開才 seek。點一下也走同一條路 (pointerdown + up 同位置),
+    // 所以不需要另外掛 click。拖曳期間 frame() 靠 dragRatio 早退,不然每幀會把手指的位置蓋掉。
+    // setPointerCapture:手指滑出那 20px 的觸控區之後事件還要繼續送過來
+    const hit = $('prog-hit');
+    const ratioAt = (clientX) => {
+      const r = hit.getBoundingClientRect();
+      return Math.min(1, Math.max(0, (clientX - r.left) / r.width));
+    };
+    hit.addEventListener('pointerdown', (e) => {
       if (!track || !track.durationMs) return;
-      const r = $('prog-hit').getBoundingClientRect();
-      seek(Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) * track.durationMs);
+      dragRatio = ratioAt(e.clientX);
+      hit.setPointerCapture(e.pointerId);
+      paintProgress(dragRatio * track.durationMs);
     });
+    hit.addEventListener('pointermove', (e) => {
+      if (dragRatio === null) return;
+      dragRatio = ratioAt(e.clientX);
+      paintProgress(dragRatio * track.durationMs);
+    });
+    hit.addEventListener('pointerup', () => {
+      if (dragRatio === null) return;
+      const ms = dragRatio * track.durationMs;
+      dragRatio = null;   // 要先清掉:seek 是樂觀更新,會立刻重畫
+      seek(ms);
+    });
+    // 取消 (系統手勢搶走、來電…) 就當沒發生過,下一幀 frame() 自己把位置畫回去
+    hit.addEventListener('pointercancel', () => { dragRatio = null; });
 
     // 點歌詞跳到那一句;長按 500ms 則是設段落循環的 A/B (不做模式開關)。
     // 時間戳本來就在 parseLrc 的結果裡,不必另外存
@@ -1225,7 +1420,13 @@
       if (!p || p.classList.contains('empty')) return -1;
       return [].indexOf.call(pane.children, p);
     };
-    const cancelPress = () => { clearTimeout(pressTimer); pressTimer = null; pressAt = null; };
+    // .pressing 的背景在 150ms 延遲後花 350ms 浮起來,浮滿正好是觸發的那一刻 (見 CSS) ——
+    // 沒有它的話按下去的那半秒完全沒有回饋,分不出「按夠久了」還是手滑
+    let pressEl = null;
+    const cancelPress = () => {
+      clearTimeout(pressTimer); pressTimer = null; pressAt = null;
+      if (pressEl) { pressEl.classList.remove('pressing'); pressEl = null; }
+    };
 
     pane.addEventListener('pointerdown', (e) => {
       // 在 pointerdown 清旗標而不是在 click 消耗掉:長按之後不一定會有 click 事件,
@@ -1234,9 +1435,13 @@
       const i = lineOf(e);
       if (i < 0 || !lines[i]) return;
       pressAt = { x: e.clientX, y: e.clientY };
+      pressEl = pane.children[i];
+      pressEl.classList.add('pressing');
       pressTimer = setTimeout(() => {
         pressTimer = null;
         suppressClick = true;
+        cancelPress();                                  // 觸發的當下就收掉,讓 .loop 的綠底接手
+        if (navigator.vibrate) navigator.vibrate(15);   // Android 有,iOS Safari 沒有 —— 有就用
         pickLoop(i);
       }, 500);
     });
@@ -1266,12 +1471,49 @@
       seek(lines[i].ms + offsetMs);
     });
 
+    // 手指一動就脫離同步。**認 touchmove 而不是 scroll** —— scroll 分不出是誰捲的
+    // (平滑捲動、視窗重排都會發),桌面版為此要多一套「最近 1 秒內有手勢」的濾波;
+    // 這一頁只有手指會捲它,直接認手勢最省。單純點一下不會動,所以點歌詞跳轉不受影響
+    pane.addEventListener('touchmove', () => { autoCenter = false; }, { passive: true });
+    // 捲動中同步更新按鈕:只在換行時算的話,把當前句捲出畫面後要等下一句才看得到出口
+    pane.addEventListener('scroll', updateResync, { passive: true });
+    $('resync').addEventListener('click', () => {
+      autoCenter = true;
+      const el = pane.children[activeLine];
+      if (el) centerLine(el);
+      $('resync').classList.add('hidden');
+    });
+
+    // 抽屜往左滑關掉。**刻意不做「從左緣滑出來開啟」** —— Safari 分頁模式下左緣往右滑是
+    // 瀏覽器的返回手勢,搶不過;而 standalone 有、分頁沒有的話兩種模式手感又不一致
+    let swipeAt = null;
+    $('drawer').addEventListener('touchstart', (e) => {
+      swipeAt = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    }, { passive: true });
+    $('drawer').addEventListener('touchmove', (e) => {
+      if (!swipeAt) return;
+      const dx = e.touches[0].clientX - swipeAt.x, dy = e.touches[0].clientY - swipeAt.y;
+      // 抽屜自己是垂直捲動的 (設定項目一長串),橫向要明顯大於縱向才算滑動關閉
+      if (dx < -60 && Math.abs(dx) > Math.abs(dy) * 2) { swipeAt = null; closeSheet(); }
+    }, { passive: true });
+    $('drawer').addEventListener('touchend', () => { swipeAt = null; }, { passive: true });
+
     // 工具條
     $('tools-btn').addEventListener('click', () => $('tools').classList.toggle('hidden'));
     $('off-minus').addEventListener('click', () => bumpOffset(-0.1));
     $('off-plus').addEventListener('click', () => bumpOffset(0.1));
     $('off-val').addEventListener('click', () => bumpOffset(null));
     $('loop-clear').addEventListener('click', clearLoop);
+
+    // 手勢說明
+    $('guide-ok').addEventListener('click', () => {
+      $('guide').classList.add('hidden');
+      localStorage.setItem(LS_GUIDE, '1');
+    });
+    $('guide-btn').addEventListener('click', () => {
+      closeSheet();   // 抽屜蓋著大半個螢幕,不收起來就看不到那張卡
+      $('guide').classList.remove('hidden');
+    });
 
     // 抽屜裡的歌詞工具
     $('reload-btn').addEventListener('click', reloadLyrics);

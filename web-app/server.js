@@ -74,6 +74,10 @@ const normOrigin = (v) => { try { return v ? new URL(v).origin : ''; } catch (e)
 // middleware 與 WebSocket 的 verifyClient 共用同一個判斷,不要各寫一份
 const isAllowedOrigin = (o) => ALLOWED_ORIGINS.has(o) || (!!mobileOrigin && o === mobileOrigin);
 
+// 行動版 shell 裡不在 /mobile/ 底下的那幾支。**與 public/mobile/sw.js 的 EXTRA_PATHS 是
+// 同一份清單**,加檔案時兩邊一起改 (漏掉的症狀見下面 B1 那段註解)。
+const MOBILE_SHELL_EXTRA = new Set(['/js/karaoke.js', '/js/scroll-zone.js']);
+
 // B1:雲端唯讀模式的允許清單。**這是整台機器的攻擊面** —— /api/settings、/api/restore、
 // /api/db-clear、/api/restore 在這裡直接變成 404,連被試探的機會都沒有,不必為此做帳號系統。
 // 放在同源守門之前:先判「這條路存不存在」再判「你是誰」。
@@ -130,13 +134,14 @@ if (CLOUD) {
       const limiter = GATED.get(req.path);
       return limiter ? limiter(req, res, next) : next();
     }
-    // 行動版的 shell 有唯一一支不在 /mobile/ 底下的檔案:逐字填色 (public/js/karaoke.js)
-    // 是歌詞區/靈動島/行動版共用的一份,刻意不複製進 /mobile/。這裡漏放行是**兩個靜默失敗**:
-    // <script> 404 → karaokePaint 未定義 → frame() 的 rAF 迴圈一碰到就丟例外,而
-    // requestAnimationFrame 在函式最後一行,例外一丟就再也沒有下一幀 (整頁凍住);
+    // 行動版的 shell 有兩支不在 /mobile/ 底下的檔案:逐字填色 (public/js/karaoke.js) 與
+    // 自動捲動判定 (public/js/scroll-zone.js)。兩支都是與歌詞區/靈動島共用的一份,刻意不
+    // 複製進 /mobile/。這裡漏放行是**兩個靜默失敗**:
+    // <script> 404 → karaokePaint / nextScrollState 未定義 → frame() 的 rAF 迴圈一碰到就
+    // 丟例外,而 requestAnimationFrame 在函式最後一行,例外一丟就再也沒有下一幀 (整頁凍住);
     // 同時 sw.js 的 caches.addAll(SHELL) 遇 404 會整批 reject,SW 從此裝不起來。
     // 這條清單與 sw.js 的 SHELL_EXTRA 是同一份,加檔案時兩邊一起改。
-    if (req.path.startsWith('/mobile/') || req.path === '/js/karaoke.js') return next();
+    if (req.path.startsWith('/mobile/') || MOBILE_SHELL_EXTRA.has(req.path)) return next();
     return res.status(404).end();
   });
 }

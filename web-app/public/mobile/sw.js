@@ -4,11 +4,12 @@
  * 直接不 respondWith,讓瀏覽器照常送出去。
  */
 
-const CACHE = 'kanaric-mobile-v24';   // 改 shell 檔案時把版號往上加,activate 會清掉舊的
-// karaoke.js 刻意放在 /js/ 而不是複製一份進來 —— 逐字填色是歌詞區/靈動島/行動版共用的,
-// 各留一份就是靜默失效的來源。代價是 shell 多一個不在 /mobile/ 底下的路徑,
-// 下面的 fetch 條件要跟著放行它,否則離線時抓不到 (SHELL_EXTRA)。
-const SHELL_EXTRA = ['../js/karaoke.js'];
+const CACHE = 'kanaric-mobile-v26';   // 改 shell 檔案時把版號往上加,activate 會清掉舊的
+// karaoke.js / scroll-zone.js 刻意放在 /js/ 而不是複製一份進來 —— 逐字填色與自動捲動判定
+// 都是多個端共用的,各留一份就是靜默失效的來源。代價是 shell 多兩個不在 /mobile/ 底下的
+// 路徑,下面的 fetch 條件要跟著放行它們,否則離線時抓不到。
+const EXTRA_PATHS = ['/js/karaoke.js', '/js/scroll-zone.js'];
+const SHELL_EXTRA = EXTRA_PATHS.map((p) => `..${p}`);
 const SHELL = ['./', './index.html', './pkce.js', './playback.js', './lyrics.js',
                './color.js', './manifest.json', ...SHELL_EXTRA];
 
@@ -25,7 +26,7 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;
-  if (!url.pathname.startsWith('/mobile/') && url.pathname !== '/js/karaoke.js') return;
+  if (!url.pathname.startsWith('/mobile/') && !EXTRA_PATHS.includes(url.pathname)) return;
   // 帶 query 的一律走網路:index.html 進場的喚醒 ping (manifest.json?wake=1) 就是靠這條
   // 才真的碰得到 server。走下面那段的話它會被 shell 快取接走,喚醒等於沒做。
   if (url.search) return;

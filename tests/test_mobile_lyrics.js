@@ -76,6 +76,22 @@ const { parseLrc, activeIndex, medianGap, loopEndMs, escapeHtml, readCache, writ
   assert.strictEqual(activeIndex([], 1000), -1);
 }
 
+// 4a. hint (上一幀的答案) 只是加速,**任何 hint 都不准改變答案**
+{
+  const lines = parseLrc('[00:05.00]a\n[00:10.00]b\n[00:20.00]c');
+  for (const hint of [undefined, null, -1, 0, 1, 2, 99, -99, 1.5, 'x']) {
+    assert.strictEqual(activeIndex(lines, 0, hint), -1, `hint=${hint}`);
+    assert.strictEqual(activeIndex(lines, 5000, hint), 0, `hint=${hint}`);
+    assert.strictEqual(activeIndex(lines, 19999, hint), 1, `hint=${hint}`);
+    assert.strictEqual(activeIndex(lines, 999999, hint), 2, `hint=${hint}`);
+  }
+  assert.strictEqual(activeIndex([], 1000, 5), -1);
+  // 同一個時間戳的重複行 (副歌):照舊取最後那個,往回走時也要一路退到 -1
+  const dup = parseLrc('[00:00.00][00:00.00]サビ\n[00:04.00]b');
+  assert.strictEqual(activeIndex(dup, 0, -1), 1);
+  assert.strictEqual(activeIndex(dup, -1, 2), -1);
+}
+
 // 5. lrclib 備援的逃逸:整份 LRC 逃逸後時間戳不受影響,標籤變不回真標籤
 {
   const raw = '[00:05.00]<img src=x onerror=alert(1)>\n[00:10.00]Don\'t & "go"';

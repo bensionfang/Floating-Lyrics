@@ -52,13 +52,20 @@ function parseLrc(text) {
   return out.sort((a, b) => a.ms - b.ms);
 }
 
-/** 目前唱到第幾句 (最後一句時間 <= pos)。第一句還沒到就回 -1,那時不高亮任何一行 */
-function activeIndex(lines, posMs) {
-  let i = -1;
-  for (let k = 0; k < lines.length; k++) {
-    if (lines[k].ms > posMs) break;
-    i = k;
-  }
+/**
+ * 目前唱到第幾句 (最後一句時間 <= pos)。第一句還沒到就回 -1,那時不高亮任何一行。
+ *
+ * `hint` 是「上一幀的答案」。rAF 每幀都會問一次,而答案幾乎永遠是上一次或它的下一個,
+ * 從那裡往前/往後走就好 —— 每幀重掃整首歌是 100 行 × 120fps = 每秒一萬多次比較,
+ * 而這一頁的 Wake Lock 正壓著螢幕不熄,那些都是白燒的電。
+ * **傳錯不會算錯**,只是退回原本的線性掃描 (從 -1 往後走)。
+ */
+function activeIndex(lines, posMs, hint) {
+  const n = lines.length;
+  if (!n) return -1;
+  let i = (Number.isInteger(hint) && hint >= -1 && hint < n) ? hint : -1;
+  while (i + 1 < n && lines[i + 1].ms <= posMs) i++;   // 往後:下一句的時間已經到了
+  while (i >= 0 && lines[i].ms > posMs) i--;           // 往回:seek 往前、或偏移改了
   return i;
 }
 

@@ -643,7 +643,46 @@ Phase 3+4（同步歌詞 + 注音）、Phase 5（PWA 化）已完成:`web-app/pu
   都掛回同時間戳的那句(`l.trans`/`l.romaji`/`l.words`),**不自成一行**。
 - 置中靠寫 `pane.scrollTop`(`scrollTo({behavior:'smooth'})`)而不是 `scrollIntoView` ——
   後者會連整頁的祖先容器一起捲。**只在換行時動**,每幀寫等於吃掉使用者的手動捲動。
-- 回歸測試 `node tests/test_mobile_lyrics.js`。
+- **自動捲動走桌面同一支 `public/js/scroll-zone.js` 的三段規則,不是無條件置中**(2026-08-08)。
+  改版前每次換行都 `scrollTo` 置中,使用者往下翻看後面的歌詞,下一句一到(幾秒內)就被拉回來。
+  `autoCenter` 是黏著狀態,理由與桌面完全相同(置中後下一句必定往下偏一行,純幾何判定會
+  「置中一次又漂出去」)。
+  - **脫離同步認 `touchmove` 而不是 `scroll`**:桌面要多一套「最近 1 秒內有手勢」的濾波,是因為
+    `scroll` 分不出誰捲的(平滑捲動、視窗重排都會發);這一頁只有手指捲得動它,直接認手勢最省。
+    單純點一下不會發 `touchmove`,所以點歌詞跳轉不受影響。
+  - 活動行被捲出畫面時跳出「回到目前這句」(`#resync`)。可見性**重用 `scrollZoneAction` 的
+    `offscreen`**,不要另外寫一份幾何 —— 兩份會漂,而漂掉的症狀是按鈕該出來時不出來。
+  - 按鈕包在 `.lyrics-wrap` 裡絕對定位:放進 `#lyrics` 會跟著捲走,放進 body 那條 flex 則會在
+    出現/消失時把歌詞區的高度推來推去。**`#lyrics` 的 `position: relative` 一個字都沒動**。
+- `activeIndex(lines, posMs, hint)` 的 `hint` 是「上一幀的答案」。rAF 每幀都要問一次,而原本是
+  每幀線性掃全曲(100 行 × 120fps = 每秒一萬多次比較,同時 Wake Lock 正壓著螢幕不熄)。
+  **傳錯不會算錯**,只是退回從 -1 開始的線性掃描。
+- 進度條**可以拖了**(2026-08-08,`pointerdown/move/up` + `setPointerCapture`,`.hit` 要
+  `touch-action: none`)。拖曳期間 `frame()` 靠 `dragRatio` 早退,不然每幀會把手指的位置蓋掉。
+- `paintProgress()` 是進度條與時間的**唯一**寫入點,而且**值沒變就不寫**:rAF 是每幀跑的,
+  暫停時位置根本不動。`render()` 的「沒有歌」那條也要走它 —— 繞過去的話它記的「上次寫了什麼」
+  會過期,下一首歌開頭剛好也算出 0% 時就不寫了,進度條停在上一首的位置。
+- `schedule()` 在「快播完」時把下一次輪詢排在歌曲結束那一刻(+400ms 餘裕,下限 500ms)。
+  平常 3 秒一次 = 換歌最慢 3 秒才發現,歌詞跟著晚 3 秒才開始抓。**只有播放中且知道長度時才縮**,
+  一首歌只會踩到一次。
+- 長按設循環點的那半秒有 `.pressing` 回饋:**`transition-delay: 150ms` 是關鍵** —— 一般點擊在
+  那之前 class 就被移掉了,完全看不到;撐過去之後背景用 350ms 浮起來,浮滿正好是觸發的那一刻。
+  CSS 要排在 `.loop` 後面(同特異度,後者勝)。順帶 `navigator.vibrate?.(15)`:Android 有、iOS 沒有。
+- 抽屜可以往左滑關掉。**刻意不做「從左緣滑出來開啟」** —— Safari 分頁模式下左緣往右滑是瀏覽器的
+  返回手勢,搶不過;而 standalone 有、分頁沒有的話兩種模式手感又不一致。
+- **第一次啟動跳一張手勢說明卡** (`#guide`,`kanaric.mobile.guideSeen`,抽屜裡有「再看一次」)。
+  點/長按/連點三個手勢全是隱形的,而桌面有整套 `tourSteps`,這裡本來一個字都沒有。
+  卡片蓋在歌詞區上方 (z-index 8,在 scrim 9 / drawer 10 之下),**寫測試時要先收掉它**,
+  不然點歌詞會點到卡片。「再看一次」要先 `closeSheet()` —— 抽屜蓋著大半個螢幕。
+- **`/js/` 底下那幾支共用檔的清單存在三個地方,加檔案時三邊一起改**:`sw.js` 的 `EXTRA_PATHS`
+  (離線抓得到)、`server.js` 的 `MOBILE_SHELL_EXTRA`(雲端 B1 允許清單,漏了就 404)、
+  `tests/test_cloud_guard.js` 的靜態頁清單。漏掉任一個都是靜默失敗:`<script>` 404 →
+  `karaokePaint`/`nextScrollState` 未定義 → `frame()` 的 rAF 一碰到就丟例外,而
+  `requestAnimationFrame` 在函式最後一行,例外一丟就再也沒有下一幀(整頁凍住)。
+- 回歸測試 `node tests/test_mobile_lyrics.js`(含 `activeIndex` 的 hint 不准改變答案)、
+  `node tests/test_scroll_zone.js`、`node tests/test_cloud_guard.js`。
+  **手勢與捲動這類要瀏覽器才驗得到的,repo 裡刻意沒有** —— 這裡沒有 test runner 也不裝 playwright,
+  要驗就照 `.claude/skills/verify` 那條把 playwright 裝進 scratchpad。
 
 **PWA 化 (Phase 5)**:
 - **Service Worker (`sw.js`) 只快取 app shell 那六個檔,API 一律走網路** (規格 §5.2)。`fetch` 事件對
@@ -801,6 +840,22 @@ localStorage —— 不是偷懶,雲端本來就刻意不帶使用者手打的�
     在雲端那台(512MB、公開端點)就是慢性漏。
   - `/api/lyrics/options/state` 多吃 **`brief=1`**(拔掉歌詞本體):一次搜尋要輪詢十幾次,
     每次夾帶五份完整歌詞就是幾百 KB 的行動網路流量,而手機在按下去之前不需要內文。
+  - **自訂搜尋關鍵字 (2026-08-08)**:抽屜裡兩個輸入框,搜不到時自己打歌名/歌手 (桌面
+    `lyrics-tools.js` 的 `manualSearchLyrics`)。手機比桌面更需要它 —— Spotify 給的常是羅馬字名,
+    iTunes 還原失敗整首就查不到。server 端**本來就支援**,只是手機沒送那兩個參數。
+    - **帶 `searchTitle`/`searchArtist` 就一定要一起帶 `force=1`**:`startOptionsJob` 對同一個
+      `(artist,title)` 有現成的 job 就直接回傳,不 force 的話換了關鍵字什麼都不會發生,
+      而且**沒有任何錯誤訊息**。
+    - **`optQuery()` (state/pick 用的鍵) 不准帶自訂關鍵字** —— server 的 `jobKey` 就是
+      `artist|||title`,帶別的進去 state/pick 就查不到那個 job。
+    - **只有真的改過輸入框才帶**:帶了就是 server 那邊的 `explicit`,它刻意不寫快取
+      (那兩張表的鍵是「正在播的這首」,而輸入框讓人打任何歌名)。沒改就不帶,快取照舊寫得進去。
+    - 打過的關鍵字存 localStorage 的 `kanaric.mobile.search` (桌面 `search_overrides` 的手機版,
+      那張表要 POST 所以搬不過來)。**只影響備選歌詞那條路** —— `/api/lyrics` 不吃 `searchTitle`;
+      但挑中的那份本來就會寫進本機快取,所以效果一樣是持久的。改回歌名本身 = 清掉覆蓋。
+  - **候選的格式標籤與桌面同一套三分法** (`optFormat`:逐字 / LRC / TXT)。舊版只分
+    LRC / 純文字,看不出哪一份帶逐字時間。**`brief=1` 只拔 `lyrics` 本體**,`hasWords`/`isSynced`
+    本來就在回應裡,不必動 server。
   - **B1 允許清單多放行這三支 GET,限流各自分桶**:`options` 5/5 分鐘(最貴,實測 25.7 秒)、
     `options/state` **不計入**(不然輪詢會把自己擋掉)、`pick` 沿用 30/分。
     `/api/lyrics/custom` 這類寫入路由**維持 404**。
