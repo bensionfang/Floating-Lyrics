@@ -2901,10 +2901,11 @@ body.karaoke-page.bar-visible #karaoke-bar { transform: translateX(-50%); opacit
     display: flex;
     flex-direction: column;
 }
-/* 丸ゴシック (Zen Maru Gothic 900) —— 系統的日文字型全是方頭的,那是跟 JOYSOUND
-   差最遠的一點。@font-face 在 /vendor/fonts-jp.css,只有 karaoke.ejs 載它。 */
+/* 字體跟主歌詞頁 (`.lyrics-line`) 用同一套,不另外抓日文字型 —— 見 CLAUDE.md 那節:
+   丸ゴシック / UD 明朝都試過,跟 JOYSOUND 還是差一截,而每一款 CJK 都是幾 MB 的
+   unicode-range chunk。**不要再提案為這一頁抓字型。** */
 #karaoke-lines, #karaoke-intro {
-    font-family: 'Zen Maru Gothic', 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+    font-family: 'Poppins', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 #karaoke-lines.hidden { display: none; }
 /* 只有上下兩槽露臉,其餘全部收起來 —— 靠 class 切換而不是重寫 innerHTML,
@@ -2923,7 +2924,7 @@ body.karaoke-page.bar-visible #karaoke-bar { transform: translateX(-50%); opacit
 .kline {
     position: relative;
     font-size: clamp(34px, 4.4vw, 70px);
-    font-weight: 900;
+    font-weight: 700;
     line-height: 1.35;
     margin-bottom: 0.12em;
 }
@@ -2950,13 +2951,21 @@ body.hide-furigana .kline rt { display: none; }
 /* 疊在上面那層只在「正在唱的那一句」露臉。沒有逐字資料的歌因此整句一起變紅
    (那種歌本來就是整行亮);有逐字資料的歌下面那組 clip-path 會逐字揭開。 */
 .kover { position: absolute; inset: 0; opacity: 0; }
-.kline.cur .kover { opacity: 1; }
+/* .done = 剛唱完、還留在另一槽的那句:繼續紅著直到被下一句換掉 (見 karaoke-slots.js
+   檔頭第 4 點)。逐字的 --k 停在最後一幀的值,所以不必重畫。 */
+.kline.cur .kover, .kline.done .kover { opacity: 1; }
 .kover .kc, .kover rt.rt-pending, .kover rt.rt-now, .kover rt.rt-sung {
     --k: 0%;
     clip-path: inset(0 calc(100% - var(--k)) 0 0);
     transition: none;
 }
 .kover .kc.sung, .kover rt.rt-sung { --k: 100%; }
+/* **唱完留紅的那句一律補滿。** 一句停止活躍時最後幾個字常常還沒填到底:收尾點 `endMs`
+   是封頂算出來的 (word-times.js),而換到下一句的時機是下一句自己的時間戳,兩者沒有關係。
+   舊版那句在同一瞬間就被換掉所以看不見,現在它要留著紅一陣子,沒補滿就是「最後一個字
+   不會變紅」(2026-08-09 回報)。行內的 `--k` 權重比 class 高,所以只能用 !important。 */
+.kline.done .kover .kc,
+.kline.done .kover rt { --k: 100% !important; }
 
 /* ── 前奏的曲名畫面 (JOYSOUND 式) ── */
 #karaoke-intro {

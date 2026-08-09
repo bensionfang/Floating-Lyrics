@@ -1,8 +1,4 @@
 <%- include('header') %>
-<%# 日文圓體 (丸ゴシック) 只有這一頁用得到,所以不併進全站的 fonts.css ——
-    那是每頁都載的,把兩 MB 的 CJK 塞進去等於每頁都變慢。瀏覽器只會抓真的用到的那幾塊。 %>
-<link rel="stylesheet" href="/vendor/fonts-jp.css?v=1">
-
 <%# 介紹頁 (同 /game 的形狀):按「開始」才進字幕機,那一下的使用者手勢也正好是
     requestFullscreen 的前提 —— 沒有手勢瀏覽器一律拒絕全螢幕 %>
 <div class="page-header animate-fade-in">
@@ -118,7 +114,7 @@
 
 <script src="/js/karaoke.js?v=4"></script>
 <script src="/js/lrc-parse.js?v=1"></script>
-<script src="/js/karaoke-slots.js?v=2"></script>
+<script src="/js/karaoke-slots.js?v=3"></script>
 <script src="/js/karaoke-mv.js?v=10"></script>
-<script src="/js/karaoke-mode.js?v=9"></script>
+<script src="/js/karaoke-mode.js?v=11"></script>
 <%- include('footer') %>

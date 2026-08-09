@@ -80,6 +80,16 @@ document.addEventListener('DOMContentLoaded', function () {
         // 上面,靠逐字的 clip-path 由左往右揭開 (見 style.css 那段說明)。
         linesEl.innerHTML = lines.map((l, i) =>
             `<div class="kline" id="kline-${i}"><span class="kbase">${l.text}</span><span class="kover">${l.text}</span></div>`).join('');
+        // **兩層都要切成一字一顆 span,連只負責顯示白字的 .kbase 也要。** 只切 .kover 的話
+        // 兩層在**換行的位置**會不一樣:Chrome 的禁則處理 (っ、小假名、標點不能在行首) 是看
+        // 同一個文字 run 判斷的,拆成獨立 span 之後那個判斷跟著變,斷行點就差一個字 ——
+        // 畫面上是「換行的那一列整個重影錯開」(2026-08-09 回報,docs/4.png)。
+        // 結構一模一樣就一定排得一樣,不必去猜瀏覽器怎麼斷。**時機也必須是同一刻** ——
+        // 先切一層、另一層等到唱到才切的話,中間那段時間照樣是錯開的。
+        linesEl.querySelectorAll('.kline').forEach((el) => {
+            karaokeSplit(el.querySelector('.kbase'));
+            karaokeSplit(el.querySelector('.kover'));
+        });
         // 沒有逐字時間的歌照樣進來,只是整句一起亮 —— 標一下,別讓人以為壞了
         degradedEl.classList.toggle('hidden', unsynced || !lines.length || lines.some(l => l.words));
     }
@@ -146,9 +156,9 @@ document.addEventListener('DOMContentLoaded', function () {
     /**
      * 把 karaokeSlots 算出來的上下槽套到 DOM 上。
      *
-     * **唱完的那句不清填色** —— 它在同一瞬間就被另一槽換掉了 (唱下面那句時上面換成再下
-     * 一句),所以根本來不及被看見。清除的時機因此是「一句**進場**時」:往回 seek 會讓
-     * 同一句再上場一次,那時舊的填色才要抹掉。
+     * **唱完的那句不清填色** —— 它會以 .done 留在原地紅著,直到這句唱到一半才被下一句
+     * 換掉 (見 karaoke-slots.js 檔頭第 4 點)。清除的時機因此是「一句**進場**時」:
+     * 往回 seek 會讓同一句再上場一次,那時舊的填色才要抹掉。
      */
     function applySlots(s) {
         const prev = [topIdx, botIdx];
@@ -157,7 +167,7 @@ document.addEventListener('DOMContentLoaded', function () {
         for (const i of prev) {
             if (i < 0 || now.includes(i)) continue;
             const el = byIdx(i);
-            if (el) el.classList.remove('slot-top', 'slot-bottom', 'cur');
+            if (el) el.classList.remove('slot-top', 'slot-bottom', 'cur', 'done');
         }
         for (const i of now) {
             if (i < 0 || prev.includes(i)) continue;
@@ -174,6 +184,14 @@ document.addEventListener('DOMContentLoaded', function () {
             if (oldCur) oldCur.classList.remove('cur');
             const cur = byIdx(s.index);
             if (cur) cur.classList.add('cur');
+        }
+        // 另一槽放的是「剛唱完那句」時要繼續紅著 (.done);放的是預覽的下一句就不能紅。
+        // 序號比活躍句小 = 上一句 —— 往回 seek 的話它的填色已經被上面那圈 karaokeClear
+        // 抹掉了,紅字被 clip 到 0% 等於看不見,不會有殘影。
+        const other = s.top === s.index ? s.bottom : s.top;
+        for (const i of now) {
+            const el = byIdx(i);
+            if (el) el.classList.toggle('done', i === other && i >= 0 && i < s.index);
         }
         topIdx = s.top;
         botIdx = s.bottom;

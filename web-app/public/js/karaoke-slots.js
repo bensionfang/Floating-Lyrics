@@ -12,12 +12,17 @@
  *    是兩個數:間隔 >= GAP 才算間奏,而且要到開口前 COUNT_IN 秒才把下一句換上來。
  *    這條讓沒有 ♫ 標記的歌詞 (很多來源不寫間奏行) 一樣有倒數。
  * 3. **上下兩槽是 JOYSOUND 式的交替,不是「活躍句永遠在上」**。槽位由「這是第幾句真歌詞」
- *    的**奇偶**決定 (間奏 ♫ 不算),偶數在上、奇數在下;另一槽固定放它的下一句。
- *    結果就是唱上面那句時下面已經換好下一句、唱下面那句時上面換成再下一句。
+ *    的**奇偶**決定 (間奏 ♫ 不算),偶數在上、奇數在下。
  *    奇偶是每一句的固有屬性,所以同一句在畫面上永遠待在同一槽,不會因為 seek 而跳槽。
+ * 4. **另一槽不是一換行就跟著換,要等這句唱到一半** (SWAP,照 JOYSOUND)。在那之前留著
+ *    剛唱完的上一句 (紅著,見 .kline.done),之後才換成下一句當預覽。一換行就換掉的話
+ *    唱完的紅字一瞬間就不見,而且旁邊直接跳出兩句以後的詞,眼睛跟不上是哪一句。
  */
 const KARAOKE_COUNT_IN_SEC = 3;
 const KARAOKE_GAP_SEC = 6;      // 超過這個間隔才算間奏 —— 一般句距的兩倍
+// 另一槽換成「下一句」的時機:這句與下一句間隔的一半,長間奏封頂在這個秒數 ——
+// 不封頂的話間奏前那句會霸著半個畫面十幾秒,下一句遲遲不預覽。
+const KARAOKE_SWAP_MAX_SEC = 4;
 
 function karaokeSlots(lines, posSec, hint, countInSec) {
     const countIn = typeof countInSec === 'number' ? countInSec : KARAOKE_COUNT_IN_SEC;
@@ -44,10 +49,16 @@ function karaokeSlots(lines, posSec, hint, countInSec) {
     if (cur < 0) return { index: -1, nextIndex: -1, top: -1, bottom: -1, countdown: null };
 
     const nextIndex = nextReal(lines, cur);
-    // 上槽 / 下槽:活躍句照自己的奇偶入座,另一槽放它的下一句
+    // 上槽 / 下槽:活躍句照自己的奇偶入座,另一槽先留著上一句、唱到一半才換成下一句
+    // (見檔頭第 4 點)。兩者的序號都跟 cur 差一,奇偶必定相反,所以「不跳槽」仍然成立。
+    let other = prevReal(lines, cur);
+    if (nextIndex >= 0) {
+        const half = (lines[nextIndex].time - lines[cur].time) / 2;
+        if (posSec >= lines[cur].time + Math.min(half, KARAOKE_SWAP_MAX_SEC)) other = nextIndex;
+    }
     const onTop = realOrdinal(lines, cur) % 2 === 0;
-    const top = onTop ? cur : nextIndex;
-    const bottom = onTop ? nextIndex : cur;
+    const top = onTop ? cur : other;
+    const bottom = onTop ? other : cur;
 
     let countdown = null;
     if (lines[cur].time > posSec) {
@@ -79,9 +90,14 @@ function nextReal(lines, from) {
     return -1;
 }
 
+function prevReal(lines, from) {
+    for (let j = from - 1; j >= 0; j--) if (!isFiller(lines[j])) return j;
+    return -1;
+}
+
 function lastReal(lines) {
     for (let j = lines.length - 1; j >= 0; j--) if (!isFiller(lines[j])) return j;
     return -1;
 }
 
-if (typeof module !== 'undefined' && module.exports) module.exports = { karaokeSlots, KARAOKE_COUNT_IN_SEC, KARAOKE_GAP_SEC };
+if (typeof module !== 'undefined' && module.exports) module.exports = { karaokeSlots, KARAOKE_COUNT_IN_SEC, KARAOKE_GAP_SEC, KARAOKE_SWAP_MAX_SEC };
