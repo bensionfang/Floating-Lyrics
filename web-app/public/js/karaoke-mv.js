@@ -71,7 +71,8 @@ document.addEventListener('DOMContentLoaded', function () {
                               // 不代表擋得住。**不要改用 `unloadModule('captions')` /
                               // `setOption` 去關**:實測會把播放器弄到 UNSTARTED 卡死
                               // (畫面全黑、連手動 playVideo() 都叫不動,而且沒有錯誤訊息)。
-                              // 真正的解法在 CSS —— `--mv-crop` 把字幕畫的那一帶裁到容器外面。
+                              // 用 CSS 把字幕那一帶裁掉也試過了,代價太大、已經拿掉 (見 style.css
+                              // 的 #karaoke-mv)。現在的立場是「字幕就讓它出現,擋到就換一支」。
                               modestbranding: 1, rel: 0, playsinline: 1, iv_load_policy: 3,
                               cc_load_policy: 0 },
                 events: {
