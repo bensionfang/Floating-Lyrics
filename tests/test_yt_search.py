@@ -54,6 +54,52 @@ assert r[1]["durationSec"] == 0, "沒有時長 (直播) 回 0 而不是炸掉"
 # limit
 assert len(parse_results(DATA, limit=2)) == 2
 
+# ── `ok`:翻唱/演唱會/鋼琴/カラオケ 那一類排到最後並標記 ──
+# 前端只在第一支 ok 時才自動套用 MV,所以這個旗標錯了就是「唱到一半畫面完全不對」
+BAD = {"contents": [
+    vr("cov", "春泥棒 歌ってみた", "誰か", "4:20"),
+    vr("kar", "春泥棒 カラオケ", "Ch", "4:20"),
+    vr("pia", "春泥棒 Piano Cover", "Ch", "4:20"),
+    vr("liv", "春泥棒 (Live at 武道館)", "Ch", "4:20"),
+    vr("off", "春泥棒", "ヨルシカ", "4:20"),
+]}
+r = parse_results(BAD)
+assert r[0]["videoId"] == "off", "乾淨的那支排第一"
+assert r[0]["ok"] is True
+assert all(i["ok"] is False for i in r[1:]), "翻唱/カラオケ/鋼琴/演唱會全部標成非原版"
+
+# 英文那批要 \b 邊界,否則會誤判正常歌名
+for title in ["Made in Heaven", "Delivery", "Live and Let Die 的 MAD"]:
+    got = parse_results({"contents": [vr("x", title, "Ch", "4:20")]})[0]["ok"]
+    expect = "MAD" not in title      # 前兩個是誤判測試,第三個真的該擋
+    assert got is expect, f"{title} → ok={got}"
+
+# ── 標題含歌名 > 頻道含歌手名 (官方頻道) ──
+# 這兩條是實測配出來的:只加「官方頻道」的話會挑到同一個頻道的**別首歌**
+# (ヨルシカ/春泥棒 → 晴る、米津玄師/KICK BACK → Plazma)
+PICK = {"contents": [
+    vr("other", "ヨルシカ - 晴る（OFFICIAL VIDEO）", "ヨルシカ / n-buna Official", "4:37"),
+    vr("reup", "【中文字幕】ヨルシカ「春泥棒」", "咲月Satsuki", "4:50"),
+    vr("want", "ヨルシカ - 春泥棒（OFFICIAL VIDEO）", "ヨルシカ / n-buna Official", "5:00"),
+]}
+r = parse_results(PICK, artist="ヨルシカ", title="春泥棒", duration=261)
+assert r[0]["videoId"] == "want", "官方頻道 + 標題對得上的那一支"
+assert r[-1]["videoId"] == "reup", "帶字幕的轉載排到最後 (畫面上燒著另一份字)"
+
+# 正規化過才比,所以空白/連字號的寫法不同也對得上
+assert parse_results({"contents": [vr("k", "米津玄師 Kenshi Yonezu - KICKBACK", "Kenshi Yonezu 米津玄師", "3:48")]},
+                     artist="米津玄師", title="KICK BACK")[0]["videoId"] == "k"
+
+# **時長要排在最後**:官方 MV 常比音源長 (前奏/outro),實測 春泥棒 是 300s vs 261s,
+# 差 39 秒 —— 時長排前面的話正版反而被踢掉
+long_official = parse_results(PICK, artist="ヨルシカ", title="春泥棒", duration=261)
+assert long_official[0]["durationSec"] == 300, "差 39 秒的官方版仍然排第一"
+
+# 全部都是翻唱時第一支仍然是 not ok —— 前端據此決定「乾脆不套」
+allbad = parse_results({"contents": [vr("c1", "歌ってみた", "A", "4:20"),
+                                     vr("c2", "ピアノ", "B", "4:20")]})
+assert allbad[0]["ok"] is False
+
 # 壞掉的輸入一律回空 list,不拋例外 —— YouTube 改版時該安靜退回純黑底
 assert parse_results(None) == []
 assert parse_results({}) == []

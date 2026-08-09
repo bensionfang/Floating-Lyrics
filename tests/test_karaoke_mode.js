@@ -131,6 +131,43 @@ for (let pos = 0; pos <= 40; pos += 0.5) {
 }
 
 // 空歌詞
-assert.deepStrictEqual(karaokeSlots([], 5), { index: -1, nextIndex: -1, countdown: null });
+assert.deepStrictEqual(karaokeSlots([], 5), { index: -1, nextIndex: -1, top: -1, bottom: -1, countdown: null });
+
+// ===== 3. 上下槽的交替 (JOYSOUND 式) =====
+// 槽位是「第幾句真歌詞」的奇偶,所以同一句永遠待在同一槽 —— 唱上面那句時下面已經是
+// 下一句,唱下面那句時上面換成再下一句。
+{
+    const s0 = karaokeSlots(L, 11);       // AAA (第 0 句真歌詞) → 上
+    assert.deepStrictEqual([s0.top, s0.bottom], [0, 1], 'AAA 在上、BBB 在下');
+    assert.strictEqual(s0.index, 0, '活躍句是上面那句');
+
+    const s1 = karaokeSlots(L, 14);       // BBB (第 1 句) → 下,上面換成 CCC
+    assert.deepStrictEqual([s1.top, s1.bottom], [3, 1], '唱下面那句時上面換成再下一句');
+    assert.strictEqual(s1.index, 1, '活躍句是下面那句');
+
+    const s2 = karaokeSlots(L, 31);       // CCC (第 2 句,間奏不算) → 上
+    assert.deepStrictEqual([s2.top, s2.bottom], [3, 4], '間奏行不佔奇偶序號');
+    assert.strictEqual(s2.index, 3);
+}
+
+// 同一句不會因為 seek 而換槽:一路掃過去,每個 index 出現時都在同一邊
+{
+    const seen = {};
+    for (let pos = 0; pos <= 40; pos += 0.25) {
+        const s = karaokeSlots(L, pos);
+        for (const [i, side] of [[s.top, 'top'], [s.bottom, 'bottom']]) {
+            if (i < 0) continue;
+            if (seen[i] === undefined) seen[i] = side;
+            assert.strictEqual(seen[i], side, `第 ${i} 行在 pos=${pos} 跳槽了`);
+        }
+    }
+}
+
+// 最後一句:另一槽留空
+{
+    const s = karaokeSlots(L, 34);
+    assert.strictEqual(s.index, 4, 'DDD');
+    assert.deepStrictEqual([s.top, s.bottom], [-1, 4], '沒有下一句時上槽是空的');
+}
 
 console.log('test_karaoke_mode: OK');

@@ -17,7 +17,11 @@ const CREDIT_KEYWORDS = [
   "厂牌", "廠牌", "工作室", "鳴謝", "鸣谢",
   "vocal", "lyric", "music", "arrange", "mix", "mastering", "master", "compose",
   "produce", "producer", "engineer", "record", "guitar", "bass", "drum", "piano",
-  "strings", "chorus", "keyboard", "synth", "programming"
+  "strings", "chorus", "keyboard", "synth", "programming",
+  // 管弦與職位:日文歌的英文標頭很常見 (`Trumpet：…`、`Sound Direction：…`)。
+  // 這些是子字串比對,所以 mixing/recording/mastering 不必再列 (mix/record/master 已涵蓋)。
+  "trumpet", "trombone", "sax", "violin", "cello", "flute", "horn", "percussion",
+  "direction", "manipulator"
 ];
 
 // 只在冒號前那一小段比對才安全的短標籤 (周杰倫那批中文歌用的就是這種寫法)。
@@ -36,13 +40,20 @@ function isCopyrightClaim(text) {
  *
  * **判斷的是冒號前那一段,不是整行長度** —— 這是這支函式最容易寫錯的地方。
  * 製作人員多的時候值會很長 (實測有 109 字的 `编曲 : A/B/.../T`),用整行長度當守門
- * 會整批漏掉;真正穩定的訊號是標籤本身永遠很短。
+ * 會整批漏掉;真正穩定的訊號是標籤本身。
  *
- * 上限 8 字是為了擋日文歌詞裡的真冒號:`Q:本日の出来栄えは…`、`目が開いてく4:30 A.M.`、
- * `Give me "5:00上がり"`。它們要嘛標籤過長、要嘛標籤裡沒有關鍵字,兩關都過不了。
+ * **真正在把關的是「標籤裡有沒有關鍵字」,長度只是第二道。** 日文歌詞裡的真冒號
+ * (`Q:本日の出来栄えは…`、`目が開いてく4:30 A.M.`、`Give me "5:00上がり"`) 全部是敗在
+ * 沒有關鍵字,不是敗在長度。
+ *
+ * 上限曾經是 8 字,那是照**中文**標籤 (`作詞`、`編曲`) 配的,英文的職位名本來就是多字詞組,
+ * 整批被擋掉:`Rec & Mix Engineer：…` (18)、`Mastering Engineer：…` (18)、
+ * `Sound Direction：…` (15)、`Lyrics，Composition，Arrangement：…` (34) 都漏標
+ * (實測 ずっと真夜中でいいのに。/ 消えてしまいそうです 一首就漏了 5 行)。
+ * 放寬到 40 之後全庫 465 首**多標 9 行、全部是真的製作人員列、零誤判**。
  */
 function isCreditLabel(text) {
-  const m = text.match(/^\s*([^:：]{1,8})\s*[:：]/);
+  const m = text.match(/^\s*([^:：]{1,40})\s*[:：]/);
   if (!m) return false;
   const label = m[1].trim().toLowerCase();
   if (!label) return false;

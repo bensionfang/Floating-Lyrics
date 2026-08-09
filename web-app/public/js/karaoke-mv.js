@@ -9,8 +9,8 @@
  * 這是全 app 唯一的外部腳本 (其餘第三方資源一律自架在 public/vendor/),所以**只在使用者
  * 真的挑了 MV 之後才動態插入**:沒挑 MV 或斷網時整頁行為與沒有這個功能時完全一樣。
  */
-// 等 DOMContentLoaded 的理由同 karaoke-mode.js:控制列 (.player-right) 在 footer 裡,
-// 這支 <script> 排在它之前,立即執行的話那兩顆鈕永遠插不上去 (而且沒有錯誤訊息)。
+// 等 DOMContentLoaded 的理由同 karaoke-mode.js:這支 <script> 排在頁面本體之前,
+// 立即執行的話 #kbar-tools 還不存在,那兩顆鈕永遠插不上去 (而且沒有錯誤訊息)。
 document.addEventListener('DOMContentLoaded', function () {
     const holder = document.getElementById('karaoke-mv');
     if (!holder) return;
@@ -66,7 +66,14 @@ document.addEventListener('DOMContentLoaded', function () {
             player = new YT.Player(host, {
                 videoId,
                 playerVars: { autoplay: 1, mute: 1, controls: 0, disablekb: 1, fs: 0,
-                              modestbranding: 1, rel: 0, playsinline: 1, iv_load_policy: 3 },
+                              // cc_load_policy: 0 是「照使用者的偏好」,**不是關掉** ——
+                              // 無痕視窗 (沒有任何帳號偏好) 實測照樣會出現字幕,所以留著它
+                              // 不代表擋得住。**不要改用 `unloadModule('captions')` /
+                              // `setOption` 去關**:實測會把播放器弄到 UNSTARTED 卡死
+                              // (畫面全黑、連手動 playVideo() 都叫不動,而且沒有錯誤訊息)。
+                              // 真正的解法在 CSS —— `--mv-crop` 把字幕畫的那一帶裁到容器外面。
+                              modestbranding: 1, rel: 0, playsinline: 1, iv_load_policy: 3,
+                              cc_load_policy: 0 },
                 events: {
                     onReady: (e) => { ready = true; e.target.mute(); e.target.playVideo(); },
                     // 嵌入被擋 / 影片消失:歌詞完全不受影響,只是換一支
@@ -128,10 +135,34 @@ document.addEventListener('DOMContentLoaded', function () {
         try {
             const r = await fetch(`/api/mv?title=${encodeURIComponent(song.title)}&artist=${encodeURIComponent(song.artist)}`);
             const d = r.ok ? await r.json() : {};
-            if (song.title === title && d && d.videoId) mvLoad(d.videoId, d.offset);
+            if (song.title !== title) return;
+            if (d && d.videoId) { mvLoad(d.videoId, d.offset); updateBarButtons(); return; }
+            if (d && d.videoId === '') return;   // 使用者按過「取消 MV」,那是明確的選擇
+            await autoPick(title, artist);
         } catch (e) {}
         updateBarButtons();
     };
+
+    /**
+     * 沒挑過的歌自動套用搜尋結果的第一支,並**把它存進 `mv_choices`** ——
+     * 所以每首歌一輩子只搜一次 YouTube (換歌就搜一次是找封鎖)。
+     *
+     * **第一支不是 `ok` (翻唱/演唱會/鋼琴/カラオケ) 就不套**:搜尋結果本來就混著那些,
+     * 而唱到一半畫面完全不對比純黑底更糟。那時使用者從控制列的 🎞 自己挑一支,
+     * 挑了就蓋掉,跟備選歌詞是同一套手勢。
+     */
+    async function autoPick(title, artist) {
+        const dur = Math.round(window.currentMediaDuration || 0);
+        const r = await fetch(`/api/mv/search?title=${encodeURIComponent(title)}`
+            + `&artist=${encodeURIComponent(artist || '')}&duration=${dur}`);
+        const d = r.ok ? await r.json() : null;
+        const top = d && d.results && d.results[0];
+        if (!top || !top.ok) return;
+        if (song.title !== title || song.artist !== (artist || '')) return;   // 這期間換歌了
+        saveChoice(top.videoId, 0);
+        mvLoad(top.videoId, 0);
+        showToast(`自動套用 MV:${top.title}`, 'fa-solid fa-film');
+    }
 
     function saveChoice(videoId, offset) {
         return fetch('/api/mv', {
@@ -171,6 +202,14 @@ document.addEventListener('DOMContentLoaded', function () {
             const sub = document.createElement('div');
             sub.className = 'kmv-sub';
             sub.textContent = [it.channel, fmtDur(it.durationSec)].filter(Boolean).join(' · ');
+            // 標題/頻道帶著翻唱、演唱會、鋼琴、カラオケ 那類字眼的標一下 (自動套用也會避開它們,
+            // 見 yt_search.py 的 `ok`)。**只是提示不是禁止** —— 使用者要挑照樣挑得到。
+            if (it.ok === false) {
+                const tag = document.createElement('span');
+                tag.className = 'kmv-tag';
+                tag.textContent = '可能不是原版';
+                sub.append(' ', tag);
+            }
             meta.append(name, sub);
             row.append(img, meta);
             listEl.appendChild(row);
@@ -215,13 +254,13 @@ document.addEventListener('DOMContentLoaded', function () {
         karaokeCloseMvPicker();
     };
 
-    // ── 控制列上的兩顆鈕 (插進既有播放列的工具區,不另外做一條) ──
+    // ── 控制列上的兩顆鈕 (插進 #kbar-tools,那是卡拉OK自己那條控制列的工具格) ──
     let offsetWrap = null;
     function updateBarButtons() {
         if (offsetWrap) offsetWrap.classList.toggle('hidden', !curVideo);
     }
 
-    const right = document.querySelector('.player-right');
+    const right = document.getElementById('kbar-tools');
     if (right) {
         const mvBtn = document.createElement('button');
         mvBtn.className = 'ctrl-btn';

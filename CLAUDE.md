@@ -455,13 +455,29 @@ GitHub repo 也已改名 `bensionfang/Kanaric`,`server.js` 的 `GITHUB_REPO` 跟
 
 ### 卡拉OK模式 (`/karaoke`)
 
-字幕機版面:**當前句 (大字、逐字填色) + 下一句 (小字、灰)**,固定位置不捲動,間奏有倒數點。
+字幕機版面照 **JOYSOUND**:**上下兩句等大,活躍句在兩槽之間交替**(唱上面那句時下面已換成
+下一句、唱下面那句時上面換成再下一句),配色是**未唱黑框白字 / 唱過白框紅字**,固定位置不捲動,
+間奏有倒數點,前奏放曲名畫面。
 主歌詞頁本來就有逐字填色 (`public/js/karaoke.js` 三端共用),缺的不是填色而是版面 ——
 那一頁是「跟著聽」的捲動式歌詞 (提前 0.25 秒換行、活動行置中、側欄與播放列常駐),
 唱歌要的是「眼睛不追、知道何時開口」。獨立成一頁而不是在首頁加模式:兩者幾乎不共用顯示邏輯
 (不需要 auto-scroll、ruby 編輯、段落循環、點擊 seek),塞進 `app.js` 只會讓
 `renderLyrics`/`syncLyricsToTime` 到處長分支。
 
+- **這一頁是兩個畫面:介紹頁 + 字幕機** (同 `/game` 的形狀),`body.karaoke-page` 才是字幕機那個。
+  按「開始」→ 加 class、送 `karaoke_active: true`、載 MV、`requestFullscreen`;ESC / ✕ →
+  `karaokeExit()` 全部反過來,**回到介紹頁而不是導去 `/`**。
+  - **全螢幕只能在使用者手勢裡要**,所以 `requestFullscreen` 掛在「開始」那顆按鈕上。沒有手勢時
+    Chrome 直接 reject (`TypeError: not granted`) —— 進頁面就要是絕對拿不到的。
+    (CDP 合成的點擊也拿不到 activation,所以這條**沒辦法用瀏覽器自動化驗**,只能手動點。)
+  - **使用者用瀏覽器自己的方式離開全螢幕 (ESC/F11) 也要回介紹頁**,靠 `fullscreenchange` ——
+    全螢幕下的 ESC 被瀏覽器吃掉,`keydown` 那條收不到。
+  - **按「開始」會把歌跳回 0** (`/api/seek`),而且**本地 `pos` 也要一起歸零** —— 廣播一秒才一則,
+    只送 seek 的話畫面會停在原本那句、等下一則廣播才跳,看起來像沒反應。
+  - **MV 刻意等到「開始」才載** (`karaokeOnSongChange` 在 `applyState` 裡要看 `started`):
+    介紹頁背後偷偷播一支 YouTube 影片沒有道理。離開時傳空字串把它停掉。
+  - `karaoke_active` 兩個方向都要送 —— server 端 (`syncIslandHidden`) 收 false 才會把島開回來,
+    只靠關頁斷線的話停在介紹頁時島永遠不回來。
 - **這一頁的 `<script>` 一定要等 `DOMContentLoaded`** (`karaoke-mode.js`、`karaoke-mv.js` 整支
   包在裡面)。它們排在 `include('footer')` 之前,而 `window.onMediaMessage` (WebSocket 的 handler
   註冊點,在 `common.js`) 與 `.player-bar` 都在 footer 裡 —— 立即執行就是
@@ -470,17 +486,75 @@ GitHub repo 也已改名 `bensionfang/Kanaric`,`server.js` 的 `GITHUB_REPO` 跟
 - **這一頁沒有提前量。** `WEB_APP_LYRICS_ADVANCE` 是為了讓下一句早 0.25 秒上畫面,而字幕機的
   下一句本來就一直在畫面上。所以 `pos = 內插位置 - syncOffset`,換行與填色吃同一個值,
   不必像首頁那樣在填色前再減回去 (那一減漏掉過,整首歌填色快 0.25 秒,很難指認)。
-- **整份歌詞一次渲染,靠 class 切換顯示哪兩行 (`.kline` / `.cur` / `.next`),不換 `innerHTML`。**
-  `karaokeSplit` 把字元 span memo 在 `root.__kc` 上且不還原,換行時重寫 innerHTML 就必須手動
-  作廢那個 memo (靈動島踩過:填色去改上一句那批死掉的 span,畫面完全不動且沒有錯誤訊息)。
-  每行各自一顆就沒有這個問題,換行那一幀零重建。
-- **控制列 = 重新樣式化現有的 `.player-bar`,不新做一條。** 備選歌詞浮層
-  (`views/modals/lyrics-options.ejs`) 是 `position: absolute` 錨在播放列裡那顆按鈕上,
-  `display:none` 掉播放列會**連它一起藏掉**。所以改成 `position: fixed` + `translateY(105%)`
-  的自動隱藏浮條 (`body.bar-visible`),⏯/⏭/進度條/備選歌詞/重新載入全部現成。
-  段落循環與編輯假名那兩顆在這一頁 CSS 藏起來 —— 非首頁時 `common.js` 把它們接成「跳回首頁」。
+- **整份歌詞一次渲染,靠 class 切換顯示哪兩行 (`.kline` / `.slot-top` / `.slot-bottom` / `.cur`),
+  不換 `innerHTML`。** `karaokeSplit` 把字元 span memo 在 `root.__kc` 上且不還原,換行時重寫
+  innerHTML 就必須手動作廢那個 memo (靈動島踩過:填色去改上一句那批死掉的 span,畫面完全不動
+  且沒有錯誤訊息)。每行各自一顆就沒有這個問題,換行那一幀零重建。
+  - **上下順序靠 flex 的 `order` 而不是文件順序**:活躍句坐下槽時,上槽放的是它的**下一句**
+    (文件順序在它後面),照文件順序畫就上下顛倒。
+  - **填色狀態的清除時機是「一句進場時」而不是「離場時」** —— 一句停止活躍的同一瞬間就被另一槽
+    換掉了,離場時清等於白做;而往回 seek 會讓同一句再上場一次,那時舊的填色才要抹掉。
+    (做過 `.done`「唱完留紅」的 class,永遠看不到,已刪。)
+- **配色是兩層疊出來的,不是換 `color` 就好。** 每一行畫兩份 (`renderLines`):`.kbase` 是未唱的
+  白字黑框,`.kover` 絕對定位疊在上面、是唱過的紅字白框,靠逐字的
+  `clip-path: inset(0 calc(100% - var(--k)) 0 0)` 由左往右揭開 (`clip-path` 對 inline 元素有效,
+  實測過)。理由:**描邊的顏色也要跟著填色的波前走**,而 `-webkit-text-stroke-color` 吃不到漸層。
+  - **不可以改成用 `::before` 逐字疊** (做過,就是這樣壞的):絕對定位元素放在**行內**元素裡時,
+    它的行盒與宿主的基線對不上,整顆字往左下偏約 0.1em —— 症狀就是「兩種顏色的字沒有疊在一起」,
+    假名尤其明顯。`.kover` 是 block、`inset: 0` 與 `.kbase` 同一個內容盒,換行與置中天生一致。
+  - `karaokeSplit` / `karaokePaint` / `karaokeClear` **三個都要收到 `.kover` 這同一顆元素** ——
+    它們把字元 span 與「正在唱的那顆」memo 在 `root.__kc` / `root.__kcNow` 上,傳不同的根等於各記各的。
+  - `.kover` 平常 `opacity: 0`,只有 `.kline.cur` 才露臉。**沒有逐字資料的歌因此自動整句變紅**
+    (那種歌本來就是整行亮),不必另外寫一條規則。
+  - **`paint-order: stroke fill` 不能省**:沒有它描邊會壓在筆畫內側,日文的細筆畫直接糊掉。
+    改版前那句「試過 text-stroke 圈日文很醜所以什麼裝飾都不加」講的就是漏了這個屬性,不是
+    text-stroke 本身的問題。
+  - **描邊寬度用 `em` 不用 `px`**:`rt` 是 0.45em,同一條宣告就讓注音的框跟著變細。
+  - 連帶好處是**不再需要 `background-clip: text`** —— 那個會關掉次像素抗鋸齒,舊版得靠「每一顆
+    都套漸層」來迴避亮度差,現在沒有這個問題。歌詞區/靈動島/行動版仍然是漸層那條路,沒有動。
+- **前奏的曲名畫面 (`#karaoke-intro`) 一律顯示**,不因為前奏短就跳過 —— JOYSOUND 就是這樣,
+  每首歌行為一致比較好預期,前奏短的歌就是一閃而過。收掉的時機是「第一句真歌詞的時間」。
+  作詞/作曲來自歌詞裡的 `#TITLE#` 行:`parseLrc` 會把它們整個丟掉(那不是歌詞),所以
+  `karaoke-mode.js` 自己從**原始字串**撈,判準是「有冒號」—— 那正好濾掉歌名行(沒冒號)與
+  版權聲明(又長又沒冒號)。那幾行**用 `innerHTML`**(已被 `furigana_inject.py` 逃逸過,
+  `textContent` 反而會把 `&amp;` 原樣印出來);曲名/歌手是播放器給的原始字串,**必須 `textContent`**。
+- **控制列是自己一條 (`#karaoke-bar`),播放列在這一頁整條 `display:none`。** 播放列是
+  **播放器**版面 (封面/歌名歌手/隨機/循環/上一首/進度條),唱歌時一項都用不到;這一頁要的是
+  **點歌機遙控器**:重唱 (頭出し) / ⏯ / 下一首、字幕早晚、MV/備選歌詞/重新載入。
+  仍然是自動隱藏的浮條 (`body.bar-visible`,滑鼠一動滑出、閒置 3 秒收回),只是改成置中膠囊。
+  - **備選歌詞浮層 (`views/modals/lyrics-options.ejs`) 是 `position: absolute` 錨在
+    `.lyrics-opt-wrap` 上,所以 `karaoke-mode.js` 把整塊 wrapper (按鈕+綠泡泡+浮層)
+    `prepend` 進 `#kbar-tools`** —— 錨點跟著搬,浮層的 CSS 一個字都不用改。
+    **只搬按鈕是錯的**,浮層會留在藏起來的播放列裡跟著消失 (舊版不敢 `display:none`
+    播放列正是為了這件事)。MV 的兩顆由 `karaoke-mv.js` 插進同一格。
+  - `.player-right .ctrl-btn` 那幾條 (尺寸、`.active` 綠色 + 小綠點) 要**一起指名
+    `#kbar-tools .ctrl-btn`**,漏掉的話「搜到候選 = 變綠」在這一頁靜默失效。
+  - 收起來的 transform **必須把 `translateX(-50%)` 一起寫進去** (置中靠它),
+    只寫 `translateY` 會把置中蓋掉、滑出來時整條偏半個寬。
+  - **⏯ 的圖示與文字由 `applyState` 自己更新** —— `common.js` 的 `syncPlayerBar` 改的是
+    播放列裡那顆,而那條在這一頁是藏著的。
+  - 「重唱」與「開始」共用 `karaokeRestart()`:`POST /api/seek {position:0}`,**本地 `pos`
+    也要歸零** —— 廣播一秒才一則,只送 seek 的話畫面會停在原本那句,看起來像沒反應。
+  - 字幕早晚 = 這首歌的 sync offset,跟首頁**共用同一筆** (`/api/lyrics/offset`,debounce 500ms)。
+    改完不必自己重畫:`frame()` 每幀都吃 `pos - syncOffset`。
+  - **進度條刻意沒有** (使用者定案):唱歌要的是「從頭再來」不是「跳到副歌」。
+  段落循環與編輯假名那兩顆本來就不在這條控制列上 —— 非首頁時 `common.js` 把它們接成「跳回首頁」。
+- **上下兩行是交錯的:上行靠左、下行靠右,各離該側 16%** (照 JOYSOUND,參考圖 `docs/1.png`)。
+  一前一後才分得出哪句是哪句,兩行都置中會黏成一團。
+  **縮排一定要用 `margin` 不能用 `padding`** —— `.kover` 是 `inset: 0`,它的容器盒是 `.kline`
+  的 *padding box*,加 padding 會讓上面那層比 `.kbase` 多偏一段、兩種顏色又錯開。
+- **字體是 Zen Maru Gothic 900 (丸ゴシック),自架在 `/vendor/fonts-jp.css`,只有 `karaoke.ejs`
+  載它。** 系統的日文字型全是方頭的,那是跟 JOYSOUND 差最遠的一點。
+  **不要併進全站的 `fonts.css`** —— 那是每頁都載的,兩 MB 的 CJK 塞進去等於每頁都變慢。
+  Google 把 CJK 家族切成 122 個 unicode-range chunk (共約 2 MB),瀏覽器只抓用得到的那幾塊;
+  打包版是離線的所以全部要放著,`public/**` 本來就在 `build.files` 白名單裡。
+  重抓/升級走 `scripts/fetch_vendor_assets.py` 的 `JP_FONT` 那段 —— **CJK 那一百多塊沒有
+  `/* subset */` 註解** (只有拉丁那幾塊有),所以那段是按 `@font-face` 整塊掃、檔名用序號。
 - 版面數學在 **`public/js/karaoke-slots.js`** (`karaokeSlots`,純函式,理由同 `scroll-zone.js`)。
-  兩條規則:**當前句永遠是有字的那一句** (落在 `♫` 上就把後面那句真歌詞提上來,那時
+  **槽位由「這是第幾句真歌詞」的奇偶決定** (間奏 `♫` 不算序號),偶數在上、奇數在下,
+  另一槽固定放它的下一句 —— 奇偶是每一句的固有屬性,所以同一句在畫面上永遠待在同一槽,
+  不會因為 seek 而跳槽 (測試釘住這條)。另外兩條規則:**當前句永遠是有字的那一句** (落在 `♫` 上
+  就把後面那句真歌詞提上來,那時
   `pos < cur.time`,`karaokePaint` 自己算出 0%);**間隔夠長才倒數**,而且「這是間奏」的門檻
   (`KARAOKE_GAP_SEC` 6 秒) 與「倒數窗」(`KARAOKE_COUNT_IN_SEC` 3 秒) **是兩個數** ——
   一般句距的中位數就是 4 秒上下,兩者相等的話每一句都會倒數、整首歌都在閃。
@@ -488,9 +562,10 @@ GitHub repo 也已改名 `bensionfang/Kanaric`,`server.js` 的 `GITHUB_REPO` 跟
 - LRC 解析抽成 **`public/js/lrc-parse.js`** 的 `parseLrc()`,首頁與這一頁共用
   (`app.js` 的 `parseLrcLyrics` 變成寫回全域變數的薄包裝)。**第 4 份抄本就是靜默失效的來源** ——
   島與行動版各有一份,那兩份回傳的形狀不同 (以時間戳為鍵的對照表),刻意不動。
-- 沒有逐字時間的歌**照樣進**,整句一起亮,角落標「無逐字資料」+ 備選歌詞入口
-  (`lines.some(l => l.words)` 判斷)。歌詞沒有時間軸 (`unsynced`) 才拒絕,那時字幕機沒有意義。
-- 回歸測試 `node tests/test_karaoke_mode.js` (`parseLrc` + `karaokeSlots`)。
+- 沒有逐字時間的歌**照樣進**,整句一起變紅 (`.kline.cur > span` 那條,有逐字時被 `.kc` 逐字蓋掉,
+  所以兩種歌共用一條規則),角落標「無逐字資料」+ 備選歌詞入口 (`lines.some(l => l.words)` 判斷)。
+  歌詞沒有時間軸 (`unsynced`) 才拒絕,那時字幕機沒有意義。
+- 回歸測試 `node tests/test_karaoke_mode.js` (`parseLrc` + `karaokeSlots` + 上下槽交替與不跳槽)。
 
 **MV 背景 (`karaoke-mv.js` + `yt_search.py`)**:用歌曲資訊搜 YouTube、使用者挑一支,影片鋪滿
 背景、歌詞蓋在上面。
@@ -506,11 +581,44 @@ GitHub repo 也已改名 `bensionfang/Kanaric`,`server.js` 的 `GITHUB_REPO` 跟
   **解析失敗一律回空 list、絕不拋例外**:那時安靜地退回純黑底。`fetch_html` 與 `parse_results`
   分開,測試只打後者 (`tests/test_yt_search.py`,不打真站);`python yt_search.py` 是打真站的
   自我檢查,動到解析時跑它。
-- **不做自動挑選**:搜尋結果混著翻唱、演唱會、歌ってみた、鋼琴譜、AMV,猜錯的代價是唱到一半
-  畫面完全不對。排序只做兩件輕的 (`- Topic` 頻道往後 —— 那是靜態封面的自動上傳;時長差 30 秒
-  內往前),其餘讓使用者挑一次,記進 `mv_choices`,下次自動播。
-- **搜尋只在挑選面板打開時才打**,不在換歌時背景預搜 —— 每首歌自動抓一次 YouTube 是找封鎖。
-  server 端 `mvSearchCache` (TTL 6 小時,形狀同 `gameArtistCache`) 擋反覆開面板。
+- **自動套用搜尋結果的第一支** (2026-08-09 改。原本刻意不自動挑,理由是搜尋結果混著翻唱/演唱會/
+  歌ってみた/鋼琴譜,挑錯就是唱到一半畫面完全不對 —— 使用者要求改成自動,兩個成本用下面幾條壓下來)。
+  - **挑中的立刻存進 `mv_choices`,所以每首歌一輩子只搜一次 YouTube。** 換歌就搜一次是找封鎖。
+    server 端 `mvSearchCache` (TTL 6 小時,形狀同 `gameArtistCache`) 再擋一層。
+  - **第一支不是 `ok` 就不套** (`yt_search.py` 的 `ok` 旗標)。那時留純黑底,使用者從 🎞 自己挑。
+  - **「取消 MV」要存成 `video_id = ''` 的一列,不可以 DELETE** —— 刪掉就跟「從沒挑過」分不出來,
+    下次播到同一首又自動套一支回來,取消等於沒有用。
+- 排序 (`yt_search.parse_results`) 是 `ok → 標題含歌名 → 頻道含歌手名 → -Topic → 時長`,
+  每一層都是實測配出來的:
+  - **只加「官方頻道」會挑到同頻道的別首歌** (`ヨルシカ / 春泥棒` → 晴る、`米津玄師 / KICK BACK`
+    → Plazma),所以「標題含歌名」要排在它前面。比對前 `_norm` 掉空白與符號,`KICK BACK` 才對得上
+    `KICKBACK`。
+  - **時長一定要排在最後**:官方 MV 常比音源長 (前奏/outro),`春泥棒` 是 300s vs 261s 差 39 秒,
+    時長往前排的話正版反而被踢掉。
+  - **英文的排除字要 `\b` 邊界**,否則 `live` 吃到 `delivery`、`mad` 吃到 `made`。
+  - 帶「字幕 / 歌詞 / lyrics」的轉載也算 not ok:那種畫面上本來就燒著一份字,跟我們的歌詞疊在一起。
+  - 回歸測試 `venv\Scripts\python.exe tests/test_yt_search.py` (不打真站);
+    `python yt_search.py <歌名> <歌手>` 是打真站的自我檢查,動到排序就跑它。
+- **YouTube 自己的字幕用播放器參數關不掉,改用 CSS 裁掉那一帶 (`--mv-crop`)。**
+  `cc_load_policy: 0` 只是「照使用者偏好」,**不是關閉** —— 2026-08-09 用**無痕視窗**
+  (沒有任何帳號偏好) 實測照樣有字幕,所以「帳號設成一律開字幕的人才會遇到」那個舊解釋是錯的。
+  改用 `unloadModule('captions')` 或 `setOption('captions','track',{})` (不管掛在 `onReady`、
+  `onStateChange` 還是 `onApiChange`) **會把播放器弄到 UNSTARTED 卡死** —— 畫面全黑、連手動
+  `playVideo()` 都叫不動,而且沒有任何錯誤訊息。實測過三種掛法都一樣,**不要再試**。
+  - 現行解法在 `style.css` 的 `#karaoke-mv iframe`:播放器比容器高 44cqh (**上下各溢出
+    22cqh**) 而且**維持置中**,字幕畫的那一帶就落在容器外面被裁掉。
+    - **裁切一定要上下對稱,不可以只把影片往下推。** 做過「下緣往下推 18cqh」那版,CSS 幾何
+      完全正確 (隔離重現量到 `topGap` 0),但**很多 MV 本身有 letterbox 黑邊** —— 置中時
+      黑邊平分上下、各一條細的不明顯,一往下推就全堆到上面變成一大條 (2026-08-09 回報)。
+      對稱裁同時解掉兩件事:影片維持置中,黑邊跟字幕一起被裁掉。
+    - 22 是解出來的:裁掉 C 之後播放器總高 `100 + 2C`,字幕約佔播放器高的 15%,
+      要 `C ≥ 0.15 × (100 + 2C)` → `C ≥ 21.4`。代價是 MV 放大到 **1.44 倍**、四邊各吃掉
+      約 22%(背景而已,下緣本來就被歌詞蓋著)。**字幕露出來 / 裁太兇就調這一組**:
+      `min-height: (100 + 2C)cqh`、`min-width: min-height × 1.778`。
+    - **不要改寫成 `calc()` + 自訂屬性** —— var 有任何一刻取不到值,整條 `min-*` 會連同
+      calc 一起作廢 (變成 `min-height: auto`),高度退回 `56.25cqw` 比容器還矮。實際踩過。
+  - **裁不掉「燒在影片裡」的字幕** (上傳者自己壓進畫面的那種) —— 那是畫面本身,只能靠
+    `yt_search.py` 把標題帶「字幕/歌詞/lyrics」的排到後面,或使用者從 🎞 自己換一支。
 - 對齊:`mvSync(pos, playing)` 掛在同一個 rAF 迴圈上,**差 0.5 秒才 `seekTo`** 且 seek 後有
   800ms 冷卻 —— 每幀 seek 會讓影片一直重新緩衝,而 `getCurrentTime` 在 seek 後要一會兒才跟上。
   影片偏移是**每首歌各自一個值** (`mv_choices.offset`,MV 的前奏長度每首都不同)。
@@ -655,7 +763,9 @@ Lines like `作詞：米津玄師` and copyright boilerplate are prefixed with `
 
 三條規則,順序無所謂但職責不同:
 
-- **`isCreditLabel()` — 標籤式 (`作詞 : 某某`)。判斷的是冒號前那一段,`{1,8}` 字,不是整行長度。** 這是最容易寫錯的地方:製作人員多的時候值會很長 (實測有 109 字的 `编曲 : A/B/…/T`),舊版用 `text.length < 40` 當守門,那批全部漏標。標籤上限 8 字 + 必須含關鍵字,兩關一起才擋得住日文歌詞裡的真冒號 (`Q:本日の出来栄えは…`、`目が開いてく4:30 A.M.`、`Give me "5:00上がり"`、`16:9の端を…`)。
+- **`isCreditLabel()` — 標籤式 (`作詞 : 某某`)。判斷的是冒號前那一段,`{1,40}` 字,不是整行長度。** 這是最容易寫錯的地方:製作人員多的時候值會很長 (實測有 109 字的 `编曲 : A/B/…/T`),舊版用 `text.length < 40` 當守門,那批全部漏標。**真正在把關的是「標籤裡有沒有關鍵字」**,日文歌詞裡的真冒號 (`Q:本日の出来栄えは…`、`目が開いてく4:30 A.M.`、`Give me "5:00上がり"`、`16:9の端を…`) 全部是敗在沒有關鍵字,不是敗在長度。
+  - **上限曾經是 8 字,那是照中文標籤 (`作詞`/`編曲`) 配的,英文職位名是多字詞組,整批被擋掉** (2026-08-09):`Rec & Mix Engineer：` (18)、`Mastering Engineer：` (18)、`Sound Direction：` (15)、`Lyrics，Composition，Arrangement：` (34) —— `ずっと真夜中でいいのに。/ 消えてしまいそうです` 一首就漏了 5 行。放寬到 40 後全庫 465 首**多標 9 行、全部是真的製作人員列、零誤判**。
+  - 同一批補上的關鍵字:`trumpet`/`trombone`/`sax`/`violin`/`cello`/`flute`/`horn`/`percussion`/`direction`/`manipulator`。**是子字串比對,所以 `mixing`/`recording`/`mastering` 不必列** (`mix`/`record`/`master` 已涵蓋)。
 - **`isCreditPlain()` — 無冒號式 (`Vocal 初音ミク`)**,這條才需要 `length < 40`,而且**只在標頭區塊內 (`headerIntact`) 才算數**。`music`/`bass`/`lyric`/`drum` 這些關鍵字在英文歌詞正文裡到處都是,不設限就會把唱出來的句子藏成製作人員列 —— 全庫實測誤殺 11 行 (`Greatest music saves the day`、`君へのlyric 隠したlipstick`、`Turn it bass turn it beats`)。標籤式與版權聲明不受這個限制:收在**歌尾**的製作人員列 (實測 TEST/FAST、Kroi/Hyper) 一律是有冒號的那種寫法。
 - **`isCopyrightClaim()`** — 版權聲明獨立計分 (命中 ≥3 個「未經/許可/授權/不得…」),因為那種行又長又沒冒號,兩條規則都接不住。
 - **`isSongNameLine()` — 歌名行 (整行就是歌名)。判準是「前面每一行都已經是製作人員列」,不是行號、也不是時間戳。** 兩個都實測過都錯:ヨルシカ「あぶく」第 4 行 (t=23.6s) 是唱出來的歌名,前面三行是真歌詞;反過來 muque「TIME」的歌名行在 t=11.6s,但前後都是製作人員列,是真標頭。還要求前面**至少有一行**製作人員列 —— 第 1 行就是歌名時無從判斷是標頭還是開口唱歌名 (WurtS「分かってないよ」第 1、2 行都是歌名),寧可漏標。這條規則需要歌名,所以 `autoMarkTitleLines(lrcText, songTitle)` 有第二個參數,**五個呼叫點都要傳**;沒傳就整條跳過。比對前 `normalizeName` 會把 `「」『』《》""` 剝掉 —— 網易/QQ 的標頭常寫成 `「夜の踊り子」`,不剝就永遠對不上 (全庫漏標 2 首)。剝了也不會誤傷唱出來的引號句,「前面每一行都是製作人員列」那道閘門還壓著。

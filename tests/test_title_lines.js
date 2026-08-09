@@ -32,6 +32,13 @@ const SHOULD_MARK = [
   ['異體-合声编写', '合声编写：周杰伦'],
   // 無冒號式 (規則 2) 不能因為這次改動壞掉
   ['無冒號-Vocal', 'Vocal 初音ミク'],
+  // 英文的職位名是多字詞組,標籤長度上限曾經是 8 字 (照中文標籤配的),整批漏標。
+  // 實測 ずっと真夜中でいいのに。/ 消えてしまいそうです 一首就漏了下面這 5 行。
+  ['英文樂器-Trumpet', 'Trumpet：Tatsuhiko Yoshizawa'],
+  ['英文樂器-Trombone', 'Trombone：Nobuhide Handa'],
+  ['英文長標籤-Rec & Mix Engineer', 'Rec & Mix Engineer：Toru Matake'],
+  ['英文長標籤-Sound Direction', 'Sound Direction：Kohei Matsumoto'],
+  ['英文長標籤-三個職位併一行', 'Lyrics，Composition，Arrangement：ツミキ'],
   // 版權聲明 (獨立計分,命中 3 個宣告用詞)
   ['版權聲明', '未經著作權人許可不得使用或翻唱'],
 ];

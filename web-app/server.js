@@ -2298,15 +2298,11 @@ app.get('/api/mv', (req, res) => {
 app.post('/api/mv', (req, res) => {
   const { title, artist, videoId, offset } = req.body || {};
   if (!title) return res.status(400).json({ error: 'bad_title' });
-  // videoId 空字串 = 取消這首歌的 MV
-  if (!videoId) {
-    return db.run('DELETE FROM mv_choices WHERE title=? AND artist=?', [title, artist || ''], (err) => {
-      if (err) return res.status(500).json({ error: err.message });
-      res.json({ success: true });
-    });
-  }
+  // videoId 空字串 = 取消這首歌的 MV。**存成空字串的一列,不要 DELETE** ——
+  // 沒挑過的歌現在會自動套用搜尋結果的第一支,刪掉列就跟「從沒挑過」分不出來,
+  // 下次播到同一首又會自動套一支回來,「取消」等於沒有用。
   db.run('INSERT OR REPLACE INTO mv_choices (artist, title, video_id, offset) VALUES (?, ?, ?, ?)',
-    [artist || '', title, videoId, Number(offset) || 0], (err) => {
+    [artist || '', title, videoId || '', Number(offset) || 0], (err) => {
       if (err) return res.status(500).json({ error: err.message });
       res.json({ success: true });
     });

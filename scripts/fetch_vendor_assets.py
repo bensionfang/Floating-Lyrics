@@ -27,6 +27,13 @@ GOOGLE_FONTS = ('https://fonts.googleapis.com/css2'
                 '&family=Poppins:wght@400;600;700;800&display=swap')
 DROP_SUBSETS = {'devanagari'}
 
+# 卡拉OK字幕機的日文圓體 (JOYSOUND 那種丸ゴシック)。**只有 /karaoke 載它**,所以獨立成
+# fonts-jp.css —— 全站的 fonts.css 是每頁都載的,把幾 MB 的 CJK 併進去等於每頁都變慢。
+# CJK 家族 Google 會切成一百多個 unicode-range chunk,瀏覽器只抓用得到的那幾塊;
+# 打包版是離線的,所以全部都要抓下來放著。
+JP_FONT = ('https://fonts.googleapis.com/css2'
+           '?family=Zen+Maru+Gothic:wght@900&display=swap')
+
 CHART_JS = 'https://cdn.jsdelivr.net/npm/chart.js'
 
 
@@ -41,6 +48,14 @@ def save(rel: str, data: bytes) -> None:
     with open(path, 'wb') as f:
         f.write(data)
     print(f'  {rel}  {len(data) // 1024} KB')
+
+
+def save_quiet(rel: str, data: bytes) -> None:
+    """同 save() 但不印 —— 日文字型有一百多塊,逐塊印會把畫面洗掉"""
+    path = os.path.join(VENDOR, rel)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'wb') as f:
+        f.write(data)
 
 
 def main() -> None:
@@ -63,6 +78,21 @@ def main() -> None:
         save(f'fonts/{name}', get(url))
         out.append(block.replace(url, f'/vendor/fonts/{name}'))
     save('fonts.css', ''.join(out).encode('utf-8'))
+
+    print('Zen Maru Gothic (卡拉OK專用)')
+    # CJK 那一百多塊**沒有 `/* subset */` 註解** (只有拉丁那幾塊有),所以按 @font-face
+    # 整塊掃、檔名用序號 —— CSS 與檔案是同一次產生的,序號不會漂。
+    css = get(JP_FONT).decode('utf-8')
+    out, total = [], 0
+    for i, block in enumerate(re.findall(r'@font-face \{[^}]*\}\n?', css)):
+        url = re.search(r'url\((https://[^)]+\.woff2)\)', block).group(1)
+        name = f'jp/zenmarugothic-900-{i}.woff2'
+        data = get(url)
+        total += len(data)
+        save_quiet(f'fonts/{name}', data)
+        out.append(block.replace(url, f'/vendor/fonts/{name}'))
+    save('fonts-jp.css', ''.join(out).encode('utf-8'))
+    print(f'  {len(out)} chunks, {total // 1024} KB')
 
     print('Chart.js')
     save('chart.umd.js', get(CHART_JS))

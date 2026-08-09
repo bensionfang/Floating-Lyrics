@@ -9,12 +9,14 @@
  * 2. **整份歌詞一次渲染,靠 class 切換顯示哪兩行。** karaokeSplit 把字元 span memo 在
  *    root.__kc 上且不還原,所以換行時重寫 innerHTML 必須手動作廢那個 memo (靈動島踩過)。
  *    每行各自一顆 .kline 就沒有這個問題,換行那一幀零重建。
- * 3. **播放列就是控制列。** 備選歌詞浮層是 position:absolute 錨在播放列裡那顆按鈕上,
- *    display:none 掉播放列會連它一起藏掉,所以這裡是把播放列改成自動隱藏的浮條 (CSS),
- *    這支只負責「滑鼠動了就露出、閒置就收回」。
+ * 3. **控制列是自己一條 (#karaoke-bar),不是 footer 的播放列。** 播放列是播放器版面
+ *    (封面/歌名/隨機/循環/上一首/進度條),唱歌時一項都用不到;這一頁要的是點歌機遙控器:
+ *    重唱、切歌、字幕早晚。播放列整條 display:none —— 舊版不敢這樣做是因為備選歌詞浮層
+ *    position:absolute 錨在它裡面那顆按鈕上,解法是把整塊 .lyrics-opt-wrap 搬進
+ *    #kbar-tools (錨點跟著搬,浮層的 CSS 一個字都不用改)。
  */
 // **一定要等 DOMContentLoaded**:這一頁的 <script> 排在 include('footer') 之前,而
-// window.onMediaMessage (WebSocket 的 handler 註冊點) 與 .player-bar 都在 footer 裡,
+// window.onMediaMessage (WebSocket 的 handler 註冊點) 與備選歌詞那塊都在 footer 裡,
 // 立即執行的話是 `onMediaMessage is not a function`,整支腳本死掉、頁面空白。
 // app.js 也是同樣的理由把初始化放在 DOMContentLoaded 裡。
 document.addEventListener('DOMContentLoaded', function () {
@@ -27,12 +29,17 @@ document.addEventListener('DOMContentLoaded', function () {
     const countSecEl = document.getElementById('karaoke-countin-sec');
     const degradedEl = document.getElementById('karaoke-degraded');
     const dots = Array.from(countEl.querySelectorAll('.kdot'));
+    const introEl = document.getElementById('karaoke-intro');
+    const introCountEl = document.getElementById('ki-count');
+    const nowEl = document.getElementById('k-now');
 
     // ── 歌詞狀態 ──
     let lines = [];
     let unsynced = false;
-    let curIdx = -1;
-    let nextIdx = -1;
+    let curIdx = -1;      // 正在唱的那一句 (填色的對象)
+    let topIdx = -1;      // 上槽
+    let botIdx = -1;      // 下槽
+    let firstTime = Infinity;   // 第一句真歌詞的時間 = 前奏結束 = 資訊卡收掉的時機
     let fetchSeq = 0;
 
     // ── 播放狀態 (自己內插,理由同 app.js:廣播一秒才一則) ──
@@ -65,29 +72,61 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function renderLines() {
-        curIdx = -1;
-        nextIdx = -1;
-        // 歌詞本體是 server 產好的 HTML (含 <ruby>),furigana_inject.py 在分詞前就逃逸過了
+        curIdx = topIdx = botIdx = -1;
+        const first = lines.find((l) => l.text && l.text !== '♫');
+        firstTime = first ? first.time : Infinity;
+        // 歌詞本體是 server 產好的 HTML (含 <ruby>),furigana_inject.py 在分詞前就逃逸過了。
+        // **每一行畫兩份**:.kbase 是未唱的白字黑框,.kover 是唱過的紅字白框、絕對定位疊在
+        // 上面,靠逐字的 clip-path 由左往右揭開 (見 style.css 那段說明)。
         linesEl.innerHTML = lines.map((l, i) =>
-            `<div class="kline" id="kline-${i}"><span>${l.text}</span></div>`).join('');
+            `<div class="kline" id="kline-${i}"><span class="kbase">${l.text}</span><span class="kover">${l.text}</span></div>`).join('');
         // 沒有逐字時間的歌照樣進來,只是整句一起亮 —— 標一下,別讓人以為壞了
         degradedEl.classList.toggle('hidden', unsynced || !lines.length || lines.some(l => l.words));
+    }
+
+    function clearLyrics() {
+        lines = [];
+        linesEl.innerHTML = '';
+        curIdx = topIdx = botIdx = -1;
+        firstTime = Infinity;
+        degradedEl.classList.add('hidden');
+        introEl.classList.add('hidden');
+        linesEl.classList.remove('hidden');
+        document.getElementById('ki-credits').innerHTML = '';
     }
 
     function setLyrics(lrc) {
         const r = parseLrc(lrc);
         lines = r.lines;
         unsynced = r.unsynced;
+        setCredits(lrc);
         if (unsynced) {
             // 字幕機沒有時間軸就沒有意義:不硬撐,直接說清楚
-            lines = [];
-            linesEl.innerHTML = '';
-            degradedEl.classList.add('hidden');
+            clearLyrics();
             setStatus('這份歌詞沒有時間軸,卡拉OK模式需要同步歌詞', 'fa-solid fa-clock');
             return;
         }
         renderLines();
         setStatus(lines.length ? '' : '找不到這首歌的歌詞', 'fa-solid fa-face-frown');
+    }
+
+    // 資訊卡的作詞/作曲:parseLrc 會把 #TITLE# 行整個丟掉 (那不是歌詞),所以在這裡自己
+    // 從原始字串撈。判準是「有冒號」—— 那正好把歌名行 (沒有冒號) 與版權聲明 (又長又沒冒號)
+    // 濾掉,剩下的就是 `作詞 : 某某` 這種製作人員列。
+    // **用 innerHTML 是對的**:那幾行已經被 furigana_inject.py 逃逸過 (它不會給 #TITLE# 列
+    // 標注音,所以裡面不會有標籤),textContent 反而會把 `&amp;` 原樣印出來。
+    function setCredits(lrc) {
+        const out = [];
+        for (const raw of String(lrc || '').split('\n')) {
+            const t = raw.replace(/\[\d+:\d+(?:[\.:]\d+)?\]/g, '').trim();
+            if (!t.startsWith('#TITLE#')) continue;
+            const s = t.slice(7).trim();
+            if (!s || s.length > 40 || !/[:：]/.test(s)) continue;
+            if (!out.includes(s)) out.push(s);
+            if (out.length >= 4) break;
+        }
+        document.getElementById('ki-credits').innerHTML =
+            out.map((s) => `<div>${s}</div>`).join('');
     }
 
     function paintCountdown(cd) {
@@ -98,36 +137,81 @@ document.addEventListener('DOMContentLoaded', function () {
         countSecEl.textContent = cd.remain.toFixed(1) + 's';
     }
 
+    const byIdx = (i) => (i >= 0 ? document.getElementById(`kline-${i}`) : null);
+    // 填色只動疊在上面那層。**karaokeSplit / karaokePaint / karaokeClear 三個都要收到
+    // 同一顆元素** —— 它們把字元 span 與「正在唱的那顆」memo 在 root.__kc / root.__kcNow 上,
+    // 傳不同的根等於各記各的,清除就清不到。
+    const overOf = (el) => (el ? el.querySelector('.kover') : null);
+
+    /**
+     * 把 karaokeSlots 算出來的上下槽套到 DOM 上。
+     *
+     * **唱完的那句不清填色** —— 它在同一瞬間就被另一槽換掉了 (唱下面那句時上面換成再下
+     * 一句),所以根本來不及被看見。清除的時機因此是「一句**進場**時」:往回 seek 會讓
+     * 同一句再上場一次,那時舊的填色才要抹掉。
+     */
+    function applySlots(s) {
+        const prev = [topIdx, botIdx];
+        const now = [s.top, s.bottom];
+
+        for (const i of prev) {
+            if (i < 0 || now.includes(i)) continue;
+            const el = byIdx(i);
+            if (el) el.classList.remove('slot-top', 'slot-bottom', 'cur');
+        }
+        for (const i of now) {
+            if (i < 0 || prev.includes(i)) continue;
+            const over = overOf(byIdx(i));
+            if (over) karaokeClear(over);
+        }
+        const top = byIdx(s.top);
+        if (top) { top.classList.add('slot-top'); top.classList.remove('slot-bottom'); }
+        const bottom = byIdx(s.bottom);
+        if (bottom) { bottom.classList.add('slot-bottom'); bottom.classList.remove('slot-top'); }
+
+        if (s.index !== curIdx) {
+            const oldCur = byIdx(curIdx);
+            if (oldCur) oldCur.classList.remove('cur');
+            const cur = byIdx(s.index);
+            if (cur) cur.classList.add('cur');
+        }
+        topIdx = s.top;
+        botIdx = s.bottom;
+        curIdx = s.index;
+    }
+
+    // 前奏的曲名畫面。**一律顯示** (JOYSOUND 原樣):前奏短的歌就是一閃而過,
+    // 不因為短就跳過 —— 每首歌行為一致比較好預期。
+    let introSec = '';
+    function paintIntro(p) {
+        const show = lines.length > 0 && p < firstTime;
+        introEl.classList.toggle('hidden', !show);
+        linesEl.classList.toggle('hidden', show);
+        if (!show) return;
+        const t = `前奏 ${Math.max(0, firstTime - p).toFixed(1)}s`;
+        if (t !== introSec) { introSec = t; introCountEl.textContent = t; }
+    }
+
     function frame() {
         const now = performance.now();
         const dt = (now - lastFrame) / 1000;
         lastFrame = now;
         if (playing) pos += dt;
 
+        const p = pos - syncOffset;
         if (lines.length) {
-            const p = pos - syncOffset;
             const s = karaokeSlots(lines, p, curIdx);
-            if (s.index !== curIdx || s.nextIndex !== nextIdx) {
-                const oldCur = document.getElementById(`kline-${curIdx}`);
-                if (oldCur) { oldCur.classList.remove('cur'); karaokeClear(oldCur); }
-                const oldNext = document.getElementById(`kline-${nextIdx}`);
-                if (oldNext) oldNext.classList.remove('next');
-                curIdx = s.index;
-                nextIdx = s.nextIndex;
-                const cur = document.getElementById(`kline-${curIdx}`);
-                if (cur) cur.classList.add('cur');
-                const nxt = document.getElementById(`kline-${nextIdx}`);
-                if (nxt) nxt.classList.add('next');
-            }
+            if (s.index !== curIdx || s.top !== topIdx || s.bottom !== botIdx) applySlots(s);
             if (curIdx >= 0) {
-                const el = document.getElementById(`kline-${curIdx}`);
+                const over = overOf(byIdx(curIdx));
                 // 位置沒有提前量,所以這裡不必再減回去 (見檔頭第 1 點)
-                if (el) karaokePaint(el.firstElementChild, lines[curIdx].words, (p - lines[curIdx].time) * 1000);
+                if (over) karaokePaint(over, lines[curIdx].words, (p - lines[curIdx].time) * 1000);
             }
             paintCountdown(s.countdown);
         } else {
             paintCountdown(null);
         }
+        paintIntro(p);
 
         mvSync(pos, playing);
         requestAnimationFrame(frame);
@@ -149,8 +233,17 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
+    // 播放鍵自己更新:common.js 的 syncPlayerBar 改的是播放列裡那顆,那條在這一頁是藏著的
+    function paintPlayBtn() {
+        const icon = document.getElementById('kbar-play-icon');
+        if (!icon) return;
+        icon.className = 'fa-solid ' + (playing ? 'fa-pause' : 'fa-play');
+        document.getElementById('kbar-play-label').textContent = playing ? '暫停' : '播放';
+    }
+
     function applyState(d) {
         playing = !!d.is_playing;
+        paintPlayBtn();
 
         if (d.title && d.position !== lastServerPos) {
             const diff = d.position - pos;
@@ -164,21 +257,23 @@ document.addEventListener('DOMContentLoaded', function () {
             title = d.title;
             artist = d.artist || '';
             window.currentMediaDuration = d.duration || 0;
-            lines = [];
-            linesEl.innerHTML = '';
-            degradedEl.classList.add('hidden');
+            clearLyrics();
+            // 曲名/歌手是播放器給的原始字串 (沒逃逸過) —— 這兩顆一定要 textContent
+            document.getElementById('ki-title').textContent = title;
+            document.getElementById('ki-artist').textContent = artist;
             setStatus('正在搜尋歌詞...', 'fa-solid fa-spinner fa-spin');
             fetch(`/api/lyrics/offset?title=${encodeURIComponent(title)}&artist=${encodeURIComponent(artist)}`)
-                .then(r => r.json()).then(o => { syncOffset = o.offset || 0; })
-                .catch(() => { syncOffset = 0; });
-            karaokeOnSongChange(title, artist);
+                .then(r => r.json()).then(o => { syncOffset = o.offset || 0; window.karaokePaintOffset(); })
+                .catch(() => { syncOffset = 0; window.karaokePaintOffset(); });
+            // 還在介紹頁時不要載 MV (`karaokeStart` 會補一次)
+            if (started) karaokeOnSongChange(title, artist);
+            nowEl.textContent = `現在播放:${title}${artist ? ' — ' + artist : ''}`;
         } else if (!d.title && title) {
             title = artist = lyricsKey = '';
-            lines = [];
-            linesEl.innerHTML = '';
-            degradedEl.classList.add('hidden');
+            clearLyrics();
             setStatus('等待播放...');
-            karaokeOnSongChange('', '');
+            nowEl.textContent = '目前沒有偵測到播放';
+            if (started) karaokeOnSongChange('', '');
         }
         if (d.duration !== undefined) window.currentMediaDuration = d.duration;
 
@@ -193,10 +288,52 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    // 這一頁本身就是一個更大的歌詞畫面,置頂的靈動島是重複的而且會蓋在上面 —— 請 server
-    // 把它收起來 (離開/重整/當掉時連線一斷,server 自己開回來,見 syncIslandHidden)。
-    // **sticky**:連線斷掉重連後要重送,否則旗標歸零、島自己跑回來。
-    window.sendMediaSocket({ type: 'karaoke_active', active: true }, 'karaoke');
+    // ===================== 進入 / 離開 =====================
+    //
+    // 這一頁是「介紹頁 + 字幕機」兩個畫面 (同 /game),`body.karaoke-page` 才是字幕機那個。
+    // **全螢幕只能在使用者手勢裡要**,所以 requestFullscreen 掛在「開始」那顆按鈕上,
+    // 不是進頁面就要 —— 沒有手勢瀏覽器一律拒絕 (而且會在 console 留一則沒人看的警告)。
+    let started = false;
+
+    window.karaokeStart = function () {
+        if (started) return;
+        started = true;
+        document.body.classList.add('karaoke-page');
+        // 字幕機本身就是一個更大的歌詞畫面,置頂的靈動島是重複的而且會蓋在上面 —— 請 server
+        // 把它收起來 (離開/重整/當掉時連線一斷,server 自己開回來,見 syncIslandHidden)。
+        // **sticky**:連線斷掉重連後要重送,否則旗標歸零、島自己跑回來。
+        window.sendMediaSocket({ type: 'karaoke_active', active: true }, 'karaoke');
+        // 從頭唱:按下開始就把歌跳回 0 (= 控制列上的「重唱」),並且直接開始放。
+        // **`play` 不是 `playpause`** —— 後者是 toggle,本來就在播的話會被關掉。
+        // 本地狀態一起改,不然畫面要等下一則廣播 (一秒一則) 才開始跑。
+        karaokeRestart();
+        mediaAction('play');
+        playing = true;
+        paintPlayBtn();
+        // MV 刻意等到這裡才載:介紹頁背後偷偷播一支 YouTube 影片沒有道理
+        karaokeOnSongChange(title, artist);
+        document.documentElement.requestFullscreen?.().catch(() => {});
+        showBar();
+    };
+
+    window.karaokeExit = function () {
+        if (!started) return;
+        started = false;
+        // 離開就停:不停的話使用者已經回到介紹頁,背景還在放沒人唱的歌 (同 game.js 的 endGame)
+        mediaAction('pause');
+        playing = false;
+        paintPlayBtn();
+        document.body.classList.remove('karaoke-page');
+        window.sendMediaSocket({ type: 'karaoke_active', active: false }, 'karaoke');
+        karaokeOnSongChange('', '');   // 停掉 MV
+        if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+    };
+
+    // 使用者用瀏覽器自己的方式離開全螢幕 (ESC、F11) 時也要回到介紹頁 ——
+    // 全螢幕的 ESC 被瀏覽器吃掉,下面那個 keydown 收不到。
+    document.addEventListener('fullscreenchange', () => {
+        if (!document.fullscreenElement && started) karaokeExit();
+    });
 
     window.onMediaMessage((msg) => {
         if (msg.type === 'media_state' || msg.type === 'init') {
@@ -217,7 +354,60 @@ document.addEventListener('DOMContentLoaded', function () {
         } catch (e) {}
     }, 2000);
 
-    // ===================== 控制列 (= 自動隱藏的播放列) =====================
+    // ===================== 控制列 (#karaoke-bar) =====================
+
+    // 備選歌詞那顆連同它的浮層整塊搬過來:浮層是 absolute 錨在 .lyrics-opt-wrap 上,
+    // 搬 wrapper 而不是只搬按鈕,錨點才跟著走 (只搬按鈕的話浮層會留在藏起來的播放列裡)。
+    const tools = document.getElementById('kbar-tools');
+    const optWrap = document.querySelector('.lyrics-opt-wrap');
+    if (tools && optWrap) tools.prepend(optWrap);
+
+    // 頭出し:跳回 0 從頭唱。**本地 pos 也要一起歸零** —— 廣播一秒才一則,只送 seek 的話
+    // 畫面會停在原本那句、等下一則廣播才跳,看起來像沒反應 (同 karaokeStart)。
+    window.karaokeRestart = function () {
+        fetch('/api/seek', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ position: 0 }),
+        }).catch(() => {});
+        pos = 0;
+        lastServerPos = -1;
+    };
+
+    // 字幕早晚 = 這首歌的 sync offset,跟首頁共用同一筆 (存 DB)。填色與換行都吃
+    // frame() 的 `pos - syncOffset`,所以改完不必自己重畫,下一幀就對了。
+    const offsetEl = document.getElementById('kbar-offset');
+    let saveOffsetTimer = null;
+
+    function paintOffset() {
+        const ms = Math.round(syncOffset * 1000);
+        offsetEl.textContent = ms > 0 ? `+${ms} ms` : `${ms} ms`;
+    }
+    window.karaokePaintOffset = paintOffset;
+
+    function saveOffset() {
+        if (!title) return;
+        clearTimeout(saveOffsetTimer);
+        saveOffsetTimer = setTimeout(() => {
+            fetch('/api/lyrics/offset', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title, artist, offset: syncOffset }),
+            }).catch(() => {});
+        }, 500);
+    }
+
+    window.karaokeAdjustOffset = function (delta) {
+        syncOffset = Math.round((syncOffset + delta) * 10) / 10;   // 0.1 的浮點殘渣
+        paintOffset();
+        saveOffset();
+    };
+
+    window.karaokeResetOffset = function () {
+        syncOffset = 0;
+        paintOffset();
+        saveOffset();
+    };
 
     let barTimer = null;
     let overBar = false;
@@ -240,7 +430,7 @@ document.addEventListener('DOMContentLoaded', function () {
     window.karaokeShowBar = showBar;
 
     document.addEventListener('mousemove', showBar);
-    const bar = document.getElementById('player-bar');
+    const bar = document.getElementById('karaoke-bar');
     if (bar) {
         bar.addEventListener('mouseenter', () => { overBar = true; });
         bar.addEventListener('mouseleave', () => { overBar = false; });
@@ -249,14 +439,14 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // ESC 離開。浮層開著時先讓它們吃掉這一下 (備選歌詞的浮層自己有 ESC handler)
     document.addEventListener('keydown', (e) => {
-        if (e.key !== 'Escape') return;
+        if (e.key !== 'Escape' || !started) return;
         const opt = document.getElementById('lyrics-options-modal');
         if (opt && opt.classList.contains('show')) return;
         if (!document.getElementById('karaoke-mv-picker').classList.contains('hidden')) {
             karaokeCloseMvPicker();
             return;
         }
-        location.href = '/';
+        karaokeExit();
     });
 
     // 降級提示上那顆「找別份歌詞」:露出控制列再跑既有的備選歌詞流程 (lyrics-tools.js)

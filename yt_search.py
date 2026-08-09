@@ -28,6 +28,53 @@ MAX_RESULTS = 10
 # 時長差在這個範圍內視為「就是這首歌」,排序時往前提
 DURATION_TOLERANCE = 30
 
+# 「明顯不是原版 MV」的字眼。搜尋結果本來就混著翻唱、演唱會、歌ってみた、鋼琴譜、AMV,
+# 而卡拉OK頁**會自動套用第一支** —— 挑錯的代價是唱到一半畫面完全不對,所以這一類要排到最後,
+# 而且整包結果的第一支若落在這一類就乾脆不自動套 (`ok` 旗標,使用者仍然可以自己挑)。
+# 日文/中文那批直接比子字串;英文那批要 \b 邊界,否則 `live` 會吃到 `delivery`、`mad` 吃到 `made`。
+_BAD_JA = re.compile(
+    "歌ってみた|唄ってみた|弾いてみた|叩いてみた|踊ってみた|演奏してみた|弾き語り|"
+    "歌い方|解説|ギター|ベース|ドラム|三味線|合唱|"
+    "カバー|カラオケ|オフボーカル|ピアノ|オルゴール|ライブ|ライヴ|生放送|"
+    "翻唱|伴奏|純音樂|純音楽|作業用|耳コピ|"
+    # 字幕/歌詞卡那類轉載:畫面上本來就燒著一份字,跟我們自己的歌詞疊在一起會看不清楚
+    "字幕|歌詞|歌词")
+_BAD_EN = re.compile(
+    r"\b(cover|covered|karaoke|instrumental|inst|off ?vocal|piano|acoustic|guitar|"
+    r"remix|nightcore|8-?bit|mad|amv|reaction|live|concert|tour|"
+    r"lyrics?|subtitle[sd]?|romaji|sub ?esp)\b", re.I)
+
+
+def _is_bad(it):
+    text = f"{it['title']} {it['channel']}"
+    return bool(_BAD_JA.search(text) or _BAD_EN.search(text))
+
+
+def _norm(s):
+    """比對頻道名與歌手名用:去掉空白與常見的裝飾符號,大小寫不計。"""
+    return re.sub(r"[\s\-_/&・,、。!！?？'\"“”‘’()（）\[\]【】]", "", (s or "")).lower()
+
+
+def _title_matches(it, title):
+    """搜尋結果的標題含這首歌的歌名。
+
+    **這一項要排在「官方頻道」前面** —— 官方頻道底下當然還有別首歌,實測
+    `ヨルシカ / 春泥棒` 會被排到同頻道的「晴る」、`米津玄師 / KICK BACK` 被排到「Plazma」。
+    正規化後直接比包含,所以 `KICK BACK` 對得上 `KICKBACK`。
+    """
+    t = _norm(title)
+    return bool(t) and t in _norm(it["title"])
+
+
+def _is_official(it, artist):
+    """頻道名含歌手名 = 官方頻道 (或至少是本人相關的上傳)。
+
+    這是**最強的一個訊號**:實測 `米津玄師 / 春雷` 的官方頻道叫「Kenshi Yonezu 米津玄師」,
+    而 YouTube 自己排在第一的常常是帶字幕的轉載或翻唱。沒有歌手名時這一項一律不加分。
+    """
+    a = _norm(artist)
+    return bool(a) and a in _norm(it["channel"])
+
 
 def fetch_html(query):
     """打搜尋頁,回 HTML 字串;失敗回空字串。"""
@@ -97,10 +144,13 @@ def _thumb(vr):
     return thumbs[-1].get("url", "") if thumbs else ""
 
 
-def parse_results(data, duration=None, limit=MAX_RESULTS):
-    """ytInitialData → [{videoId, title, channel, durationSec, thumb}]。
+def parse_results(data, duration=None, limit=MAX_RESULTS, artist="", title=""):
+    """ytInitialData → [{videoId, title, channel, durationSec, thumb, ok}]。
 
-    排序只做兩件輕的,其餘照 YouTube 自己的順序:
+    排序三件,其餘照 YouTube 自己的順序 (它的相關度對「歌手 + 歌名」本來就相當準):
+      * 翻唱/演唱會/鋼琴/カラオケ 那一類排到最後,並標 `ok: False` —— 前端只在第一支
+        `ok` 時才自動套用,不然寧可留黑底
+      * 標題含歌名的往前,再來是頻道含歌手名 (官方頻道)
       * `- Topic` 頻道往後排 —— 那是自動產生的音訊上傳,畫面是一張靜態封面,當 MV 沒有意義
       * 有歌曲時長時,差在 DURATION_TOLERANCE 內的往前排
     """
@@ -129,12 +179,20 @@ def parse_results(data, duration=None, limit=MAX_RESULTS):
         except Exception:
             continue
 
+    for it in items:
+        it["ok"] = not _is_bad(it)
+
     def rank(it):
         topic = 1 if it["channel"].strip().endswith("- Topic") else 0
         close = 0
         if duration and it["durationSec"]:
             close = 0 if abs(it["durationSec"] - duration) <= DURATION_TOLERANCE else 1
-        return (topic, close)
+        # 官方頻道排在乾淨結果之中的最前面,但**還是要先過 ok 那一關** ——
+        # 官方頻道自己也會上傳 Live 版與 -Topic 音源
+        return (0 if it["ok"] else 1,
+                0 if _title_matches(it, title) else 1,
+                0 if _is_official(it, artist) else 1,
+                topic, close)
 
     items.sort(key=rank)   # list.sort 是穩定的,同分維持 YouTube 的原順序
     return items[:limit]
@@ -144,7 +202,8 @@ def search(title, artist="", duration=None, limit=MAX_RESULTS):
     query = f"{artist} {title}".strip() if artist else (title or "").strip()
     if not query:
         return []
-    return parse_results(extract_initial_data(fetch_html(query)), duration=duration, limit=limit)
+    return parse_results(extract_initial_data(fetch_html(query)),
+                         duration=duration, limit=limit, artist=artist, title=title)
 
 
 if __name__ == "__main__":

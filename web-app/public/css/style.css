@@ -2238,7 +2238,10 @@ span[data-tip] {
     gap: 16px;
 }
 
-.player-right .ctrl-btn {
+/* 卡拉OK頁的工具格 (#kbar-tools) 吃同一組規則:備選歌詞那顆是從這裡搬過去的,
+   漏掉的話「搜到候選 = 綠色 + 小綠點」在那一頁會靜默失效 */
+.player-right .ctrl-btn,
+#kbar-tools .ctrl-btn {
     padding: 0;
     width: 20px;
     height: 20px;
@@ -2260,15 +2263,18 @@ span[data-tip] {
 }
 
 /* 使用中圖示 = Spotify 綠 + 下方小綠點 (2.png) */
-.player-right .ctrl-btn {
+.player-right .ctrl-btn,
+#kbar-tools .ctrl-btn {
     position: relative;
 }
 
-.player-right .ctrl-btn.active {
+.player-right .ctrl-btn.active,
+#kbar-tools .ctrl-btn.active {
     color: var(--accent-main);
 }
 
-.player-right .ctrl-btn.active::after {
+.player-right .ctrl-btn.active::after,
+#kbar-tools .ctrl-btn.active::after {
     content: '';
     position: absolute;
     bottom: -7px;
@@ -2726,6 +2732,30 @@ body.game-masked .main-content { border-radius: 8px; }
    裡面那顆按鈕上,藏掉播放列會連它一起藏掉。所以改成 fixed 的自動隱藏浮條,
    滑鼠動了才滑出來 (karaoke-mode.js 的 body.bar-visible)。
    ============================================================ */
+/* 介紹頁 ⇄ 字幕機:`body.karaoke-page` 才是字幕機。兩個畫面互斥,
+   舞台在介紹頁時完全不畫 (裡面有 MV 的 iframe 容器與 rAF 在跑的歌詞層)。 */
+body:not(.karaoke-page) #karaoke-stage { display: none; }
+body.karaoke-page #karaoke-setup,
+body.karaoke-page .page-header { display: none; }
+
+#karaoke-setup { padding: 26px 30px; max-width: 900px; }
+.k-guide-title { font-size: 17px; margin-bottom: 14px; }
+.k-steps { display: flex; flex-direction: column; gap: 12px; padding-left: 20px; }
+.k-steps li { line-height: 1.6; }
+/* 只有開頭那顆 <b> 是標題要自成一行 —— 寫成 `li b` 的話內文裡的 <b>ESC</b> 也會被斷行 */
+.k-steps li > b:first-child { display: block; font-size: 14px; }
+.k-steps li span { font-size: 13px; color: var(--text-secondary); }
+.k-start-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-top: 22px;
+    padding-top: 18px;
+    border-top: 1px solid var(--border-color);
+}
+#k-now { font-size: 13px; color: var(--text-secondary); }
+
 body.karaoke-page .sidebar { display: none; }
 body.karaoke-page .app-container {
     grid-template-areas: "main";
@@ -2740,22 +2770,81 @@ body.karaoke-page .main-content {
 }
 body.karaoke-page .content-body { padding: 0; height: 100%; min-height: 0; }
 
-/* 控制列:平常收在畫面外,滑鼠一動滑出來 */
-body.karaoke-page .player-bar {
+/* 控制列:點歌機遙控器,平常收在畫面外,滑鼠一動滑出來。
+   **播放列在這一頁整條藏掉** —— 它是播放器版面 (封面/歌名/隨機/循環/上一首/進度條),
+   唱歌時一項都用不到。舊版那條「播放列不能 display:none,備選歌詞浮層錨在它裡面」的限制
+   由 karaoke-mode.js 解掉:整塊 .lyrics-opt-wrap (按鈕+泡泡+浮層) 搬進 #kbar-tools,
+   錨點跟著搬,浮層的 CSS 一個字都不用改。 */
+body.karaoke-page .player-bar { display: none; }
+
+#karaoke-bar { display: none; }
+body.karaoke-page #karaoke-bar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
     position: fixed;
-    left: 0; right: 0; bottom: 0;
+    left: 50%;
+    bottom: 22px;
     z-index: 60;
+    padding: 8px 20px;
+    border-radius: 999px;
     background: rgba(10, 10, 12, 0.92);
     backdrop-filter: blur(14px);
-    border-radius: 0;
-    transform: translateY(105%);
-    transition: transform 0.25s ease;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    /* 置中靠 translateX(-50%),所以收起來的那個 translateY 必須跟它寫在同一個
+       transform 裡 —— 只寫 translateY 會把置中蓋掉,滑出來時整條偏半個寬 */
+    transform: translateX(-50%) translateY(calc(100% + 32px));
+    opacity: 0;
+    transition: transform 0.25s ease, opacity 0.25s ease;
 }
-body.karaoke-page.bar-visible .player-bar { transform: none; }
-/* 段落循環/編輯假名/放大模式在這一頁都是「點了跳回首頁」(common.js),放著只會誤觸 */
-body.karaoke-page #loop-mode-btn,
-body.karaoke-page #toggle-ruby-mode-btn,
-body.karaoke-page .fullscreen-btn { display: none; }
+body.karaoke-page.bar-visible #karaoke-bar { transform: translateX(-50%); opacity: 1; }
+
+.kbar-group { display: flex; align-items: center; gap: 8px; }
+.kbar-sep { width: 1px; height: 32px; background: rgba(255, 255, 255, 0.12); }
+
+/* 大鈕 = 圖示 + 文字標籤 (「重唱」純圖示猜不出來) */
+.kbar-big {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    width: 62px;
+    padding: 6px 0;
+    border: none;
+    border-radius: 14px;
+    background: transparent;
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+.kbar-big i { font-size: 19px; }
+.kbar-big span { font-size: 11px; color: var(--text-secondary); }
+.kbar-big:hover { background: rgba(255, 255, 255, 0.1); }
+.kbar-big:hover span { color: var(--text-primary); }
+
+.kbar-label { font-size: 11px; color: var(--text-secondary); }
+.kbar-offset button {
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    font-size: 11px;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text-primary);
+    cursor: pointer;
+}
+.kbar-offset button:hover { background: rgba(255, 255, 255, 0.12); }
+#kbar-offset {
+    min-width: 58px;
+    text-align: center;
+    font-family: monospace;
+    font-weight: 700;
+    font-size: 12px;
+    color: var(--accent-main);
+    cursor: pointer;
+}
 
 /* ── 舞台 ── */
 /* 歌詞貼著畫面下緣 (照一般卡拉OK的版面),上面整片留給 MV。
@@ -2781,76 +2870,116 @@ body.karaoke-page .fullscreen-btn { display: none; }
 }
 /* 16:9 鋪滿:兩個維度都取到滿,超出的部分裁掉。
    **單位要用 cqw/cqh 不能用 vw/vh** —— 這個舞台不是整個視窗 (app-container 還留著
-   上下左右的內距),用視窗單位算出來的尺寸會比容器小一圈,左右露出黑邊。 */
+   上下左右的內距),用視窗單位算出來的尺寸會比容器小一圈,左右露出黑邊。
+
+   播放器**故意比容器高 44cqh (上下各溢出 22cqh),而且維持置中**:YouTube 的 CC 字幕層
+   關不掉 (`cc_load_policy: 0` 只是「照使用者偏好」,無痕視窗實測照樣會出現;而 unloadModule/
+   setOption 會把播放器弄到 UNSTARTED 卡死,見 karaoke-mv.js),唯一還能動的就是把字幕畫的
+   那一帶裁到容器外面。
+
+   **裁切一定要上下對稱,不可以只把影片往下推。** 試過「下緣往下推 18cqh」那版:CSS 幾何
+   完全正確 (隔離重現量到 topGap 0),但**很多 MV 本身有 letterbox 黑邊** —— 置中時黑邊
+   平分上下、各一條細的看不太出來,一旦往下推就全部堆到上面變成一大條 (2026-08-09 回報)。
+   對稱裁同時解決兩件事:影片維持置中,黑邊也跟字幕一起被裁掉。
+
+   22 這個數字是解出來的:裁掉 C 之後播放器總高 `100 + 2C`,而字幕約佔播放器高的 15%,
+   要蓋住就要 `C ≥ 0.15 × (100 + 2C)` → `C ≥ 21.4`。代價是 MV 放大到 1.44 倍、左右也
+   各吃掉約四分之一 —— 它是背景,而且下緣本來就被歌詞蓋著。
+   **兩個數字是綁在一起的**,要調 (字幕露出來 / MV 裁太兇) 一起換:
+   `min-height: (100 + 2C)cqh`、`min-width: min-height × 1.778`。
+   **不要改寫成 `calc()` + 自訂屬性** —— 只要那個 var 有任何一刻取不到值,整條 `min-*` 會
+   連同 calc 一起作廢 (變成 `min-height: auto`),高度就退回 `56.25cqw` 比容器還矮。
+   寫成字面值就沒有這個破綻。 */
 #karaoke-mv { container-type: size; }
 #karaoke-mv iframe {
     position: absolute;
     top: 50%; left: 50%;
     transform: translate(-50%, -50%);
     width: 100cqw; height: 56.25cqw;
-    min-height: 100cqh; min-width: 177.78cqh;
+    /* 要蓋滿的是「容器 + 上下各 22cqh」= 144cqh,寬跟著 ×16/9 = 256cqh */
+    min-height: 144cqh; min-width: 256cqh;
     border: 0;
 }
 
-/* ── 兩行歌詞 ── */
+/* ── 兩行歌詞 (JOYSOUND 式) ── */
 #karaoke-lines {
     position: relative;
     z-index: 2;
     width: min(1400px, 92vw);
-    text-align: center;
+    display: flex;
+    flex-direction: column;
 }
-/* 只有當前句與下一句露臉,其餘全部收起來 —— 靠 class 切換而不是重寫 innerHTML,
-   karaokeSplit 記在 .__kc 上的字元 span 才不會每句作廢一次 */
+/* 丸ゴシック (Zen Maru Gothic 900) —— 系統的日文字型全是方頭的,那是跟 JOYSOUND
+   差最遠的一點。@font-face 在 /vendor/fonts-jp.css,只有 karaoke.ejs 載它。 */
+#karaoke-lines, #karaoke-intro {
+    font-family: 'Zen Maru Gothic', 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+#karaoke-lines.hidden { display: none; }
+/* 只有上下兩槽露臉,其餘全部收起來 —— 靠 class 切換而不是重寫 innerHTML,
+   karaokeSplit 記在 .__kc 上的字元 span 才不會每句作廢一次。
+   **上下順序靠 flex 的 order 而不是文件順序**:活躍句坐下槽時,上槽放的是它的
+   下一句 (文件順序在它後面),照文件順序畫就上下顛倒了。 */
 .kline { display: none; }
-.kline.cur, .kline.next { display: block; }
-.kline.cur {
-    font-size: clamp(34px, 4.6vw, 76px);
-    font-weight: 700;
+.kline.slot-top, .kline.slot-bottom { display: block; }
+/* 上下兩行**交錯**:上行靠左、下行靠右,各離該側約 16% (照 JOYSOUND 的版面,docs/1.png)。
+   一前一後才看得出「這句是這句、那句是那句」,兩行都置中反而黏成一團。
+   **縮排一定要用 margin 不能用 padding** —— .kover 是 `position:absolute; inset:0`,
+   它的容器盒是 .kline 的 *padding box*,加 padding 會讓上面那層比 .kbase 多偏一段,
+   兩種顏色又錯開 (就是先前 ::before 那個坑的另一種形狀)。margin 改的是整顆 .kline,兩層一起動。 */
+.kline.slot-top { order: 0; text-align: left; margin-left: 16%; }
+.kline.slot-bottom { order: 1; text-align: right; margin-right: 16%; }
+.kline {
+    position: relative;
+    font-size: clamp(34px, 4.4vw, 70px);
+    font-weight: 900;
     line-height: 1.35;
-    color: #fff;
-    margin-bottom: 0.35em;
+    margin-bottom: 0.12em;
 }
-.kline.next {
-    font-size: clamp(22px, 2.6vw, 42px);
-    font-weight: 600;
-    line-height: 1.35;
-    color: rgba(255, 255, 255, 0.45);
-}
-.kline > span { white-space: pre-wrap; }
-.kline rt {
-    font-size: 0.45em;
-    transform: translateY(-2px);
-    color: rgba(255, 255, 255, 0.75);
-}
-.kline.next rt { color: rgba(255, 255, 255, 0.4); }
+.kline rt { font-size: 0.45em; transform: translateY(-2px); }
 body.hide-furigana .kline rt { display: none; }
 
-/* 壓在沒有暗化的 MV 上時,歌詞刻意**什麼裝飾都不加**,就是純白的字。
-   試過兩種都被打回:`-webkit-text-stroke` 的黑框圈著日文細筆畫很醜 (假名的小字更糟);
-   疊層 text-shadow 的暗暈也不要。可讀性怎麼處理待定,不要自作主張加回來。 */
+/* JOYSOUND 的配色:未唱 = 黑框白字,唱過 = 白框紅字。
+   **描邊寬度用 em 不用 px** —— rt 是 0.45em,同一條宣告就讓注音的框跟著變細。
+   `paint-order: stroke fill` 不能省:沒有它描邊會壓在筆畫內側,日文的細筆畫會糊掉
+   (舊版註解說的「text-stroke 圈日文很醜」其實是漏了這個屬性,不是 text-stroke 的問題)。
 
-/* 逐字填色:漸層要套在**每一顆** .kc 上,不是只給正在唱的那顆 ——
-   background-clip: text 會關掉次像素抗鋸齒,只套一顆的話那個字比旁邊暗一截。
-   (三端同一條規則,見 public/js/karaoke.js 檔尾的說明) */
-.kline.cur > span .kc {
-    --k: 0%;
-    background-image: linear-gradient(90deg, #fff var(--k), rgba(255,255,255,0.45) var(--k));
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
+   **每一行畫兩份、整行疊整行**:.kbase 是未唱的那份,.kover 絕對定位疊在上面,逐字
+   clip-path 由左往右揭開。**不可以改成用 `::before` 逐字疊** —— 絕對定位元素放在
+   *行內* 元素裡時,基線與行盒對不上 (實測整顆字往左下偏約 0.1em),兩種顏色的字就錯開了。
+   整行那層是 block,inset:0 與 .kbase 是同一個內容盒,換行與置中天生一致。
+   (連帶好處:不必再用 background-clip: text,那個會關掉次像素抗鋸齒。) */
+.kbase, .kover {
+    display: block;
+    white-space: pre-wrap;
+    paint-order: stroke fill;
 }
-.kline.cur > span .kc.sung { --k: 100%; }
-.kline.cur rt.rt-pending,
-.kline.cur rt.rt-now,
-.kline.cur rt.rt-sung {
+.kbase, .kbase rt { color: #fff; -webkit-text-stroke: 0.06em #000; }
+.kover, .kover rt { color: #e60012; -webkit-text-stroke: 0.06em #fff; }
+/* 疊在上面那層只在「正在唱的那一句」露臉。沒有逐字資料的歌因此整句一起變紅
+   (那種歌本來就是整行亮);有逐字資料的歌下面那組 clip-path 會逐字揭開。 */
+.kover { position: absolute; inset: 0; opacity: 0; }
+.kline.cur .kover { opacity: 1; }
+.kover .kc, .kover rt.rt-pending, .kover rt.rt-now, .kover rt.rt-sung {
     --k: 0%;
-    background-image: linear-gradient(90deg, #fff var(--k), rgba(255,255,255,0.45) var(--k));
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
+    clip-path: inset(0 calc(100% - var(--k)) 0 0);
     transition: none;
 }
-.kline.cur rt.rt-sung { --k: 100%; }
+.kover .kc.sung, .kover rt.rt-sung { --k: 100%; }
+
+/* ── 前奏的曲名畫面 (JOYSOUND 式) ── */
+#karaoke-intro {
+    position: relative;
+    z-index: 2;
+    text-align: center;
+    color: #fff;
+    text-shadow: 0 2px 18px rgba(0, 0, 0, 0.85);
+    margin-bottom: 4vh;
+}
+#karaoke-intro.hidden { display: none; }
+#ki-title { font-size: clamp(34px, 4.4vw, 72px); font-weight: 800; line-height: 1.2; }
+#ki-artist { font-size: clamp(18px, 2vw, 32px); font-weight: 600; margin-top: 0.35em; opacity: 0.9; }
+#ki-credits { margin-top: 1.4em; font-size: clamp(13px, 1.15vw, 18px); opacity: 0.75; line-height: 1.7; }
+#ki-count { margin-top: 1.2em; font-size: clamp(13px, 1.15vw, 18px); opacity: 0.6; }
 
 /* ── 倒數 ── */
 #karaoke-countin {
@@ -2917,6 +3046,9 @@ body.hide-furigana .kline rt { display: none; }
     width: 38px; height: 38px;
     display: flex; align-items: center; justify-content: center;
     border-radius: 50%;
+    border: 0;
+    background: none;
+    cursor: pointer;
     color: rgba(255, 255, 255, 0.5);
     font-size: 17px;
     opacity: 0;
@@ -2972,4 +3104,12 @@ body.karaoke-page.bar-visible #karaoke-exit { opacity: 1; }
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
 .kmv-sub { font-size: 12px; color: rgba(255, 255, 255, 0.45); margin-top: 4px; }
+.kmv-tag {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: rgba(240, 173, 78, 0.16);
+    color: #f0ad4e;
+    font-size: 11px;
+}
 .kmv-empty { padding: 28px; text-align: center; color: rgba(255, 255, 255, 0.4); font-size: 14px; }
