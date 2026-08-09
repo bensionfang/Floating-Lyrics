@@ -543,7 +543,7 @@ GitHub repo 也已改名 `bensionfang/Kanaric`,`server.js` 的 `GITHUB_REPO` 跟
     `.lyrics-opt-wrap` 上,所以 `karaoke-mode.js` 把整塊 wrapper (按鈕+綠泡泡+浮層)
     `prepend` 進 `#kbar-tools`** —— 錨點跟著搬,浮層的 CSS 一個字都不用改。
     **只搬按鈕是錯的**,浮層會留在藏起來的播放列裡跟著消失 (舊版不敢 `display:none`
-    播放列正是為了這件事)。MV 的兩顆由 `karaoke-mv.js` 插進同一格。
+    播放列正是為了這件事)。MV 的 🎞 由 `karaoke-mv.js` 插進同一格。
   - `.player-right .ctrl-btn` 那幾條 (尺寸、`.active` 綠色 + 小綠點) 要**一起指名
     `#kbar-tools .ctrl-btn`**,漏掉的話「搜到候選 = 變綠」在這一頁靜默失效。
   - 收起來的 transform **必須把 `translateX(-50%)` 一起寫進去** (置中靠它),
@@ -552,8 +552,15 @@ GitHub repo 也已改名 `bensionfang/Kanaric`,`server.js` 的 `GITHUB_REPO` 跟
     播放列裡那顆,而那條在這一頁是藏著的。
   - 「重唱」與「開始」共用 `karaokeRestart()`:`POST /api/seek {position:0}`,**本地 `pos`
     也要歸零** —— 廣播一秒才一則,只送 seek 的話畫面會停在原本那句,看起來像沒反應。
-  - 字幕早晚 = 這首歌的 sync offset,跟首頁**共用同一筆** (`/api/lyrics/offset`,debounce 500ms)。
-    改完不必自己重畫:`frame()` 每幀都吃 `pos - syncOffset`。
+  - **快/慢是疊起來的兩列 (`.kbar-offsets`):上字幕、下影片 (`#kbar-mv-row`,沒挑 MV 就
+    `.hidden`)。兩列的「−」一律是「這東西慢了,催快一點」,顯示的數字一律是**延遲**** ——
+    字幕存的 `syncOffset` 本來就是延遲 (`pos - syncOffset`),而 MV 存的 `mvOffset` 是
+    `pos + mvOffset` (值越大影片跳越前面 = 越早),所以那一列顯示 `-mvOffset`、按鈕也反向套用
+    (`karaokeAdjustMvOffset` 收的是**延遲**的增減)。**不要為了「跟 DB 的值一致」把它改成直接顯示
+    `mvOffset`** —— 那會讓左右兩顆鈕在兩列的物理方向相反,是這次改版要修掉的東西。
+  - 字幕那列 = 這首歌的 sync offset,跟首頁**共用同一筆** (`/api/lyrics/offset`,debounce 500ms)。
+    改完不必自己重畫:`frame()` 每幀都吃 `pos - syncOffset`。影片那列存 `mv_choices.offset`
+    (`saveChoice`),`mvSync` 下一次對齊就跳過去 (`seekGuardUntil = 0`)。
   - **進度條刻意沒有** (使用者定案):唱歌要的是「從頭再來」不是「跳到副歌」。
   段落循環與編輯假名那兩顆本來就不在這條控制列上 —— 非首頁時 `common.js` 把它們接成「跳回首頁」。
 - **上下兩行是交錯的:上行靠左、下行靠右,各離該側 16%** (照 JOYSOUND,參考圖 `docs/1.png`)。
@@ -652,6 +659,10 @@ GitHub repo 也已改名 `bensionfang/Kanaric`,`server.js` 的 `GITHUB_REPO` 跟
   影片偏移是**每首歌各自一個值** (`mv_choices.offset`,MV 的前奏長度每首都不同)。
 - **鋪滿的算式要用容器單位 `cqw/cqh` 不能用 `vw/vh`** —— 舞台不是整個視窗 (`.app-container`
   還留著內距),用視窗單位算出來的尺寸比容器小一圈,左右露黑邊。
+  **`body.karaoke-page .main-content` 的 `padding` 也要歸零** (2026-08-09):那 24px 內距把
+  舞台連同鋪滿的 MV 四邊各縮 24px,症狀是「影片外面一圈黑框」,而 cover 算式本身是對的 ——
+  查這種黑邊先量 `#karaoke-stage` 的 rect 是不是等於視窗,不要去改算式。影片**自己燒進去的
+  letterbox** 是另一回事,只能換一支。
 - `mv_choices` **屬使用者資料,不進 `CLEAR_TARGETS`** (同 `search_overrides`);備份靠
   `VACUUM INTO` 自動涵蓋。三支端點 (`GET /api/mv/search`、`GET /api/mv`、`POST /api/mv`)
   **桌面專用** —— 雲端的 B1 允許清單是預設拒絕,它們在那台照舊 404 (`test_cloud_guard.js` 蓋得到)。

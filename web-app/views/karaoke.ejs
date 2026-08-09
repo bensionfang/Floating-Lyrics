@@ -84,7 +84,7 @@
 <%# 控制列 = 點歌機遙控器,**不是** footer 的 .player-bar (那是播放器版面:封面/歌名/隨機/
     循環/上一首/進度條,唱歌時一項都用不到)。播放列在這一頁整條 display:none,備選歌詞那顆
     連同它的浮層 (絕對定位錨在 .lyrics-opt-wrap 上) 由 karaoke-mode.js 整塊搬進 #kbar-tools,
-    MV 的兩顆由 karaoke-mv.js 插進同一格。 %>
+    MV 的 🎞 由 karaoke-mv.js 插進同一格 (影片快慢那列則是下面的 #kbar-mv-row)。 %>
 <div id="karaoke-bar">
     <div class="kbar-group">
         <%# 大鈕帶文字標籤:全圖示的話「重唱」猜不出來。標籤已經是文字了,不再掛 data-tip %>
@@ -99,22 +99,35 @@
         </button>
     </div>
     <div class="kbar-sep"></div>
-    <%# 字幕早晚 = 這首歌的 sync offset (跟首頁共用同一筆,存 DB) %>
-    <div class="kbar-group kbar-offset">
-        <span class="kbar-label">字幕</span>
-        <button type="button" onclick="karaokeAdjustOffset(-0.1)" data-tip="字幕慢了"><i class="fa-solid fa-minus"></i></button>
-        <span id="kbar-offset" onclick="karaokeResetOffset()" data-tip="點擊歸零">0 ms</span>
-        <button type="button" onclick="karaokeAdjustOffset(0.1)" data-tip="字幕快了"><i class="fa-solid fa-plus"></i></button>
+    <%# 工具鈕:備選歌詞 (karaoke-mode.js 搬進來) / 🎞 MV (karaoke-mv.js 插進來) / 重新載入。
+        三顆都是 .ctrl-btn,在這一頁由 CSS 撐成大鈕 —— 標籤直接用 [data-tip] 的 ::before
+        就地變成常駐文字 (小綠點是 ::after,兩者不打架)。 %>
+    <div class="kbar-group" id="kbar-tools">
+        <button type="button" class="ctrl-btn" onclick="reloadCurrentLyrics()" data-tip="重新載入"><i class="fa-solid fa-rotate"></i></button>
     </div>
     <div class="kbar-sep"></div>
-    <div class="kbar-group" id="kbar-tools">
-        <button type="button" class="ctrl-btn" onclick="reloadCurrentLyrics()" data-tip="重新載入歌詞"><i class="fa-solid fa-rotate"></i></button>
+    <%# 快/慢兩列:上字幕 (sync offset,跟首頁共用同一筆、存 DB)、下影片 (mv_choices.offset)。
+        兩列的「−」一律是「這個東西慢了,催快一點」—— 顯示的都是**延遲**,所以按 − 都變小。
+        影片那列只有真的挑了 MV 才顯示 (karaoke-mv.js 切 .hidden)。 %>
+    <div class="kbar-offsets">
+        <div class="kbar-group kbar-offset">
+            <span class="kbar-label">字幕</span>
+            <button type="button" onclick="karaokeAdjustOffset(-0.1)" data-tip="字幕慢了"><i class="fa-solid fa-minus"></i></button>
+            <span id="kbar-offset" onclick="karaokeResetOffset()" data-tip="點擊歸零">0 ms</span>
+            <button type="button" onclick="karaokeAdjustOffset(0.1)" data-tip="字幕快了"><i class="fa-solid fa-plus"></i></button>
+        </div>
+        <div class="kbar-group kbar-offset hidden" id="kbar-mv-row">
+            <span class="kbar-label">影片</span>
+            <button type="button" onclick="karaokeAdjustMvOffset(-0.5)" data-tip="影片慢了"><i class="fa-solid fa-minus"></i></button>
+            <span id="kbar-mv-offset" onclick="karaokeAdjustMvOffset(0)" data-tip="點擊歸零">0.0 s</span>
+            <button type="button" onclick="karaokeAdjustMvOffset(0.5)" data-tip="影片快了"><i class="fa-solid fa-plus"></i></button>
+        </div>
     </div>
 </div>
 
 <script src="/js/karaoke.js?v=4"></script>
 <script src="/js/lrc-parse.js?v=1"></script>
 <script src="/js/karaoke-slots.js?v=3"></script>
-<script src="/js/karaoke-mv.js?v=10"></script>
-<script src="/js/karaoke-mode.js?v=11"></script>
+<script src="/js/karaoke-mv.js?v=11"></script>
+<script src="/js/karaoke-mode.js?v=12"></script>
 <%- include('footer') %>

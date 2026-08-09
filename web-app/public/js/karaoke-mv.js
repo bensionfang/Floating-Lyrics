@@ -10,7 +10,7 @@
  * 真的挑了 MV 之後才動態插入**:沒挑 MV 或斷網時整頁行為與沒有這個功能時完全一樣。
  */
 // 等 DOMContentLoaded 的理由同 karaoke-mode.js:這支 <script> 排在頁面本體之前,
-// 立即執行的話 #kbar-tools 還不存在,那兩顆鈕永遠插不上去 (而且沒有錯誤訊息)。
+// 立即執行的話 #kbar-tools / #kbar-mv-row 還不存在,🎞 永遠插不上去 (而且沒有錯誤訊息)。
 document.addEventListener('DOMContentLoaded', function () {
     const holder = document.getElementById('karaoke-mv');
     if (!holder) return;
@@ -19,7 +19,6 @@ document.addEventListener('DOMContentLoaded', function () {
     const DRIFT_SEC = 0.5;        // 差這麼多才 seek —— 每幀 seek 會讓影片一直重新緩衝
     const SEEK_COOLDOWN_MS = 800; // seek 之後 getCurrentTime 要一會兒才跟上,期間不准再送
     const SYNC_EVERY_MS = 250;    // 對齊檢查的頻率 (rAF 每幀問一次太浪費)
-    const OFFSET_STEP = 0.5;
 
     let player = null;
     let ready = false;
@@ -123,8 +122,7 @@ document.addEventListener('DOMContentLoaded', function () {
     window.mvSetOffset = function (sec) {
         mvOffset = Math.round(sec * 10) / 10;
         seekGuardUntil = 0;   // 讓下一次 sync 立刻跳過去,不然要等漂移累積
-        saveChoice(curVideo, mvOffset);
-        showToast(`影片偏移 ${mvOffset > 0 ? '+' : ''}${mvOffset.toFixed(1)} 秒`, 'fa-solid fa-film');
+        saveChoice(curVideo, mvOffset);   // 值就顯示在控制列上,不必再吐 toast
     };
 
     // ── 每首歌一支 ──
@@ -255,11 +253,21 @@ document.addEventListener('DOMContentLoaded', function () {
         karaokeCloseMvPicker();
     };
 
-    // ── 控制列上的兩顆鈕 (插進 #kbar-tools,那是卡拉OK自己那條控制列的工具格) ──
-    let offsetWrap = null;
+    // ── 控制列:🎞 插進 #kbar-tools,快/慢那列是頁面本體的 #kbar-mv-row ──
+    const offsetRow = document.getElementById('kbar-mv-row');
+    const offsetVal = document.getElementById('kbar-mv-offset');
     function updateBarButtons() {
-        if (offsetWrap) offsetWrap.classList.toggle('hidden', !curVideo);
+        if (!offsetRow) return;
+        offsetRow.classList.toggle('hidden', !curVideo);
+        // 顯示的是**延遲** (跟字幕那列同義),所以是 -mvOffset:mvOffset 大 = 影片跳得更前面 = 更早
+        offsetVal.textContent = `${(-mvOffset).toFixed(1)} s`;
     }
+
+    // delta 是延遲的增減:− (慢了,催快) → 延遲變小 → mvOffset 變大。0 = 歸零
+    window.karaokeAdjustMvOffset = function (delta) {
+        mvSetOffset(delta ? mvOffset - delta : 0);
+        updateBarButtons();
+    };
 
     const right = document.getElementById('kbar-tools');
     if (right) {
@@ -269,18 +277,6 @@ document.addEventListener('DOMContentLoaded', function () {
         mvBtn.dataset.tip = 'MV 背景';
         mvBtn.innerHTML = '<i class="fa-solid fa-film"></i>';
         mvBtn.onclick = () => karaokeOpenMvPicker();
-
-        offsetWrap = document.createElement('span');
-        offsetWrap.className = 'hidden';
-        for (const [dir, icon, tip] of [[-1, 'fa-backward', '影片早一點'], [1, 'fa-forward', '影片晚一點']]) {
-            const b = document.createElement('button');
-            b.className = 'ctrl-btn';
-            b.type = 'button';
-            b.dataset.tip = tip;
-            b.innerHTML = `<i class="fa-solid ${icon}"></i>`;
-            b.onclick = () => mvSetOffset(mvOffset + dir * OFFSET_STEP);
-            offsetWrap.appendChild(b);
-        }
-        right.prepend(mvBtn, offsetWrap);
+        right.prepend(mvBtn);
     }
 });

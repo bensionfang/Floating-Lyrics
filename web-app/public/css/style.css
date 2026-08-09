@@ -2767,6 +2767,9 @@ body.karaoke-page .app-container {
 body.karaoke-page .main-content {
     border-radius: 0;
     background: #08080a;
+    /* **padding 一定要歸零** —— .main-content 本來有 24px 內距,舞台 (以及鋪滿的 MV)
+       就跟著縮 24px,畫面四周留一圈黑邊。MV 的 cover 算式是對的,黑邊來自這裡。 */
+    padding: 0;
 }
 body.karaoke-page .content-body { padding: 0; height: 100%; min-height: 0; }
 
@@ -2823,10 +2826,48 @@ body.karaoke-page.bar-visible #karaoke-bar { transform: translateX(-50%); opacit
 .kbar-big:hover { background: rgba(255, 255, 255, 0.1); }
 .kbar-big:hover span { color: var(--text-primary); }
 
-.kbar-label { font-size: 11px; color: var(--text-secondary); }
+/* 工具鈕 (備選歌詞 / MV / 重新載入) 在這一頁跟左邊三顆一樣是大鈕:圖示在上、文字在下。
+   **標籤是 [data-tip] 的 ::before 就地變成常駐文字** —— 那三顆的 markup 分別來自 footer、
+   karaoke-mv.js 與這一頁,只有 data-tip 是三邊都有的共通欄位;而 .active 的小綠點占著
+   ::after,label 只能走 ::before。備選歌詞那顆的 data-tip 本來就會隨狀態改字,自動跟著變。
+   規則要排在 `.player-right .ctrl-btn, #kbar-tools .ctrl-btn` 那組 (20×20) 之後才蓋得掉。 */
+#kbar-tools .ctrl-btn {
+    flex-direction: column;
+    gap: 2px;
+    width: auto;
+    min-width: 62px;
+    height: auto;
+    padding: 6px 8px;
+    border-radius: 14px;
+    font-size: 19px;
+    color: var(--text-primary);
+    transition: background 0.15s ease;
+}
+#kbar-tools .ctrl-btn:hover { background: rgba(255, 255, 255, 0.1); }
+#kbar-tools .ctrl-btn::before {
+    order: 1;   /* ::before 在 DOM 順序上排在圖示前面,要靠 order 才會落到圖示下方 */
+    position: static;
+    transform: none;
+    padding: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+    font-size: 11px;
+    color: var(--text-secondary);
+    opacity: 1;
+    transition: none;
+}
+#kbar-tools .ctrl-btn:hover::before { color: var(--text-primary); }
+/* 小綠點在這一頁拿掉:它原本貼在 20px 圖示下方 7px,大鈕那個位置被文字標籤佔走了。
+   圖示本身已經變成 accent 綠,狀態看得出來。 */
+#kbar-tools .ctrl-btn.active::after { display: none; }
+
+/* 字幕 / 影片兩列疊起來,列高壓到 24px 才不會把整條控制列撐成兩倍高 */
+.kbar-offsets { display: flex; flex-direction: column; gap: 4px; }
+.kbar-label { font-size: 11px; color: var(--text-secondary); width: 24px; }
 .kbar-offset button {
-    width: 28px;
-    height: 28px;
+    width: 24px;
+    height: 24px;
     padding: 0;
     font-size: 11px;
     border: 1px solid rgba(255, 255, 255, 0.16);
@@ -2836,7 +2877,7 @@ body.karaoke-page.bar-visible #karaoke-bar { transform: translateX(-50%); opacit
     cursor: pointer;
 }
 .kbar-offset button:hover { background: rgba(255, 255, 255, 0.12); }
-#kbar-offset {
+#kbar-offset, #kbar-mv-offset {
     min-width: 58px;
     text-align: center;
     font-family: monospace;

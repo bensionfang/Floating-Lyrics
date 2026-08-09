@@ -378,7 +378,14 @@ document.addEventListener('DOMContentLoaded', function () {
     // 搬 wrapper 而不是只搬按鈕,錨點才跟著走 (只搬按鈕的話浮層會留在藏起來的播放列裡)。
     const tools = document.getElementById('kbar-tools');
     const optWrap = document.querySelector('.lyrics-opt-wrap');
-    if (tools && optWrap) tools.prepend(optWrap);
+    if (tools && optWrap) {
+        tools.prepend(optWrap);
+        // data-tip 在這一頁是常駐標籤 (見 style.css 的 #kbar-tools .ctrl-btn::before),
+        // 而 server render 的字是「搜尋/查看備選歌詞」且之後只更新 title、不更新 data-tip ——
+        // 留著就會是一個永遠停在初始狀態的標籤,改成固定名稱
+        const optBtn = optWrap.querySelector('.ctrl-btn');
+        if (optBtn) optBtn.dataset.tip = '備選歌詞';
+    }
 
     // 頭出し:跳回 0 從頭唱。**本地 pos 也要一起歸零** —— 廣播一秒才一則,只送 seek 的話
     // 畫面會停在原本那句、等下一則廣播才跳,看起來像沒反應 (同 karaokeStart)。
