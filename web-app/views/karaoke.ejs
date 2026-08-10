@@ -10,16 +10,20 @@
     <ol class="k-steps">
         <li><b>版面是字幕機不是歌詞頁</b>
             <span>上下兩句等大、位置固定不捲動,唱到哪填到哪 (未唱白字、唱過紅字),
-                間奏會倒數,前奏放曲名畫面。</span></li>
+                前奏/間奏會在下一句的左上角倒數,曲名與作詞作曲顯示在畫面上緣。</span></li>
         <li><b>先在播放器放歌</b>
             <span>Spotify、YouTube 都行,歌詞與位置照舊由 Kanaric 自己抓 ——
                 這一頁只是換一種顯示方式。</span></li>
         <li><b>MV 背景會自動套用</b>
             <span>每首歌自動配一支最像的 YouTube 影片鋪滿背景,<b>影片一律靜音</b>,聲音仍然來自播放器。
                 配錯的話把滑鼠移到畫面下緣叫出控制列,🎞 裡面可以換一支或整個取消 —— 換過就記住。</span></li>
+        <li><b>控制列可以拆成獨立小視窗</b>
+            <span>控制列上的 <b>獨立視窗</b> 會把整條遙控器搬到另一扇小視窗 ——
+                字幕機投在電視上、遙控器留在筆電這邊,調字幕早晚或換 MV 都不必動到主畫面。
+                再按一次 (或關掉那扇窗) 就收回來。</span></li>
         <li><b>按「開始」會自動全螢幕</b>
-            <span>這首歌跳回開頭並開始播,期間靈動島先收起來。按 <b>ESC</b> 或右上角的 ✕
-                回到這一頁,同時把播放暫停。</span></li>
+            <span>這首歌跳回開頭並開始播,期間靈動島先收起來。按 <b>ESC</b> 或控制列最右邊的
+                <b>退出</b> 回到這一頁,同時把播放暫停。</span></li>
     </ol>
     <div class="k-start-row">
         <span id="k-now">目前沒有偵測到播放</span>
@@ -34,19 +38,20 @@
         **刻意不蓋暗化層** —— 影片要保持原本的亮度,歌詞的可讀性靠自己的描邊 (見 style.css) %>
     <div id="karaoke-mv"></div>
 
-    <%# 前奏的曲名畫面 (JOYSOUND 式)。作詞/作曲來自歌詞裡的 #TITLE# 行,沒有那幾行就只剩上面兩行 %>
+    <%# 曲名/作詞作曲的資訊卡:貼在畫面上緣 (歌詞在下緣,兩者不重疊,所以可以同時出現)。
+        作詞/作曲來自歌詞裡的 #TITLE# 行,沒有那幾行就只剩上面兩行 %>
     <div id="karaoke-intro" class="hidden">
         <div id="ki-title"></div>
         <div id="ki-artist"></div>
         <div id="ki-credits"></div>
-        <div id="ki-count"></div>
     </div>
 
-    <%# 前奏/間奏倒數:排在歌詞**上面** (歌詞貼著畫面下緣,倒數放下面會擠到控制列) %>
+    <%# 前奏/間奏倒數的五個點。**karaoke-mode.js 會把它塞進「即將唱的那一句」裡**
+        (絕對定位在該句的左上角,照 JOYSOUND),所以這裡只是它的出生地。
+        點的配色跟歌詞同一套:還沒到 = 白底黑框、走過去 = 紅底白框。 %>
     <div id="karaoke-countin" class="hidden">
         <span class="kdot"></span><span class="kdot"></span><span class="kdot"></span>
         <span class="kdot"></span><span class="kdot"></span>
-        <span id="karaoke-countin-sec"></span>
     </div>
 
     <div id="karaoke-lines"></div>
@@ -64,7 +69,6 @@
         <button type="button" onclick="karaokeFindLyrics()">找別份歌詞</button>
     </div>
 
-    <button type="button" id="karaoke-exit" data-tip="離開卡拉OK" onclick="karaokeExit()"><i class="fa-solid fa-xmark"></i></button>
 </div>
 
 <%# MV 挑選面板:置中的浮層,不錨在按鈕上,所以不受播放列自動隱藏影響 %>
@@ -123,11 +127,22 @@
             <button type="button" onclick="karaokeAdjustMvOffset(0.5)" data-tip="影片快了"><i class="fa-solid fa-plus"></i></button>
         </div>
     </div>
+    <div class="kbar-sep"></div>
+    <%# 獨立視窗 / 退出 自成一欄,排在微調右邊。**退出不再是右上角那顆 ✕** —— 那個位置
+        使用者看不到 (2026-08-10)。拆窗時這兩顆會跟著被搬進小視窗的第三列
+        (karaoke-remote.js 的 layoutRow3:微調 → 收回 → 退出)。 %>
+    <div class="kbar-group" id="kbar-extra">
+        <button type="button" class="ctrl-btn" id="kbar-detach" onclick="karaokeToggleRemote()" data-tip="獨立視窗"><i class="fa-solid fa-up-right-from-square"></i></button>
+        <button type="button" class="ctrl-btn" id="kbar-exit" onclick="karaokeExit()" data-tip="退出"><i class="fa-solid fa-right-from-bracket"></i></button>
+    </div>
 </div>
 
 <script src="/js/karaoke.js?v=4"></script>
 <script src="/js/lrc-parse.js?v=1"></script>
-<script src="/js/karaoke-slots.js?v=3"></script>
+<script src="/js/karaoke-slots.js?v=4"></script>
 <script src="/js/karaoke-mv.js?v=11"></script>
-<script src="/js/karaoke-mode.js?v=12"></script>
+<script src="/js/karaoke-mode.js?v=15"></script>
+<%# 一定要排在 karaoke-mode.js 之後:它的 DOMContentLoaded 先把 .lyrics-opt-wrap 搬進
+    #kbar-tools,拆窗才會連備選歌詞的浮層一起帶走 %>
+<script src="/js/karaoke-remote.js?v=6"></script>
 <%- include('footer') %>

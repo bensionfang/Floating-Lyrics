@@ -143,6 +143,39 @@ function createWindow() {
   // 貼齊螢幕 (半螢幕 / 1/4 螢幕 / 最大化) 時把圓角收成直角,離開再變回來
   require('./win-corners.js').watch(mainWindow);
 
+  // 卡拉OK控制列拆出去的那扇小視窗 (public/js/karaoke-remote.js 的 window.open)。
+  // **瀏覽器的彈出視窗一定會頂著一條顯示來源網址的列,那條在純 node 模式拿不掉** ——
+  // 桌面版走這裡接手,開成無邊框視窗就乾淨了 (拖曳靠控制列的 -webkit-app-region: drag)。
+  // 其他名字的 window.open 一律拒絕:這個 app 沒有第二個彈出視窗的用途。
+  mainWindow.webContents.setWindowOpenHandler(({ frameName }) => {
+    if (frameName !== 'kanaric-remote') return { action: 'deny' };
+    return {
+      action: 'allow',
+      overrideBrowserWindowOptions: {
+        // 無邊框,所以這就是內容區:控制列 192px + 上面 20px 的拖曳條
+        width: 300,
+        height: 214,
+        frame: false,
+        alwaysOnTop: true,
+        autoHideMenuBar: true,
+        // 尺寸是照控制列量出來的,拉大只會多出一片黑;而且無邊框視窗連拉桿都沒有
+        resizable: false,
+        minimizable: false,
+        maximizable: false,
+        backgroundColor: '#0a0a0c'
+      }
+    };
+  });
+
+  // **`alwaysOnTop: true` 只給 'floating' 等級,壓不過全螢幕視窗** —— 而字幕機主畫面
+  // 正是全螢幕的,遙控器一失焦就被蓋掉。要 'screen-saver' 這一級才會真的永遠在上面,
+  // 而那個等級只能在視窗物件上設,`overrideBrowserWindowOptions` 給不了。
+  mainWindow.webContents.on('did-create-window', (win, { frameName }) => {
+    if (frameName !== 'kanaric-remote') return;
+    win.setAlwaysOnTop(true, 'screen-saver');
+    win.setVisibleOnAllWorkspaces(true);
+  });
+
   // did-fail-load 重試時 ready-to-show 不會再觸發,所以用 did-finish-load;
   // 保險起見再壓一個 8 秒 timeout,server 真的起不來也不會卡在啟動畫面
   const reveal = () => {

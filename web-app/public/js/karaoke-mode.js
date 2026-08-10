@@ -26,11 +26,9 @@ document.addEventListener('DOMContentLoaded', function () {
     const linesEl = document.getElementById('karaoke-lines');
     const statusEl = document.getElementById('karaoke-status');
     const countEl = document.getElementById('karaoke-countin');
-    const countSecEl = document.getElementById('karaoke-countin-sec');
     const degradedEl = document.getElementById('karaoke-degraded');
     const dots = Array.from(countEl.querySelectorAll('.kdot'));
     const introEl = document.getElementById('karaoke-intro');
-    const introCountEl = document.getElementById('ki-count');
     const nowEl = document.getElementById('k-now');
 
     // ── 歌詞狀態 ──
@@ -101,7 +99,6 @@ document.addEventListener('DOMContentLoaded', function () {
         firstTime = Infinity;
         degradedEl.classList.add('hidden');
         introEl.classList.add('hidden');
-        linesEl.classList.remove('hidden');
         document.getElementById('ki-credits').innerHTML = '';
     }
 
@@ -139,12 +136,21 @@ document.addEventListener('DOMContentLoaded', function () {
             out.map((s) => `<div>${s}</div>`).join('');
     }
 
+    /**
+     * 倒數的五個點。**掛在「即將唱的那一句」的左上角** (JOYSOUND) 而不是畫面上的固定位置 ——
+     * 那一句在倒數期間本來就已經在畫面上了 (`karaokeSlots` 開口前 COUNT_IN 秒就把它提上來
+     * 當活躍句),點跟著它走才看得出「等一下要唱的是這一句」。
+     *
+     * 點的兩個狀態刻意跟歌詞同一套:還沒走到 = 白底黑框 (未唱)、走過去 = 紅底白框 (唱過),
+     * 所以倒數在視覺上就是「這一句的前導」。
+     */
     function paintCountdown(cd) {
         if (!cd) { countEl.classList.add('hidden'); return; }
+        const host = byIdx(curIdx);
+        if (host && countEl.parentNode !== host) host.appendChild(countEl);
         countEl.classList.remove('hidden');
-        const lit = Math.ceil(cd.remain / cd.total * dots.length);
-        dots.forEach((d, i) => d.classList.toggle('on', i < lit));
-        countSecEl.textContent = cd.remain.toFixed(1) + 's';
+        const gone = Math.round((1 - cd.remain / cd.total) * dots.length);
+        dots.forEach((d, i) => d.classList.toggle('on', i < gone));
     }
 
     const byIdx = (i) => (i >= 0 ? document.getElementById(`kline-${i}`) : null);
@@ -198,16 +204,22 @@ document.addEventListener('DOMContentLoaded', function () {
         curIdx = s.index;
     }
 
-    // 前奏的曲名畫面。**一律顯示** (JOYSOUND 原樣):前奏短的歌就是一閃而過,
-    // 不因為短就跳過 —— 每首歌行為一致比較好預期。
-    let introSec = '';
+    /**
+     * 曲名/作詞作曲的資訊卡。
+     *
+     * **它不再是一個獨佔的畫面,而是畫面上緣的一塊** (見 style.css) —— 歌詞照舊在下緣顯示,
+     * 兩者不重疊。改成這樣才解得開「前奏短的歌看不到資訊卡」與「卡片蓋住第一句連同倒數的點」
+     * 這組互相矛盾的需求。
+     *
+     * 因此顯示時間可以**至少 `INFO_MIN_SEC` 秒**:前奏只有一兩秒的歌一閃而過等於沒顯示,
+     * 而超出前奏繼續留著也不擋任何東西。
+     */
+    const INFO_MIN_SEC = 3;
     function paintIntro(p) {
-        const show = lines.length > 0 && p < firstTime;
+        // firstTime 是 Infinity = 整份都是間奏行,那時沒有「前奏」可言,卡片會卡住不走
+        const show = lines.length > 0 && firstTime < Infinity
+            && p < Math.max(firstTime, INFO_MIN_SEC);
         introEl.classList.toggle('hidden', !show);
-        linesEl.classList.toggle('hidden', show);
-        if (!show) return;
-        const t = `前奏 ${Math.max(0, firstTime - p).toFixed(1)}s`;
-        if (t !== introSec) { introSec = t; introCountEl.textContent = t; }
     }
 
     function frame() {
@@ -349,7 +361,11 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // 使用者用瀏覽器自己的方式離開全螢幕 (ESC、F11) 時也要回到介紹頁 ——
     // 全螢幕的 ESC 被瀏覽器吃掉,下面那個 keydown 收不到。
+    // **控制列拆成獨立小視窗時不算** (karaoke-remote.js):開那扇窗本身就可能讓瀏覽器把
+    // 主視窗退出全螢幕,不擋的話「按獨立視窗」等於直接離開卡拉OK模式。而且那時使用者本來
+    // 就是刻意分兩個視窗在用,退出全螢幕不代表要收工。
     document.addEventListener('fullscreenchange', () => {
+        if (window.karaokeRemoteIsOpen && window.karaokeRemoteIsOpen()) return;
         if (!document.fullscreenElement && started) karaokeExit();
     });
 

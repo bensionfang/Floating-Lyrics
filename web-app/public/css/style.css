@@ -2831,7 +2831,9 @@ body.karaoke-page.bar-visible #karaoke-bar { transform: translateX(-50%); opacit
    karaoke-mv.js 與這一頁,只有 data-tip 是三邊都有的共通欄位;而 .active 的小綠點占著
    ::after,label 只能走 ::before。備選歌詞那顆的 data-tip 本來就會隨狀態改字,自動跟著變。
    規則要排在 `.player-right .ctrl-btn, #kbar-tools .ctrl-btn` 那組 (20×20) 之後才蓋得掉。 */
-#kbar-tools .ctrl-btn {
+#kbar-tools .ctrl-btn,
+#kbar-extra .ctrl-btn,
+.kbar-row3 .ctrl-btn {
     flex-direction: column;
     gap: 2px;
     width: auto;
@@ -2843,8 +2845,12 @@ body.karaoke-page.bar-visible #karaoke-bar { transform: translateX(-50%); opacit
     color: var(--text-primary);
     transition: background 0.15s ease;
 }
-#kbar-tools .ctrl-btn:hover { background: rgba(255, 255, 255, 0.1); }
-#kbar-tools .ctrl-btn::before {
+#kbar-tools .ctrl-btn:hover,
+#kbar-extra .ctrl-btn:hover,
+.kbar-row3 .ctrl-btn:hover { background: rgba(255, 255, 255, 0.1); }
+#kbar-tools .ctrl-btn::before,
+#kbar-extra .ctrl-btn::before,
+.kbar-row3 .ctrl-btn::before {
     order: 1;   /* ::before 在 DOM 順序上排在圖示前面,要靠 order 才會落到圖示下方 */
     position: static;
     transform: none;
@@ -2857,10 +2863,14 @@ body.karaoke-page.bar-visible #karaoke-bar { transform: translateX(-50%); opacit
     opacity: 1;
     transition: none;
 }
-#kbar-tools .ctrl-btn:hover::before { color: var(--text-primary); }
+#kbar-tools .ctrl-btn:hover::before,
+#kbar-extra .ctrl-btn:hover::before,
+.kbar-row3 .ctrl-btn:hover::before { color: var(--text-primary); }
 /* 小綠點在這一頁拿掉:它原本貼在 20px 圖示下方 7px,大鈕那個位置被文字標籤佔走了。
    圖示本身已經變成 accent 綠,狀態看得出來。 */
-#kbar-tools .ctrl-btn.active::after { display: none; }
+#kbar-tools .ctrl-btn.active::after,
+#kbar-extra .ctrl-btn.active::after,
+.kbar-row3 .ctrl-btn.active::after { display: none; }
 
 /* 字幕 / 影片兩列疊起來,列高壓到 24px 才不會把整條控制列撐成兩倍高 */
 .kbar-offsets { display: flex; flex-direction: column; gap: 4px; }
@@ -2960,8 +2970,11 @@ body.karaoke-page.bar-visible #karaoke-bar { transform: translateX(-50%); opacit
    **縮排一定要用 margin 不能用 padding** —— .kover 是 `position:absolute; inset:0`,
    它的容器盒是 .kline 的 *padding box*,加 padding 會讓上面那層比 .kbase 多偏一段,
    兩種顏色又錯開 (就是先前 ::before 那個坑的另一種形狀)。margin 改的是整顆 .kline,兩層一起動。 */
-.kline.slot-top { order: 0; text-align: left; margin-left: 16%; }
-.kline.slot-bottom { order: 1; text-align: right; margin-right: 16%; }
+/* **align-self 讓 .kline 縮成貼合文字的寬度** (flex 項目的 cross size 從 stretch 變 fit-content),
+   倒數那五個點才能用 `left: 0` 貼在第一個字的左邊。文字太長時仍然被容器夾住、照常換行,
+   而 .kbase / .kover 都是這顆盒子裡的 block,寬度一致 = 斷行一致 (那是重影那個坑的前提)。 */
+.kline.slot-top { order: 0; align-self: flex-start; text-align: left; margin-left: 16%; }
+.kline.slot-bottom { order: 1; align-self: flex-end; text-align: right; margin-right: 16%; }
 .kline {
     position: relative;
     font-size: clamp(34px, 4.4vw, 70px);
@@ -2995,58 +3008,233 @@ body.hide-furigana .kline rt { display: none; }
 /* .done = 剛唱完、還留在另一槽的那句:繼續紅著直到被下一句換掉 (見 karaoke-slots.js
    檔頭第 4 點)。逐字的 --k 停在最後一幀的值,所以不必重畫。 */
 .kline.cur .kover, .kline.done .kover { opacity: 1; }
+/* **只有上下兩邊的 inset 是負的。** 字的墨水會超出 span 的邊框盒 (0.06em 的描邊、下伸部),
+   切在盒子上會削掉那幾筆,所以上下放寬。
+   **左邊一定要是 0,不可以跟著放寬** —— `inset()` 的可見矩形是
+   `[left, width - right]`,`--k: 0%` 時 right = 100%,左邊放成 -0.2em 就變成
+   `[-0.2em, 0]`:一條**位在這個字左邊、寬 0.2em 的可見縫**。那條縫會把這個字 (紅底白框)
+   的左側墨水畫到**前一個字**身上,前一個字的黑框就被白色蓋掉,看起來像右緣被削掉
+   (2026-08-10 回報,`docs/5.png`、`6.png` 的 行 與 選 —— 那是 -0.2em 那版才有的新災情)。 */
 .kover .kc, .kover rt.rt-pending, .kover rt.rt-now, .kover rt.rt-sung {
     --k: 0%;
-    clip-path: inset(0 calc(100% - var(--k)) 0 0);
+    clip-path: inset(-0.2em calc(100% - var(--k)) -0.2em 0);
     transition: none;
 }
-.kover .kc.sung, .kover rt.rt-sung { --k: 100%; }
+/* **唱過的字直接不裁** —— 100% 的 inset 剛好切在邊框盒上,右緣那一截描邊會被削掉,
+   看起來像「這個字沒填滿色」,而底下 .kbase 的黑框從缺口透出來更明顯
+   (2026-08-10 回報,docs/3.png、4.png 的 道 與 ん)。全部唱完的字本來就不需要裁。 */
+.kover .kc.sung, .kover rt.rt-sung { --k: 100%; clip-path: none; }
 /* **唱完留紅的那句一律補滿。** 一句停止活躍時最後幾個字常常還沒填到底:收尾點 `endMs`
    是封頂算出來的 (word-times.js),而換到下一句的時機是下一句自己的時間戳,兩者沒有關係。
    舊版那句在同一瞬間就被換掉所以看不見,現在它要留著紅一陣子,沒補滿就是「最後一個字
    不會變紅」(2026-08-09 回報)。行內的 `--k` 權重比 class 高,所以只能用 !important。 */
 .kline.done .kover .kc,
-.kline.done .kover rt { --k: 100% !important; }
+.kline.done .kover rt { --k: 100% !important; clip-path: none !important; }
 
-/* ── 前奏的曲名畫面 (JOYSOUND 式) ── */
+/* ── 控制列拆成獨立小視窗 (karaoke-remote.js) ──
+   **同一顆 #karaoke-bar** 被 adoptNode 搬進 window.open 出來的空白文件,樣式因此完全共用
+   (小視窗自己去載同一份 style.css)。那扇窗的 body 掛的是
+   `karaoke-page bar-visible karaoke-remote`,所以上面那些規則照樣命中,這裡只把
+   「畫面底部的自動隱藏浮條」那幾條幾何改掉。 */
+body.karaoke-remote {
+    margin: 0;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    background: #0a0a0c;
+    /* 控制列貼上緣、下面留白給往下展開的浮層。auto 只是保險:視窗被拉得比控制列還窄時
+       至少捲得到,而不是整排按鈕被切掉 */
+    overflow: auto;
+}
+/* 特異度要贏過 `body.karaoke-page.bar-visible #karaoke-bar` 的 transform (同為 1 id + 2 class,
+   靠的是這裡多掛一個 class 而不是靠檔案順序)。
+   **在這扇窗它是一整條長方形,不是藥丸** —— 圓角/外框/陰影是「浮在字幕機上面」才需要的,
+   獨立視窗裡它就是整個視窗,那些裝飾只會變成一圈邊。 */
+body.karaoke-page.bar-visible.karaoke-remote #karaoke-bar {
+    position: static;
+    transform: none;
+    opacity: 1;
+    /* **transition 一定要關掉。** 那條 0.25s 的 transform/opacity 是「從畫面下緣滑出來」用的,
+       在這扇窗沒有意義,而且它會把 `transform: none` 變成一個跑不完的補間 —— 實測整條列
+       停在 translateX(-50%),等於往左偏半個視窗寬。 */
+    transition: none;
+    width: 100%;
+    /* 這扇窗是**直的、窄的**遙控器 (照使用者給的 docs/7.png),不是字幕機下緣那條橫的:
+       整條 wrap 成好幾列,分隔線改成整列的細線 */
+    flex-wrap: wrap;
+    gap: 6px 4px;
+    justify-content: center;
+    padding: 10px 8px;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    backdrop-filter: none;
+    background: transparent;   /* 底色交給 body,不然視窗邊緣會有兩層深淺 */
+    /* 無邊框視窗沒有標題列可以抓,拿控制列的底當拖曳把手 (Electron 專用屬性,
+       瀏覽器忽略)。按鈕要 no-drag,否則按不下去。 */
+    -webkit-app-region: drag;
+}
+body.karaoke-remote #karaoke-bar button,
+body.karaoke-remote #karaoke-bar [onclick],
+body.karaoke-remote #karaoke-bar input { -webkit-app-region: no-drag; }
+/* 專門用來拖視窗的細條 (karaoke-remote.js 在 build() 插進 body 最前面)。
+   控制列上幾乎整片都是按鈕,而按鈕必須 no-drag,不留這一條這扇無邊框視窗就搬不動。 */
+body.karaoke-remote .kbar-drag {
+    flex: 0 0 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: move;
+    -webkit-app-region: drag;
+}
+body.karaoke-remote .kbar-drag::after {
+    content: '';
+    width: 40px;
+    height: 3px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.22);
+}
+/* 每一組各自佔滿一列;分隔線從直的變成整列的橫線 */
+body.karaoke-remote #karaoke-bar > * { width: 100%; justify-content: center; }
+body.karaoke-remote .kbar-group { flex-wrap: wrap; }
+body.karaoke-remote .kbar-sep { height: 1px; background: rgba(255, 255, 255, 0.1); }
+/* 工具鈕縮一點,四顆才排得進一列 (窄窗的內容區約 260px) */
+/* **三格等寬用 grid,不要用 `flex: 1 1 0`。** 備選歌詞那顆包在 `.lyrics-opt-wrap` 裡
+   (浮層的錨點,`karaoke-mode.js` 整塊搬進來的),那個 wrapper 沒有 padding 而按鈕有 ——
+   即使三者都是 `flex: 1 1 0` + `border-box` + `min-width: 0`,實測仍然分成 91/95/95
+   (差的正好是按鈕的左右 padding)。`1fr` 是硬性等分,沒有這個問題。 */
+body.karaoke-remote #kbar-tools {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 2px;
+}
+body.karaoke-remote #kbar-tools > * { min-width: 0; box-sizing: border-box; }
+body.karaoke-remote #kbar-tools .lyrics-opt-wrap { display: flex; }
+body.karaoke-remote #kbar-tools .lyrics-opt-wrap > .ctrl-btn { flex: 1; }
+body.karaoke-remote #kbar-tools .ctrl-btn { min-width: 0; flex: 1; padding: 6px 2px; font-size: 17px; }
+body.karaoke-remote #kbar-tools .ctrl-btn::before { font-size: 10px; }
+/* 上面兩列的七顆鈕要**完全一樣大** (使用者要求),所以第一列也走同一套 grid,
+   圖示/標籤字級也跟工具鈕對齊 —— 不然 .kbar-big 是 19/11px 而 .ctrl-btn 是 17/10px,
+   兩列高度會差 5px */
+body.karaoke-remote #karaoke-bar > .kbar-group:not(#kbar-tools) {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 2px;
+}
+body.karaoke-remote .kbar-big { width: auto; box-sizing: border-box; padding: 6px 4px; }
+body.karaoke-remote .kbar-big i { font-size: 17px; }
+body.karaoke-remote .kbar-big span { font-size: 10px; }
+/* 高度也釘死:圖示字級對齊之後仍差 2px (標籤的 line-height 不同) */
+body.karaoke-remote .kbar-big,
+body.karaoke-remote #kbar-tools .ctrl-btn,
+body.karaoke-remote .kbar-row3 .ctrl-btn { min-height: 46px; justify-content: center; }
+body.karaoke-remote .kbar-offsets { gap: 6px; }
+/* 第三列:偏移排在左、「收回」在右 (karaoke-remote.js 的 layoutRow3 真的搬了 DOM,
+   CSS 搬不動同層以外的節點)。偏移排的高度會隨「有沒有挑 MV」變成一排或兩排,
+   所以那顆鈕是這一列的 flex 項目而不是絕對定位,否則排一變它就凸出去。 */
+body.karaoke-remote .kbar-row3 { display: flex; align-items: center; gap: 6px; }
+body.karaoke-remote .kbar-row3 .kbar-offsets { flex: 1; min-width: 0; }
+/* 這一列剩下的空白由兩排偏移往右撐滿:數值那格 flex: 1,+/− 就落在兩端。
+   多了「退出」那顆之後空間變緊,所以偏移排整體收小一點 (gap 與數值的最小寬)。 */
+body.karaoke-remote .kbar-row3 .kbar-offset { width: 100%; gap: 6px; }
+body.karaoke-remote .kbar-row3 #kbar-offset,
+body.karaoke-remote .kbar-row3 #kbar-mv-offset { flex: 1; min-width: 50px; }
+/* **這一列的兩顆鈕比上面那六顆窄。** 這是刻意的取捨:300px 寬的視窗裡,兩顆 93px 的鈕
+   只留給偏移排 86px,而它最省也要 ~140px (標籤+兩顆加減+數值)。要三者都等寬得把視窗
+   拉到 400px 上下,那跟「窗只有按鈕那麼大」互相衝突。 */
+body.karaoke-remote .kbar-row3 .ctrl-btn {
+    flex: 0 0 62px;
+    min-width: 0;
+    box-sizing: border-box;
+    padding: 6px 4px;
+    font-size: 17px;
+}
+body.karaoke-remote .kbar-row3 .ctrl-btn::before { font-size: 10px; }
+/* **兩個浮層在這扇窗改成鋪滿整個視窗。** 視窗只有按鈕那麼大 (使用者要求不留空白),
+   從按鈕往外展開的浮層一定放不下 —— 與其為了它們把視窗撐高一倍空在那裡,
+   不如打開時就佔滿整扇窗、自己捲。這也免掉「浮層開了要 resize 視窗」那條
+   (resizeTo/resizeBy 在子視窗上不可靠,見 karaoke-remote.js)。 */
+body.karaoke-remote .lyrics-opt-panel {
+    position: fixed;
+    inset: 0;
+    width: auto;
+    max-width: none;
+    transform: none;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    overflow-y: auto;
+    animation: none;   /* optPopIn 的 transform 會蓋掉 inset */
+}
+/* 綠泡泡改成往下:控制列貼著上緣,往上展開會整片切掉 */
+body.karaoke-remote .lyrics-opt-bubble { bottom: auto; top: calc(100% + 8px); }
+body.karaoke-remote .lyrics-opt-bubble::after {
+    top: auto;
+    bottom: 100%;
+    border-top-color: transparent;
+    border-bottom-color: var(--accent-main, #1db954);
+}
+body.karaoke-remote #karaoke-mv-picker {
+    inset: 0;
+    top: 0; left: 0;
+    transform: none;
+    width: auto;
+    max-height: none;
+    border: 0;
+    border-radius: 0;
+}
+
+/* ── 曲名/作詞作曲的資訊卡 ──
+   **貼在畫面上緣、絕對定位,不佔版面流** —— 歌詞是貼著下緣的 (#karaoke-stage 是
+   justify-content: flex-end),兩者天生不重疊,所以資訊卡可以跟歌詞同時在畫面上。
+   舊版是「獨佔一個畫面、把 #karaoke-lines 整個藏起來」,那會逼出兩個互相矛盾的需求:
+   前奏短的歌卡片一閃而過等於沒顯示,而為了讓第一句連同倒數的點看得到又得提早收掉卡片。
+   移到上緣之後兩件事同時成立 (2026-08-10 使用者要求)。 */
 #karaoke-intro {
-    position: relative;
+    position: absolute;
+    top: 3vh;
+    left: 0;
+    right: 0;
     z-index: 2;
     text-align: center;
     color: #fff;
     text-shadow: 0 2px 18px rgba(0, 0, 0, 0.85);
-    margin-bottom: 4vh;
 }
-#karaoke-intro.hidden { display: none; }
-#ki-title { font-size: clamp(34px, 4.4vw, 72px); font-weight: 800; line-height: 1.2; }
-#ki-artist { font-size: clamp(18px, 2vw, 32px); font-weight: 600; margin-top: 0.35em; opacity: 0.9; }
-#ki-credits { margin-top: 1.4em; font-size: clamp(13px, 1.15vw, 18px); opacity: 0.75; line-height: 1.7; }
-#ki-count { margin-top: 1.2em; font-size: clamp(13px, 1.15vw, 18px); opacity: 0.6; }
+/* **字級跟著 vh 不是 vw** —— 這張卡與歌詞搶的是**垂直**空間 (它在上緣、歌詞在下緣),
+   用 vw 的話矮而寬的視窗會把卡片撐到壓在歌詞上 (實測 1490×846 + 4 列製作人員就疊了 10px)。
+   上限是「4 列製作人員時整張卡仍然構不到歌詞」推出來的:1080p 全螢幕下卡片約 320px 高,
+   而歌詞最壞情況 (兩句各佔兩列) 的上緣約在 540px。再往上加要先量那個距離。 */
+#ki-title { font-size: clamp(30px, 7vh, 84px); font-weight: 800; line-height: 1.2; }
+#ki-artist { font-size: clamp(17px, 3.2vh, 38px); font-weight: 600; margin-top: 0.35em; opacity: 0.9; }
+#ki-credits { margin-top: 1.1em; font-size: clamp(12px, 1.9vh, 22px); opacity: 0.8; line-height: 1.6; }
 
-/* ── 倒數 ── */
+/* ── 倒數的五個點 ──
+   karaoke-mode.js 把這塊塞進「即將唱的那一句」(.kline) 裡,所以位置是相對那一句的
+   **左上角**,不是畫面上的固定位置 (照 JOYSOUND)。`.kline` 已經是 position: relative,
+   而且靠 align-self 縮成貼合文字的寬度,所以 left: 0 就是這一句第一個字的左邊。
+   尺寸用 em 跟著歌詞字級縮放。 */
 #karaoke-countin {
-    position: relative;
-    z-index: 2;
-    margin-bottom: 22px;
+    position: absolute;
+    left: 0;
+    bottom: 100%;
     display: flex;
     align-items: center;
-    gap: 10px;
-    color: rgba(255, 255, 255, 0.75);
-    font-size: 15px;
-    letter-spacing: 1px;
-    /* 沒有暗化層,秒數會壓在亮的影片上 */
-    text-shadow: 0 1px 6px rgba(0, 0, 0, 0.9);
+    gap: 0.14em;
+    padding-bottom: 0.06em;
 }
-#karaoke-countin.hidden { display: none; }
+/* (收起來靠全站共用的 `.hidden { display: none !important }`,這裡不必再寫一條) */
+/* 配色與歌詞同一套:還沒走到 = 白底黑框 (未唱),走過去 = 紅底白框 (唱過)。
+   外框用 box-shadow 的 spread 畫,跟 -webkit-text-stroke 看起來是同一個粗細語彙。
+   **不要加 transition** —— 倒數是每幀重算的離散狀態,補間只會讓「還剩幾個」變模糊。 */
 .kdot {
-    width: 12px; height: 12px;
+    width: 0.26em; height: 0.26em;
     border-radius: 50%;
-    background: rgba(255, 255, 255, 0.18);
-    transition: background 0.15s linear, transform 0.15s linear;
+    background: #fff;
+    box-shadow: 0 0 0 0.045em #000;
 }
-.kdot.on { background: var(--primary-color, #1db954); transform: scale(1.12); }
+.kdot.on { background: #e60012; box-shadow: 0 0 0 0.045em #fff; }
 
-/* ── 狀態 / 降級提示 / 離開 ── */
+/* ── 狀態 / 降級提示 ── */
 /* 空狀態 (等待播放 / 找不到歌詞) 要留在畫面正中央 —— 舞台已經改成貼下緣,
    跟著歌詞擠在下面會看起來像壞掉 */
 #karaoke-status {
@@ -3080,24 +3268,6 @@ body.hide-furigana .kline rt { display: none; }
     font-size: 13px; cursor: pointer;
 }
 #karaoke-degraded button:hover { text-decoration: underline; }
-
-#karaoke-exit {
-    position: absolute;
-    top: 18px; right: 22px;
-    z-index: 3;
-    width: 38px; height: 38px;
-    display: flex; align-items: center; justify-content: center;
-    border-radius: 50%;
-    border: 0;
-    background: none;
-    cursor: pointer;
-    color: rgba(255, 255, 255, 0.5);
-    font-size: 17px;
-    opacity: 0;
-    transition: opacity 0.25s ease, background 0.15s ease;
-}
-body.karaoke-page.bar-visible #karaoke-exit { opacity: 1; }
-#karaoke-exit:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
 
 /* ── MV 挑選面板 ── */
 #karaoke-mv-mask {

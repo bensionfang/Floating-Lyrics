@@ -182,10 +182,30 @@ assert.deepStrictEqual(karaokeSlots([], 5), { index: -1, nextIndex: -1, top: -1,
     assert.deepStrictEqual([s.top, s.bottom], [3, 4], '沒有下一句時上槽留著 CCC');
 }
 
-// 第一句:上一句不存在,還沒唱到一半時另一槽是空的
+// 「長間隔 = 間奏」要扣掉這一句唱多久 —— 只比兩個時間戳的差,長句後面接一般句距也會
+// 被判成間奏,那句還在唱就被換成下一句 (變成 .done 整句補滿紅)。
+// 數字取自 NOMELON NOLEMON / カイカ:第一句 22.880 起、逐字資料唱到 9.330 秒,
+// 下一句 32.503 —— 真正的空檔只有 0.29 秒,但兩個時間戳差 9.62 秒。
+{
+    const W = [[0, 0], [15, 6616], [22, 9330]];
+    const K = [{ time: 22.880, text: '一', words: W }, { time: 32.503, text: '二' }];
+    const s = karaokeSlots(K, 29.6);   // 離下一句 2.9 秒,但這句還在唱
+    assert.strictEqual(s.index, 0, '還在唱就不准把下一句提上來當活躍句');
+    assert.strictEqual(s.countdown, null, '也不該倒數 —— 人還在唱');
+
+    // 真的是間奏 (這句 9.33 秒唱完後空 10 秒) 就照舊提前換上來 + 倒數
+    const G = [{ time: 0, text: '一', words: W }, { time: 20, text: '二' }];
+    assert.strictEqual(karaokeSlots(G, 18).index, 1, '真間奏:開口前 3 秒換上來');
+    assert.ok(karaokeSlots(G, 18).countdown, '真間奏要倒數');
+    assert.strictEqual(karaokeSlots(G, 12).index, 0, '間奏中段仍停在剛唱完那句');
+}
+
+// 第一句:上一句不存在,那一槽**立刻**放下一句 —— 不特判的話整首歌的開頭只有一行,
+// 唱到一半才蹦出第二行。字幕機從第一秒起就該是兩行。
 {
     const s = karaokeSlots(L, 10.5);
-    assert.deepStrictEqual([s.top, s.bottom], [0, -1], '開頭沒有上一句可留');
+    assert.deepStrictEqual([s.top, s.bottom], [0, 1], '開頭沒有上一句可留,直接預覽下一句');
+    assert.strictEqual(s.index, 0);
 }
 
 console.log('test_karaoke_mode: OK');

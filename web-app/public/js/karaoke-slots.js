@@ -17,6 +17,7 @@
  * 4. **另一槽不是一換行就跟著換,要等這句唱到一半** (SWAP,照 JOYSOUND)。在那之前留著
  *    剛唱完的上一句 (紅著,見 .kline.done),之後才換成下一句當預覽。一換行就換掉的話
  *    唱完的紅字一瞬間就不見,而且旁邊直接跳出兩句以後的詞,眼睛跟不上是哪一句。
+ *    **第一句沒有上一句可留,那一槽直接放下一句** —— 不特判的話開頭只有一行。
  */
 const KARAOKE_COUNT_IN_SEC = 3;
 const KARAOKE_GAP_SEC = 6;      // 超過這個間隔才算間奏 —— 一般句距的兩倍
@@ -39,7 +40,7 @@ function karaokeSlots(lines, posSec, hint, countInSec) {
         // 間奏中 / 還沒開唱:直接顯示接下來那一句
         cur = upcoming >= 0 ? upcoming : lastReal(lines);
     } else if (upcoming >= 0 &&
-               lines[upcoming].time - lines[i].time >= KARAOKE_GAP_SEC &&
+               lines[upcoming].time - lineEnd(lines[i]) >= KARAOKE_GAP_SEC &&
                lines[upcoming].time - posSec <= countIn) {
         // 沒有 ♫ 標記的長間隔:開口前 countIn 秒才換上來
         cur = upcoming;
@@ -54,7 +55,9 @@ function karaokeSlots(lines, posSec, hint, countInSec) {
     let other = prevReal(lines, cur);
     if (nextIndex >= 0) {
         const half = (lines[nextIndex].time - lines[cur].time) / 2;
-        if (posSec >= lines[cur].time + Math.min(half, KARAOKE_SWAP_MAX_SEC)) other = nextIndex;
+        // **第一句是例外:沒有上一句可以留,那一槽就直接放下一句。** 不特判的話整首歌的
+        // 開頭只有孤零零一行,唱到一半才蹦出第二行 —— 字幕機從第一秒起就該是兩行。
+        if (other < 0 || posSec >= lines[cur].time + Math.min(half, KARAOKE_SWAP_MAX_SEC)) other = nextIndex;
     }
     const onTop = realOrdinal(lines, cur) % 2 === 0;
     const top = onTop ? cur : other;
@@ -62,7 +65,7 @@ function karaokeSlots(lines, posSec, hint, countInSec) {
 
     let countdown = null;
     if (lines[cur].time > posSec) {
-        const anchor = i >= 0 ? lines[i].time : 0;
+        const anchor = i >= 0 ? lineEnd(lines[i]) : 0;
         const gap = lines[cur].time - anchor;
         if (gap >= countIn) {
             const total = Math.min(gap, countIn);
@@ -71,6 +74,21 @@ function karaokeSlots(lines, posSec, hint, countInSec) {
     }
 
     return { index: cur, nextIndex, top, bottom, countdown };
+}
+
+/**
+ * 這一句唱完的時間。有逐字資料就用最後一個折線點 (毫秒是相對於這一句的時間戳),
+ * 沒有就退回時間戳本身 (= 舊行為)。
+ *
+ * **「間隔夠長 = 間奏」必須扣掉這一句唱多久,不能只看兩句時間戳的差。**
+ * 長句 (カイカ 第一句唱滿 9.3 秒) 後面接一般句距,兩個時間戳的差照樣 >= GAP,
+ * 於是那句還在唱、離下一句只剩 countIn 秒時畫面就把「下一句」提上來當活躍句 ——
+ * 剛唱到六成的那句瞬間變成 .done 整句補滿紅字 (2026-08-10 回報:兩張差 100ms 的
+ * 截圖,填色從六成跳到全滿)。首頁沒有這條規則,所以只有卡拉OK頁會這樣。
+ */
+function lineEnd(line) {
+    const w = line && line.words;
+    return line.time + (w && w.length ? w[w.length - 1][1] / 1000 : 0);
 }
 
 // 這是第幾句「真歌詞」(間奏不算)。一首歌頂多一兩百行,每幀全掃比維護一張表便宜。

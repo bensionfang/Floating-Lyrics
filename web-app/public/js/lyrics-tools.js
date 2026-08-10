@@ -289,8 +289,11 @@ function keepPanelInView(panel) {
     panel.style.setProperty('--panel-nudge', '0px');
     const MARGIN = 8;
     const rect = panel.getBoundingClientRect();
+    // 量的是**浮層自己那扇視窗**的寬 —— 卡拉OK的控制列可以被搬進獨立小視窗
+    // (karaoke-remote.js),那時 rect 是小視窗的座標,拿主視窗的 innerWidth 比就全錯
+    const vw = (panel.ownerDocument.defaultView || window).innerWidth;
     let nudge = 0;
-    if (rect.right > window.innerWidth - MARGIN) nudge = window.innerWidth - MARGIN - rect.right;
+    if (rect.right > vw - MARGIN) nudge = vw - MARGIN - rect.right;
     else if (rect.left < MARGIN) nudge = MARGIN - rect.left;
     if (nudge) panel.style.setProperty('--panel-nudge', `${Math.round(nudge)}px`);
 }
