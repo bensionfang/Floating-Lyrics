@@ -326,9 +326,15 @@ document.addEventListener('DOMContentLoaded', function () {
             document.getElementById('ki-title').textContent = title;
             document.getElementById('ki-artist').textContent = artist;
             setStatus('正在搜尋歌詞...', 'fa-solid fa-spinner fa-spin');
+            const requestedOffsetKey = offsetSongKey(title, artist);
+            const applyLoadedOffset = (value) => {
+                if (offsetSongKey(title, artist) !== requestedOffsetKey) return;
+                syncOffset = value;
+                window.karaokePaintOffset();
+            };
             fetch(`/api/lyrics/offset?title=${encodeURIComponent(title)}&artist=${encodeURIComponent(artist)}`)
-                .then(r => r.json()).then(o => { syncOffset = o.offset || 0; window.karaokePaintOffset(); })
-                .catch(() => { syncOffset = 0; window.karaokePaintOffset(); });
+                .then(r => r.json()).then(o => applyLoadedOffset(o.offset || 0))
+                .catch(() => applyLoadedOffset(0));
             // 還在介紹頁時不要載 MV (`karaokeStart` 會補一次)
             if (started) karaokeOnSongChange(title, artist);
             nowEl.textContent = `現在播放:${title}${artist ? ' — ' + artist : ''}`;
@@ -452,7 +458,13 @@ document.addEventListener('DOMContentLoaded', function () {
     // 字幕早晚 = 這首歌的 sync offset,跟首頁共用同一筆 (存 DB)。填色與換行都吃
     // frame() 的 `pos - syncOffset`,所以改完不必自己重畫,下一幀就對了。
     const offsetEl = document.getElementById('kbar-offset');
-    let saveOffsetTimer = null;
+    const saveOffsetLater = createOffsetSaver((payload) => {
+        fetch('/api/lyrics/offset', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        }).catch(() => {});
+    });
 
     function paintOffset() {
         const ms = Math.round(syncOffset * 1000);
@@ -461,15 +473,7 @@ document.addEventListener('DOMContentLoaded', function () {
     window.karaokePaintOffset = paintOffset;
 
     function saveOffset() {
-        if (!title) return;
-        clearTimeout(saveOffsetTimer);
-        saveOffsetTimer = setTimeout(() => {
-            fetch('/api/lyrics/offset', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ title, artist, offset: syncOffset }),
-            }).catch(() => {});
-        }, 500);
+        saveOffsetLater(title, artist, syncOffset);
     }
 
     window.karaokeAdjustOffset = function (delta) {
