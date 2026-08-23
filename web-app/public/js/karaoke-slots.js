@@ -91,6 +91,22 @@ function karaokeFitFontSize(maxPx, measurements) {
     return Math.max(0.1, Math.floor(maxPx * scale * 10) / 10);
 }
 
+function karaokeOffsetHotkey(e, advance, delay) {
+    if (!e || typeof e.key !== 'string') return null;
+    const tag = e.target && e.target.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target && e.target.isContentEditable)) return null;
+    let key = e.key.length === 1 ? e.key.toUpperCase() : e.key;
+    if (key === ' ') key = 'Space';
+    let prefix = '';
+    if (e.ctrlKey) prefix += 'Ctrl+';
+    if (e.altKey) prefix += 'Alt+';
+    if (e.shiftKey && e.key.length > 1) prefix += 'Shift+';
+    key = prefix + key;
+    if (key === advance) return -0.1;
+    if (key === delay) return 0.1;
+    return null;
+}
+
 /**
  * 這一句唱完的時間。有逐字資料就用最後一個折線點 (毫秒是相對於這一句的時間戳),
  * 沒有就退回時間戳本身 (= 舊行為)。
@@ -134,5 +150,6 @@ function lastReal(lines) {
 }
 
 if (typeof module !== 'undefined' && module.exports) module.exports = {
-    karaokeSlots, karaokeFitFontSize, KARAOKE_COUNT_IN_SEC, KARAOKE_GAP_SEC, KARAOKE_SWAP_MAX_SEC,
+    karaokeSlots, karaokeFitFontSize, karaokeOffsetHotkey,
+    KARAOKE_COUNT_IN_SEC, KARAOKE_GAP_SEC, KARAOKE_SWAP_MAX_SEC,
 };

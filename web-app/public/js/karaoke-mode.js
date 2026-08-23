@@ -484,6 +484,19 @@ document.addEventListener('DOMContentLoaded', function () {
         saveOffset();
     };
 
+    function offsetKeydown(e) {
+        if (!started) return;
+        const delta = karaokeOffsetHotkey(e,
+            localStorage.getItem('hk-advance') || 'ArrowLeft',
+            localStorage.getItem('hk-delay') || 'ArrowRight');
+        if (delta === null) return;
+        e.preventDefault();
+        karaokeAdjustOffset(delta);
+        showBar();
+    }
+    window.karaokeOffsetKeydown = offsetKeydown;
+    document.addEventListener('keydown', offsetKeydown);
+
     let barTimer = null;
     let overBar = false;
 

@@ -2,7 +2,7 @@
 // 兩個純函式:LRC 解析 (從 app.js 抽出來,首頁與卡拉OK頁共用) 與字幕機的兩行版面數學。
 const assert = require('assert');
 const { parseLrc } = require('../web-app/public/js/lrc-parse.js');
-const { karaokeSlots, karaokeFitFontSize } = require('../web-app/public/js/karaoke-slots.js');
+const { karaokeSlots, karaokeFitFontSize, karaokeOffsetHotkey } = require('../web-app/public/js/karaoke-slots.js');
 
 // ===== 1. parseLrc =====
 
@@ -163,7 +163,21 @@ assert.strictEqual(karaokeFitFontSize(70, []), null);
 assert.strictEqual(karaokeFitFontSize(70, [{ natural: 0, available: 700 }]), null);
 assert.strictEqual(karaokeFitFontSize(70, [{ natural: 500, available: 0 }]), null);
 
-// ===== 4. 上下槽的交替 (JOYSOUND 式) =====
+// ===== 4. 字幕早晚快捷鍵 =====
+
+assert.strictEqual(karaokeOffsetHotkey({ key: 'ArrowLeft' }, 'ArrowLeft', 'ArrowRight'), -0.1,
+    '提早鍵應讓字幕 offset 減少 100ms');
+assert.strictEqual(karaokeOffsetHotkey({ key: 'ArrowRight' }, 'ArrowLeft', 'ArrowRight'), 0.1,
+    '延後鍵應讓字幕 offset 增加 100ms');
+assert.strictEqual(karaokeOffsetHotkey({ key: 'k', ctrlKey: true }, 'Ctrl+K', 'Alt+J'), -0.1,
+    '卡拉 OK 頁要沿用自訂組合鍵');
+assert.strictEqual(karaokeOffsetHotkey({ key: 'j', altKey: true }, 'Ctrl+K', 'Alt+J'), 0.1);
+assert.strictEqual(karaokeOffsetHotkey({ key: 'ArrowUp' }, 'ArrowLeft', 'ArrowRight'), null,
+    '無關按鍵不應改動字幕時間');
+assert.strictEqual(karaokeOffsetHotkey({ key: 'ArrowLeft', target: { tagName: 'INPUT' } },
+    'ArrowLeft', 'ArrowRight'), null, '在輸入欄按快捷鍵不應改動字幕時間');
+
+// ===== 5. 上下槽的交替 (JOYSOUND 式) =====
 // 槽位是「第幾句真歌詞」的奇偶,所以同一句永遠待在同一槽。另一槽先留著上一句,
 // 唱到一半 (與下一句的間隔取半、封頂 SWAP_MAX) 才換成下一句當預覽。
 {
