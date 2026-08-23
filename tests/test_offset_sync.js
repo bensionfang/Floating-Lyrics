@@ -39,5 +39,19 @@ const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
         { title: 'B', artist: 'Singer', offset: -0.1 },
     ]);
 
+    const flushed = [];
+    const flushSave = createOffsetSaver(payload => flushed.push(payload), 50);
+    assert.strictEqual(typeof flushSave.flush, 'function', '頁面離開前要能立即送出待存校正');
+    flushSave('A', 'Singer', 0.1);
+    flushSave('A', 'Singer', 0.2);
+    flushSave('B', 'Singer', -0.1);
+    flushSave.flush();
+    assert.deepStrictEqual(flushed, [
+        { title: 'A', artist: 'Singer', offset: 0.2 },
+        { title: 'B', artist: 'Singer', offset: -0.1 },
+    ], 'flush 要立即送出各歌曲最後一次校正');
+    await wait(70);
+    assert.strictEqual(flushed.length, 2, 'flush 後原本的 timer 不可重複送出');
+
     console.log('test_offset_sync: OK');
 })().catch((e) => { console.error(e); process.exitCode = 1; });

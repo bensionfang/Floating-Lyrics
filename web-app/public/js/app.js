@@ -641,9 +641,11 @@ const saveOffsetLater = createOffsetSaver((payload) => {
     fetch('/api/lyrics/offset', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
+        keepalive: true
     }).catch(e => console.error("Failed to save offset", e));
 });
+window.addEventListener('pagehide', saveOffsetLater.flush);
 function saveSyncOffset() {
     saveOffsetLater(lastMediaTitle, lastMediaArtist, syncOffset);
 }

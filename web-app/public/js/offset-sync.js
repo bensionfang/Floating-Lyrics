@@ -9,17 +9,26 @@ function offsetFromMessage(currentKey, message) {
 }
 
 function createOffsetSaver(send, delayMs = 500) {
-    const timers = new Map();
-    return function save(title, artist, offset) {
+    const pending = new Map();
+    function save(title, artist, offset) {
         if (!title) return;
         const key = offsetSongKey(title, artist);
-        clearTimeout(timers.get(key));
+        clearTimeout(pending.get(key)?.timer);
         const payload = { title, artist: artist || '', offset };
-        timers.set(key, setTimeout(() => {
-            timers.delete(key);
+        const timer = setTimeout(() => {
+            pending.delete(key);
             send(payload);
-        }, delayMs));
+        }, delayMs);
+        pending.set(key, { timer, payload });
+    }
+    save.flush = () => {
+        for (const [key, item] of pending) {
+            clearTimeout(item.timer);
+            pending.delete(key);
+            send(item.payload);
+        }
     };
+    return save;
 }
 
 if (typeof module !== 'undefined' && module.exports) module.exports = {
