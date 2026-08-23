@@ -2,6 +2,12 @@ function offsetSongKey(title, artist) {
     return `${artist || ''}|||${title || ''}`;
 }
 
+function offsetFromMessage(currentKey, message) {
+    if (!message || message.type !== 'sync_offset_updated') return null;
+    return offsetSongKey(message.title, message.artist) === currentKey
+        ? message.offset || 0 : null;
+}
+
 function createOffsetSaver(send, delayMs = 500) {
     const timers = new Map();
     return function save(title, artist, offset) {
@@ -16,4 +22,6 @@ function createOffsetSaver(send, delayMs = 500) {
     };
 }
 
-if (typeof module !== 'undefined' && module.exports) module.exports = { offsetSongKey, createOffsetSaver };
+if (typeof module !== 'undefined' && module.exports) module.exports = {
+    offsetSongKey, offsetFromMessage, createOffsetSaver,
+};

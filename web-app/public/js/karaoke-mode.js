@@ -414,6 +414,12 @@ document.addEventListener('DOMContentLoaded', function () {
             if (msg.state) applyState(msg.state);
             return;
         }
+        const liveOffset = offsetFromMessage(offsetSongKey(title, artist), msg);
+        if (liveOffset !== null) {
+            syncOffset = liveOffset;
+            paintOffset();
+            return;
+        }
         if (msg.type !== 'lyrics_updated' || !msg.lyrics) return;
         if (msg.title !== title || msg.artist !== artist) return;
         setLyrics(msg.lyrics);

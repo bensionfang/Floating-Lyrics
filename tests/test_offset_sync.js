@@ -6,12 +6,22 @@ try { api = require('../web-app/public/js/offset-sync.js'); } catch (e) {}
 
 assert.strictEqual(typeof api.offsetSongKey, 'function', '缺少歌曲身分函式');
 assert.strictEqual(typeof api.createOffsetSaver, 'function', '缺少逐歌延遲儲存器');
+assert.strictEqual(typeof api.offsetFromMessage, 'function', '缺少即時校正訊息守門');
 
-const { offsetSongKey, createOffsetSaver } = api;
+const { offsetSongKey, createOffsetSaver, offsetFromMessage } = api;
 const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 (async () => {
     assert.strictEqual(offsetSongKey('Song', 'Artist'), 'Artist|||Song');
+    assert.strictEqual(offsetFromMessage('Artist|||Song', {
+        type: 'sync_offset_updated', title: 'Song', artist: 'Artist', offset: 0.3,
+    }), 0.3, '目前歌曲要接收即時校正');
+    assert.strictEqual(offsetFromMessage('Artist|||Song', {
+        type: 'sync_offset_updated', title: 'Other', artist: 'Artist', offset: 0.8,
+    }), null, '其他歌曲的校正不能串進來');
+    assert.strictEqual(offsetFromMessage('Artist|||Song', {
+        type: 'sync_offset_updated', title: 'Song', artist: 'Artist', offset: 0,
+    }), 0, '歸零不能被當成沒有更新');
 
     const sent = [];
     const save = createOffsetSaver(payload => sent.push(payload), 5);
