@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#111827">
+  <title>Kanaric Karaoke Remote</title>
+  <style>
+    :root { color-scheme: dark; font: 16px system-ui, sans-serif; background: #111827; color: #f9fafb; }
+    body { margin: 0; padding: 20px; }
+    main { max-width: 640px; margin: auto; }
+    section { margin: 16px 0; padding: 16px; border: 1px solid #374151; border-radius: 14px; background: #1f2937; }
+    input, button { box-sizing: border-box; min-height: 44px; border-radius: 8px; border: 1px solid #4b5563; padding: 8px 12px; font: inherit; }
+    input { width: 100%; background: #111827; color: inherit; }
+    button { background: #2563eb; color: white; cursor: pointer; }
+    button.secondary { background: #374151; }
+    button.danger { background: #b91c1c; }
+    form { display: grid; gap: 10px; }
+    .row { display: flex; flex-wrap: wrap; gap: 8px; }
+    .row > button { flex: 1 1 120px; }
+    .muted { color: #9ca3af; }
+    .code { font-size: 2rem; letter-spacing: .18em; text-align: center; }
+    ul { list-style: none; padding: 0; margin: 8px 0 0; }
+    li { display: flex; justify-content: space-between; gap: 8px; padding: 10px 0; border-bottom: 1px solid #374151; }
+    li button { min-height: 36px; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Karaoke Remote</h1>
+  <p id="status" class="muted">請向 Host 取得配對碼。</p>
+  <section id="pair-section">
+    <form id="pair-form">
+      <label for="pair-code">配對碼</label>
+      <input id="pair-code" inputmode="text" autocomplete="one-time-code" maxlength="6" required>
+      <button type="submit">配對</button>
+    </form>
+  </section>
+  <section id="remote-section" hidden>
+    <p id="session-label" class="muted"></p>
+    <div class="row">
+      <button data-command="pause">暫停</button>
+      <button data-command="restart">重唱</button>
+      <button data-command="skip">下一首</button>
+      <button data-command="stop" class="danger">停止</button>
+      <button id="refresh" class="secondary">重新整理狀態</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button id="reconnect" class="secondary">重新連線</button>
+    </div>
+  </section>
+  <section id="search-section" hidden>
+    <form id="search-form">
+      <label for="search-query">搜尋曲庫</label>
+      <input id="search-query" autocomplete="off">
+      <button type="submit">搜尋</button>
+    </form>
+    <ul id="search-results"></ul>
+  </section>
+  <section id="queue-section" hidden>
+    <h2>Queue</h2>
+    <p id="queue-revision" class="muted"></p>
+    <ul id="queue"></ul>
+  </section>
+</main>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const status = $('status');
+  let token = null;
+  let sessionId = null;
+  let state = null;
+  let socket = null;
+  const requestId = () => globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const setStatus = (value) => { status.textContent = value; };
+  const send = (command, extra = {}) => {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return setStatus('尚未連線。');
+    socket.send(JSON.stringify({ type: 'remote_command', token, sessionId, requestId: requestId(), command, ...extra }));
+  };
+  const render = () => {
+    if (!state) return;
+    $('remote-section').hidden = false;
+    $('search-section').hidden = false;
+    $('queue-section').hidden = false;
+    $('session-label').textContent = `${state.song?.title || '尚未選擇歌曲'} · ${state.state} · revision ${state.revision}`;
+    const queue = state.queue || { revision: 0, items: [] };
+    $('queue-revision').textContent = `queue revision ${queue.revision}`;
+    const list = $('queue');
+    list.replaceChildren();
+    (queue.items || []).forEach((item, index) => {
+      const row = document.createElement('li');
+      const label = document.createElement('span');
+      label.textContent = `${index + 1}. ${item.title || item.songId} · Key ${item.key ?? 0}`;
+      const keyControls = document.createElement('span');
+      keyControls.className = 'row';
+      for (const [text, delta] of [['Key −', -1], ['Key ＋', 1]]) {
+        const button = document.createElement('button');
+        button.className = 'secondary';
+        button.dataset.queueKey = item.queueId;
+        button.textContent = text;
+        const currentKey = Number(item.key) || 0;
+        button.disabled = delta < 0 ? currentKey <= -6 : currentKey >= 6;
+        button.addEventListener('click', () => send('key', {
+          queueId: item.queueId,
+          key: Math.max(-6, Math.min(6, currentKey + delta)),
+          expectedQueueRevision: state?.queue?.revision,
+        }));
+        keyControls.appendChild(button);
+      }
+      row.append(label, keyControls);
+      list.appendChild(row);
+    });
+  };
+  const renderSearch = (results) => {
+    const list = $('search-results');
+    list.replaceChildren();
+    (results || []).forEach((song) => {
+      const row = document.createElement('li');
+      const label = document.createElement('span');
+      label.textContent = `${song.title} · ${song.artist}`;
+      const reserve = document.createElement('button');
+      reserve.textContent = '預約';
+      reserve.addEventListener('click', () => send('reserve', {
+        item: { songId: song.songId, singer: 'mobile' },
+        expectedQueueRevision: state?.queue?.revision,
+      }));
+      row.append(label, reserve);
+      list.appendChild(row);
+    });
+  };
+  const connect = (requestType = 'remote_auth') => {
+    if (!token) return;
+    if (socket) socket.close();
+    const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+    socket = new WebSocket(`${scheme}://${location.host}/remote/ws`);
+    socket.onopen = () => {
+      setStatus('已連線，正在同步…');
+      socket.send(JSON.stringify({ type: requestType, token, sessionId, requestId: requestId() }));
+    };
+    socket.onmessage = (event) => {
+      const message = JSON.parse(event.data);
+      if (message.type === 'remote_state' || message.type === 'remote_command_result') {
+        if (message.accepted === false) return setStatus(`操作未套用：${message.reason}`);
+        if (message.command === 'search') renderSearch(message.result);
+        if (message.state) { state = message.state; sessionId = state.sessionId || sessionId; render(); }
+        if (message.type === 'remote_state') setStatus('已同步');
+        return;
+      }
+      if (message.type === 'remote_error') setStatus(`Remote 拒絕：${message.reason}`);
+    };
+    socket.onclose = () => setStatus('Remote 連線已中斷。');
+  };
+  $('pair-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    setStatus('配對中…');
+    try {
+      const response = await fetch('/remote/pair', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: $('pair-code').value }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.accepted) throw new Error(result.reason || '配對失敗');
+      token = result.token;
+      sessionId = result.sessionId;
+      state = result.state;
+      $('pair-section').hidden = true;
+      render();
+      connect();
+    } catch (error) { setStatus(error.message); }
+  });
+  $('search-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    send('search', { query: $('search-query').value });
+  });
+  document.querySelectorAll('[data-command]').forEach((button) => {
+    button.addEventListener('click', () => send(button.dataset.command));
+  });
+  $('refresh').addEventListener('click', () => send('state_refresh'));
+  $('reconnect').addEventListener('click', () => connect('remote_reconnect'));
+})();
+</script>
+</body>
+</html>

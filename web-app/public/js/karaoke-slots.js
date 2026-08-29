@@ -76,6 +76,10 @@ function karaokeSlots(lines, posSec, hint, countInSec) {
     return { index: cur, nextIndex, top, bottom, countdown };
 }
 
+function karaokeHasWordTiming(line) {
+    return !!(line && Array.isArray(line.words) && line.words.length >= 2);
+}
+
 /**
  * 上下槽共用的單列字級。measurements 每筆都是同一句在 maxPx 下的自然寬度與可用寬度。
  * DOM 尚未排好時回 null,讓呼叫端保留 CSS 字級。
@@ -150,6 +154,6 @@ function lastReal(lines) {
 }
 
 if (typeof module !== 'undefined' && module.exports) module.exports = {
-    karaokeSlots, karaokeFitFontSize, karaokeOffsetHotkey,
+    karaokeSlots, karaokeHasWordTiming, karaokeFitFontSize, karaokeOffsetHotkey,
     KARAOKE_COUNT_IN_SEC, KARAOKE_GAP_SEC, KARAOKE_SWAP_MAX_SEC,
 };

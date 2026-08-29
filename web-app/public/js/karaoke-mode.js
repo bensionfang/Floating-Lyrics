@@ -30,6 +30,22 @@ document.addEventListener('DOMContentLoaded', function () {
     const dots = Array.from(countEl.querySelectorAll('.kdot'));
     const introEl = document.getElementById('karaoke-intro');
     const nowEl = document.getElementById('k-now');
+    const clockApi = window.KanaricKaraokeClock;
+    const karaokeClock = new clockApi.KaraokeClock();
+    const query = new URLSearchParams(location.search);
+    const localMode = query.get('player') === 'local';
+    const playerApi = window.KanaricKaraokePlayer;
+    let localPlayer = null;
+    let sessionId = null;
+    let sessionRevision = -1;
+    let localSessionState = 'IDLE';
+    let localSessionRequested = false;
+    let localSessionReady = false;
+    let localStartRequested = false;
+    let localLoadEvent = null;
+    let localSong = null;
+    let localObjectUrl = null;
+    let sessionSongId = null;
 
     // ── 歌詞狀態 ──
     let lines = [];
@@ -41,19 +57,22 @@ document.addEventListener('DOMContentLoaded', function () {
     let fetchSeq = 0;
     let fitRaf = 0;
 
-    // ── 播放狀態 (自己內插,理由同 app.js:廣播一秒才一則) ──
-    let pos = 0;
+    // ── 播放狀態 (單調時鐘內插,理由同 app.js:廣播一秒才一則) ──
     let playing = false;
-    let lastServerPos = -1;
-    let lastFrame = performance.now();
     let syncOffset = 0;
     let title = '';
     let artist = '';
     let lyricsKey = '';
 
     const m0 = window.__initialMedia;
-    if (m0 && m0.title) {
-        pos = m0.position || 0;
+    if (!localMode && m0 && m0.title) {
+        const initial = clockApi.mediaStateToEvent(m0);
+        karaokeClock.seed({
+            trackId: initial.trackId,
+            positionMs: initial.positionMs,
+            durationMs: initial.durationMs,
+            isPlaying: !!m0.is_playing,
+        });
         playing = !!m0.is_playing;
     }
 
@@ -78,7 +97,7 @@ document.addEventListener('DOMContentLoaded', function () {
         // **每一行畫兩份**:.kbase 是未唱的白字黑框,.kover 是唱過的紅字白框、絕對定位疊在
         // 上面,靠逐字的 clip-path 由左往右揭開 (見 style.css 那段說明)。
         linesEl.innerHTML = lines.map((l, i) =>
-            `<div class="kline" id="kline-${i}"><span class="kbase">${l.text}</span><span class="kover">${l.text}</span></div>`).join('');
+            `<div class="kline${karaokeHasWordTiming(l) ? ' has-word-timing' : ''}" id="kline-${i}"><span class="kbase">${l.text}</span><span class="kover">${l.text}</span></div>`).join('');
         // **兩層都要切成一字一顆 span,連只負責顯示白字的 .kbase 也要。** 只切 .kover 的話
         // 兩層在**換行的位置**會不一樣:Chrome 的禁則處理 (っ、小假名、標點不能在行首) 是看
         // 同一個文字 run 判斷的,拆成獨立 span 之後那個判斷跟著變,斷行點就差一個字 ——
@@ -90,10 +109,12 @@ document.addEventListener('DOMContentLoaded', function () {
             karaokeSplit(el.querySelector('.kover'));
         });
         // 沒有逐字時間的歌照樣進來,只是整句一起亮 —— 標一下,別讓人以為壞了
-        degradedEl.classList.toggle('hidden', unsynced || !lines.length || lines.some(l => l.words));
+        const hasWordTiming = lines.some(karaokeHasWordTiming);
+        degradedEl.classList.toggle('hidden', unsynced || !lines.length || hasWordTiming);
     }
 
     function clearLyrics() {
+        fetchSeq += 1;
         lines = [];
         linesEl.innerHTML = '';
         curIdx = topIdx = botIdx = -1;
@@ -192,6 +213,18 @@ document.addEventListener('DOMContentLoaded', function () {
     // 傳不同的根等於各記各的,清除就清不到。
     const overOf = (el) => (el ? el.querySelector('.kover') : null);
 
+    function resetStageState() {
+        linesEl.querySelectorAll('.kline').forEach((el) => {
+            el.classList.remove('slot-top', 'slot-bottom', 'cur', 'done');
+            const over = overOf(el);
+            if (over) karaokeClear(over);
+        });
+        countEl.classList.add('hidden');
+        curIdx = topIdx = botIdx = -1;
+        introEl.classList.add('hidden');
+        window.mvResetSync?.();
+    }
+
     /**
      * 把 karaokeSlots 算出來的上下槽套到 DOM 上。
      *
@@ -256,13 +289,15 @@ document.addEventListener('DOMContentLoaded', function () {
         introEl.classList.toggle('hidden', !show);
     }
 
-    function frame() {
-        const now = performance.now();
-        const dt = (now - lastFrame) / 1000;
-        lastFrame = now;
-        if (playing) pos += dt;
+    function playbackSnapshot() {
+        return karaokeClock.snapshot();
+    }
 
-        const p = pos - syncOffset;
+    function frame() {
+        const clockState = playbackSnapshot();
+        playing = clockState.isPlaying;
+        const rawPos = clockState.positionMs / 1000;
+        const p = rawPos - syncOffset;
         if (lines.length) {
             const s = karaokeSlots(lines, p, curIdx);
             if (s.index !== curIdx || s.top !== topIdx || s.bottom !== botIdx) applySlots(s);
@@ -277,7 +312,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
         paintIntro(p);
 
-        mvSync(pos, playing);
+        mvSync(rawPos, playing);
         requestAnimationFrame(frame);
     }
 
@@ -306,16 +341,16 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function applyState(d) {
-        playing = !!d.is_playing;
+        const event = clockApi.mediaStateToEvent(d);
+        const before = karaokeClock.snapshot();
+        const applied = karaokeClock.apply(event);
+        if (!applied.accepted) return;
+        const reset = event.trackId !== before.trackId
+            || ['load', 'pause', 'seek', 'restart', 'stop', 'ended', 'error'].includes(event.type)
+            || (event.type === 'play' && !before.isPlaying);
+        if (reset) resetStageState();
+        playing = applied.state.isPlaying;
         paintPlayBtn();
-
-        if (d.title && d.position !== lastServerPos) {
-            const diff = d.position - pos;
-            // 換歌 / seek 就硬對齊,小漂移補一半 (同 app.js)
-            if (Math.abs(diff) > 1.5 || d.title !== title) pos = d.position;
-            else pos += diff * 0.5;
-            lastServerPos = d.position;
-        }
 
         if (d.title && (d.title !== title || d.artist !== artist)) {
             title = d.title;
@@ -358,6 +393,259 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
+    function sendLocalSessionMessage(message) {
+        const ws = window.__mediaSocket;
+        if (!ws || ws.readyState !== 1) return false;
+        try {
+            ws.send(JSON.stringify(message));
+            return true;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    function requestLocalSession() {
+        if (!localMode || !localLoadEvent || localLoadEvent.durationMs <= 0 || sessionId || localSessionRequested) return;
+        const song = { ...localSong, durationMs: localLoadEvent.durationMs };
+        if (!sendLocalSessionMessage({
+            type: 'karaoke_session_transition',
+            sourceState: 'IDLE',
+            targetState: 'PREPARING',
+            details: { song },
+        })) return;
+        localSessionRequested = true;
+        setStatus('正在準備本機播放器...', 'fa-solid fa-spinner fa-spin');
+    }
+
+    function sendLocalPlayerEvent(event) {
+        if (!localMode || !sessionId || !event || event.type === 'load') return;
+        sendLocalSessionMessage({
+            type: 'karaoke_player_event',
+            sessionId,
+            event: { ...event, song: localSong },
+        });
+    }
+
+    function maybeStartLocalPlayback() {
+        if (!localPlayer || !localStartRequested || !localSessionReady) return;
+        localStartRequested = false;
+        localPlayer.restart();
+        localPlayer.play();
+    }
+
+    function applyHostCommand(command) {
+        if (command === 'restart') return window.karaokeRestart?.();
+        if (command === 'playpause') return window.karaokeTogglePlay?.();
+        if (command === 'next') return window.karaokeNext?.();
+        if (command === 'stop') {
+            if (localPlayer) localPlayer.stop();
+            else mediaAction('pause');
+            return;
+        }
+        if (command === 'play') {
+            if (localPlayer) {
+                if (!localSessionReady) {
+                    localStartRequested = true;
+                    requestLocalSession();
+                } else {
+                    localPlayer.play();
+                }
+            } else {
+                mediaAction('play');
+            }
+            return;
+        }
+        if (command === 'pause') {
+            if (localPlayer) {
+                if (localPlayer.getState() === 'playing') localPlayer.pause();
+            } else {
+                mediaAction('pause');
+            }
+        }
+    }
+
+    function applySessionState(d) {
+        if (!localMode || !d || !clockApi.sessionStateToEvent) return;
+        const revision = Number.isInteger(d.revision) ? d.revision : -1;
+        if (revision < 0 || revision <= sessionRevision) return;
+        const applied = karaokeClock.apply(clockApi.sessionStateToEvent(d));
+        if (!applied.accepted) return;
+
+        const nextSongId = d.song && d.song.id ? d.song.id : null;
+        const songChanged = nextSongId !== sessionSongId;
+        const sameLocalSong = nextSongId && localSong && nextSongId === localSong.id;
+        sessionSongId = nextSongId;
+        sessionRevision = revision;
+        sessionId = d.sessionId || null;
+        localSessionState = d.state || 'IDLE';
+        resetStageState();
+        playing = applied.state.isPlaying;
+        paintPlayBtn();
+
+        if (d.song && songChanged) {
+            title = d.song.title || '';
+            artist = d.song.artist || '';
+            window.currentMediaDuration = (d.song.durationMs || 0) / 1000;
+            document.getElementById('ki-title').textContent = title;
+            document.getElementById('ki-artist').textContent = artist;
+            nowEl.textContent = title ? `本機歌曲：${title}` : '目前沒有偵測到播放';
+            if (!sameLocalSong || !lines.length) clearLyrics();
+        }
+
+        if (localSessionState === 'PREPARING' && localLoadEvent && !localSessionReady) {
+            const sent = sendLocalSessionMessage({
+                type: 'karaoke_player_event',
+                sessionId,
+                event: { ...localLoadEvent, song: localSong },
+            });
+            if (sent) localSessionReady = false;
+        }
+        if (['INTRO', 'PLAYING', 'PAUSED'].includes(localSessionState)) {
+            localSessionReady = true;
+        }
+        if (localSessionState === 'INTRO') {
+            setStatus(lines.length ? '' : '找不到這首歌的歌詞', 'fa-solid fa-face-frown');
+            maybeStartLocalPlayback();
+        }
+        if (localSessionState === 'ERROR') {
+            localStartRequested = false;
+            localSessionReady = false;
+            const error = applied.state.error || { message: 'audio playback failed' };
+            setStatus(`播放器錯誤：${error.message}`, 'fa-solid fa-triangle-exclamation');
+        } else if (localSessionState === 'IDLE') {
+            sessionId = null;
+            localSessionRequested = false;
+            localSessionReady = false;
+        } else if (['ENDING', 'RESULT', 'TRANSITION'].includes(localSessionState)) {
+            localSessionReady = false;
+        }
+    }
+
+    // P1.1 local spike: one explicit query selects the browser audio element. It is deliberately
+    // not part of the default external-player path; its Stage position now comes from the
+    // canonical P1.2 session projection.
+    function localSpikeLrc(durationMs) {
+        const totalSec = Math.max(60, Math.ceil(durationMs / 1000));
+        const out = [];
+        for (let sec = 0, n = 1; sec < totalSec; sec += 5, n += 1) {
+            const mm = String(Math.floor(sec / 60)).padStart(2, '0');
+            const ss = String(sec % 60).padStart(2, '0');
+            const tag = `[${mm}:${ss}.000]`;
+            const text = `Local fixture line ${String(n).padStart(2, '0')}`;
+            out.push(`${tag}${text}`, `${tag}#WORDS#0:0,${text.length}:4000`);
+        }
+        return out.join('\n');
+    }
+
+    function localSpikeReadout() {
+        if (!localPlayer) return null;
+        const snapshot = playbackSnapshot();
+        const slot = lines.length ? karaokeSlots(lines, snapshot.positionMs / 1000, curIdx) : null;
+        const line = slot && slot.index >= 0 ? lines[slot.index] : null;
+        return {
+            state: localPlayer.getState(),
+            positionMs: snapshot.positionMs,
+            durationMs: snapshot.durationMs,
+            slotIndex: slot ? slot.index : -1,
+            wordPositionMs: line && line.words
+                ? Math.max(0, snapshot.positionMs - Math.round(line.time * 1000))
+                : null,
+        };
+    }
+
+    function loadLocalFile(file) {
+        if (!localPlayer || !file) return;
+        if (file.type && !file.type.startsWith('audio/')) {
+            setStatus('請選擇音訊檔案', 'fa-solid fa-triangle-exclamation');
+            return;
+        }
+        if (started) {
+            setStatus('請先退出字幕機再更換本機檔案', 'fa-solid fa-triangle-exclamation');
+            return;
+        }
+        if (localObjectUrl) URL.revokeObjectURL(localObjectUrl);
+        localObjectUrl = URL.createObjectURL(file);
+        const titleFromName = file.name.replace(/\.[^/.]+$/, '') || file.name;
+        localSong = {
+            id: `local-${file.name}-${file.size}-${file.lastModified}`,
+            title: titleFromName,
+            artist: '本機檔案',
+            src: localObjectUrl,
+        };
+        localLoadEvent = null;
+        localSessionRequested = false;
+        localSessionReady = false;
+        sessionId = null;
+        sessionRevision = -1;
+        sessionSongId = null;
+        document.getElementById('k-local-file-name').textContent = file.name;
+        try {
+            localPlayer.load(localSong);
+        } catch (error) {
+            setStatus(`本機檔案載入失敗：${error.message}`, 'fa-solid fa-triangle-exclamation');
+        }
+    }
+
+    function initLocalPlayer() {
+        if (!localMode) return;
+        const audio = document.getElementById('karaoke-local-audio');
+        const picker = document.getElementById('k-local-picker');
+        const fileInput = document.getElementById('karaoke-local-file');
+        if (!playerApi || !playerApi.BrowserAudioKaraokePlayer || !audio || !picker || !fileInput) {
+            nowEl.textContent = '本機模式缺少檔案選擇器';
+            setStatus('本機播放器初始化失敗', 'fa-solid fa-triangle-exclamation');
+            return;
+        }
+        picker.classList.remove('hidden');
+        nowEl.textContent = '本機模式：請選擇音訊檔案';
+        setStatus('請選擇本機音訊', 'fa-solid fa-file-audio');
+        localPlayer = new playerApi.BrowserAudioKaraokePlayer(audio);
+        window.__karaokeSpike = {
+            mode: 'local',
+            player: localPlayer,
+            readout: localSpikeReadout,
+            events: [],
+        };
+        localPlayer.on((event) => {
+            const song = localSong;
+            if (!song) return;
+            window.__karaokeSpike.events.push(event);
+            playing = event.state === 'playing';
+            paintPlayBtn();
+            if (event.type === 'error') {
+                setStatus(`本機播放器錯誤：${event.error.message || event.error.code}`, 'fa-solid fa-triangle-exclamation');
+                sendLocalPlayerEvent(event);
+                return;
+            }
+            if (event.type === 'load' && !localLoadEvent) {
+                localLoadEvent = event;
+                title = song.title;
+                artist = song.artist;
+                syncOffset = 0;
+                window.currentMediaDuration = event.durationMs / 1000;
+                document.getElementById('ki-title').textContent = title;
+                document.getElementById('ki-artist').textContent = artist;
+                nowEl.textContent = `本機檔案：${song.title}`;
+                setLyrics(localSpikeLrc(event.durationMs));
+                setStatus('');
+            }
+            if (event.type === 'load') {
+                if (localLoadEvent.durationMs === 0 && event.durationMs > 0) {
+                    localLoadEvent = event;
+                    localSong = { ...localSong, durationMs: event.durationMs };
+                }
+                requestLocalSession();
+            }
+            if (event.type !== 'load') sendLocalPlayerEvent(event);
+            if (event.type === 'ended') setStatus('本機 fixture 播放結束', 'fa-solid fa-circle-check');
+        });
+        fileInput.addEventListener('change', () => loadLocalFile(fileInput.files?.[0]));
+        window.addEventListener('pagehide', () => {
+            if (localObjectUrl) URL.revokeObjectURL(localObjectUrl);
+            localObjectUrl = null;
+        }, { once: true });
+    }
+
     // ===================== 進入 / 離開 =====================
     //
     // 這一頁是「介紹頁 + 字幕機」兩個畫面 (同 /game),`body.karaoke-page` 才是字幕機那個。
@@ -367,6 +655,10 @@ document.addEventListener('DOMContentLoaded', function () {
 
     window.karaokeStart = function () {
         if (started) return;
+        if (localMode && (!localPlayer || !localLoadEvent || localLoadEvent.durationMs <= 0 || localPlayer.getState() === 'error')) {
+            setStatus('本機模式尚未載入音訊檔案', 'fa-solid fa-triangle-exclamation');
+            return;
+        }
         started = true;
         document.body.classList.add('karaoke-page');
         // 字幕機本身就是一個更大的歌詞畫面,置頂的靈動島是重複的而且會蓋在上面 —— 請 server
@@ -376,12 +668,19 @@ document.addEventListener('DOMContentLoaded', function () {
         // 從頭唱:按下開始就把歌跳回 0 (= 控制列上的「重唱」),並且直接開始放。
         // **`play` 不是 `playpause`** —— 後者是 toggle,本來就在播的話會被關掉。
         // 本地狀態一起改,不然畫面要等下一則廣播 (一秒一則) 才開始跑。
-        karaokeRestart();
-        mediaAction('play');
-        playing = true;
-        paintPlayBtn();
+        if (localPlayer) {
+            localStartRequested = true;
+            requestLocalSession();
+            maybeStartLocalPlayback();
+        } else {
+            karaokeRestart();
+            mediaAction('play');
+            karaokeClock.reanchor(0, true);
+            playing = true;
+            paintPlayBtn();
+        }
         // MV 刻意等到這裡才載:介紹頁背後偷偷播一支 YouTube 影片沒有道理
-        karaokeOnSongChange(title, artist);
+        if (!localPlayer) karaokeOnSongChange(title, artist);
         document.documentElement.requestFullscreen?.().catch(() => {});
         showBar();
     };
@@ -390,7 +689,13 @@ document.addEventListener('DOMContentLoaded', function () {
         if (!started) return;
         started = false;
         // 離開就停:不停的話使用者已經回到介紹頁,背景還在放沒人唱的歌 (同 game.js 的 endGame)
-        mediaAction('pause');
+        if (localPlayer) {
+            if (localPlayer.getState() === 'playing') localPlayer.pause();
+            localStartRequested = false;
+        } else {
+            mediaAction('pause');
+            karaokeClock.reanchor(karaokeClock.positionMs(), false);
+        }
         playing = false;
         paintPlayBtn();
         document.body.classList.remove('karaoke-page');
@@ -410,6 +715,15 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 
     window.onMediaMessage((msg) => {
+        if (msg.type === 'karaoke_session' || msg.type === 'karaoke_session_result') {
+            applySessionState(msg.state || msg);
+            return;
+        }
+        if (msg.type === 'karaoke_host_command') {
+            applyHostCommand(msg.command);
+            return;
+        }
+        if (localMode) return;
         if (msg.type === 'media_state' || msg.type === 'init') {
             if (msg.state) applyState(msg.state);
             return;
@@ -424,15 +738,18 @@ document.addEventListener('DOMContentLoaded', function () {
         if (msg.title !== title || msg.artist !== artist) return;
         setLyrics(msg.lyrics);
     });
+    window.sendMediaSocket({ type: 'karaoke_role', role: 'stage' }, 'karaoke-stage-role');
 
     // WebSocket 斷線時的保底 (同 app.js/common.js:連線活著就完全不打)
-    setInterval(async () => {
-        if (window.__mediaSocketAlive) return;
-        try {
-            const r = await fetch('/api/current-media', { cache: 'no-store' });
-            if (r.ok) applyState(await r.json());
-        } catch (e) {}
-    }, 2000);
+    if (!localMode) {
+        setInterval(async () => {
+            if (window.__mediaSocketAlive) return;
+            try {
+                const r = await fetch('/api/current-media', { cache: 'no-store' });
+                if (r.ok) applyState(await r.json());
+            } catch (e) {}
+        }, 2000);
+    }
 
     // ===================== 控制列 (#karaoke-bar) =====================
 
@@ -449,20 +766,49 @@ document.addEventListener('DOMContentLoaded', function () {
         if (optBtn) optBtn.dataset.tip = '備選歌詞';
     }
 
-    // 頭出し:跳回 0 從頭唱。**本地 pos 也要一起歸零** —— 廣播一秒才一則,只送 seek 的話
+    // 頭出し:跳回 0 從頭唱。**本地時鐘也要一起歸零** —— 廣播一秒才一則,只送 seek 的話
     // 畫面會停在原本那句、等下一則廣播才跳,看起來像沒反應 (同 karaokeStart)。
     window.karaokeRestart = function () {
+        if (localPlayer) {
+            if (!localSessionReady) {
+                requestLocalSession();
+                return;
+            }
+            localPlayer.restart();
+            return;
+        }
         fetch('/api/seek', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ position: 0 }),
         }).catch(() => {});
-        pos = 0;
-        lastServerPos = -1;
+        karaokeClock.reanchor(0, playing);
+    };
+
+    window.karaokeTogglePlay = function () {
+        if (localPlayer) {
+            if (!localSessionReady) {
+                localStartRequested = true;
+                requestLocalSession();
+                return;
+            }
+            if (localPlayer.getState() === 'playing') localPlayer.pause();
+            else localPlayer.play();
+            return;
+        }
+        mediaAction('playpause');
+    };
+
+    window.karaokeNext = function () {
+        if (localPlayer) {
+            setStatus('本機 spike 只有一個 fixture', 'fa-solid fa-circle-info');
+            return;
+        }
+        mediaAction('next');
     };
 
     // 字幕早晚 = 這首歌的 sync offset,跟首頁共用同一筆 (存 DB)。填色與換行都吃
-    // frame() 的 `pos - syncOffset`,所以改完不必自己重畫,下一幀就對了。
+    // frame() 的 `clock position - syncOffset`,所以改完不必自己重畫,下一幀就對了。
     const offsetEl = document.getElementById('kbar-offset');
     const saveOffsetLater = createOffsetSaver((payload) => {
         fetch('/api/lyrics/offset', {
@@ -555,5 +901,6 @@ document.addEventListener('DOMContentLoaded', function () {
         searchLyricsOptions();
     };
 
+    initLocalPlayer();
     requestAnimationFrame(frame);
 });

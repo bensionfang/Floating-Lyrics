@@ -9,7 +9,7 @@
     "app": "electron.cmd .",
     "build:py": "..\\venv\\Scripts\\python.exe -m PyInstaller --noconfirm --onedir --name pytools --collect-data pykakasi --collect-all unidic_lite --collect-data fugashi --distpath ..\\dist-py --workpath ..\\build-py --specpath ..\\build-py ..\\pytools.py",
     "dist": "npm run build:py && electron-builder",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node ../tests/run_all.js"
   },
   "keywords": [],
   "author": "Resuaumis",
@@ -41,6 +41,12 @@
     "files": [
       "electron.js",
       "server.js",
+      "karaoke-session.js",
+      "karaoke-diagnostics.js",
+      "karaoke-queue.js",
+      "karaoke-remote.js",
+      "song-library.js",
+      "mpv-karaoke-player.js",
       "s2t.js",
       "lyric-quality.js",
       "browser-query.js",
@@ -53,6 +59,7 @@
       "island-position.js",
       "preload-island.js",
       "win-corners.js",
+      "remote-mobile.html",
       "views/**",
       "public/**"
     ],

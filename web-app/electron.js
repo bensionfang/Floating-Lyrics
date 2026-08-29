@@ -138,6 +138,7 @@ function createWindow() {
     titleBarStyle: 'hidden',
     titleBarOverlay: { color: '#00000000', symbolColor: '#ffffff', height: 36 }
   });
+  configureMediaPermissions(mainWindow.webContents);
   mainWindow.loadURL(`http://localhost:${PORT}`);
 
   // 貼齊螢幕 (半螢幕 / 1/4 螢幕 / 最大化) 時把圓角收成直角,離開再變回來
@@ -196,6 +197,31 @@ function createWindow() {
   mainWindow.on('close', () => {
     if (!quitting) app.quit();
   });
+}
+
+function isLocalAppOrigin(value) {
+  try {
+    const url = new URL(String(value));
+    return (url.hostname === 'localhost' || url.hostname === '127.0.0.1')
+      && Number(url.port) === Number(PORT);
+  } catch (error) {
+    return false;
+  }
+}
+
+function configureMediaPermissions(webContents) {
+  const permissionSession = webContents && webContents.session;
+  if (!permissionSession) return;
+  if (typeof permissionSession.setPermissionRequestHandler === 'function') {
+    permissionSession.setPermissionRequestHandler((contents, permission, callback) => {
+      callback(permission === 'media' && isLocalAppOrigin(contents && contents.getURL()));
+    });
+  }
+  if (typeof permissionSession.setPermissionCheckHandler === 'function') {
+    permissionSession.setPermissionCheckHandler((contents, permission, requestingOrigin) =>
+      permission === 'media'
+      && isLocalAppOrigin(requestingOrigin || (contents && contents.getURL())));
+  }
 }
 
 // 靈動島是這個 app 的一個視窗 (web-app/island.js),不再是獨立的 C# 進程。

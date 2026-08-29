@@ -1,0 +1,74 @@
+<%- include('header') %>
+
+<div class="page-header animate-fade-in host-header">
+    <div>
+        <h1>Karaoke Host</h1>
+        <p>控制台只發命令；播放器與字幕仍由 Stage 持有。</p>
+    </div>
+    <a class="game-btn-ghost" href="/karaoke" target="_blank" rel="noopener">
+        <i class="fa-solid fa-display"></i> 開啟 Stage
+    </a>
+</div>
+
+<div id="karaoke-host" class="host-grid animate-fade-in">
+    <section class="glass-panel host-card host-session-card" aria-labelledby="host-session-heading">
+        <div class="host-card-head">
+            <h2 id="host-session-heading">目前演出</h2>
+            <span id="host-session-state" class="host-state">等待同步</span>
+        </div>
+        <div class="host-now-playing">
+            <div id="host-song-title" class="host-song-title">尚未選擇歌曲</div>
+            <div id="host-song-artist" class="host-song-artist">—</div>
+        </div>
+        <dl class="host-facts">
+            <div><dt>播放位置</dt><dd id="host-position">0:00 / 0:00</dd></div>
+            <div><dt>Session</dt><dd id="host-session-id">—</dd></div>
+            <div><dt>Key</dt><dd id="host-key">—</dd></div>
+        </dl>
+        <div class="host-controls" aria-label="Stage 控制">
+            <button type="button" class="game-btn-primary" data-host-command="play"><i class="fa-solid fa-play"></i> 播放</button>
+            <button type="button" class="game-btn-ghost" data-host-command="pause"><i class="fa-solid fa-pause"></i> 暫停</button>
+            <button type="button" class="game-btn-ghost" data-host-command="restart"><i class="fa-solid fa-rotate-left"></i> 重唱</button>
+            <button type="button" class="game-btn-ghost" data-host-command="next"><i class="fa-solid fa-forward-step"></i> 下一首</button>
+            <button type="button" class="game-btn-ghost" data-host-command="stop"><i class="fa-solid fa-stop"></i> 停止</button>
+        </div>
+        <p class="host-note">控制命令會轉交已連線的 Stage；沒有 Stage 時不會直接改動 canonical state。</p>
+    </section>
+
+    <section class="glass-panel host-card" aria-labelledby="host-queue-heading">
+        <div class="host-card-head">
+            <h2 id="host-queue-heading">Queue</h2>
+            <span id="host-queue-revision" class="host-muted">revision —</span>
+        </div>
+        <div id="host-queue" class="host-queue" aria-live="polite">
+            <p class="host-empty">尚未同步 Queue</p>
+        </div>
+    </section>
+
+    <section class="glass-panel host-card host-diagnostics-card" aria-labelledby="host-diagnostics-heading">
+        <div class="host-card-head">
+            <h2 id="host-diagnostics-heading">Diagnostics</h2>
+            <span id="host-diagnostics-overall" class="host-severity">—</span>
+        </div>
+        <div id="host-diagnostics" class="host-diagnostics" aria-live="polite">
+            <p class="host-empty">等待診斷資料</p>
+        </div>
+    </section>
+
+    <section class="glass-panel host-card" aria-labelledby="host-remote-heading">
+        <div class="host-card-head">
+            <h2 id="host-remote-heading">手機 Remote</h2>
+            <span id="host-remote-status" class="host-muted">未配對</span>
+        </div>
+        <p class="host-note">在同一個區域網路的手機開啟下方網址，輸入一次性配對碼。</p>
+        <div class="host-facts">
+            <div><dt>配對碼</dt><dd id="host-remote-code">—</dd></div>
+            <div><dt>Remote URL</dt><dd><a id="host-remote-url" href="#" target="_blank" rel="noopener">—</a></dd></div>
+        </div>
+        <button type="button" id="host-remote-pair" class="game-btn-primary">產生配對碼</button>
+    </section>
+</div>
+
+<script src="/js/karaoke-diagnostics.js?v=1"></script>
+<script src="/js/karaoke-host.js?v=1"></script>
+<%- include('footer') %>

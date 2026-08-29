@@ -119,6 +119,11 @@ document.addEventListener('DOMContentLoaded', function () {
         } catch (e) {}
     };
 
+    window.mvResetSync = function () {
+        lastSyncAt = 0;
+        seekGuardUntil = 0;
+    };
+
     window.mvSetOffset = function (sec) {
         mvOffset = Math.round(sec * 10) / 10;
         seekGuardUntil = 0;   // 讓下一次 sync 立刻跳過去,不然要等漂移累積
@@ -134,7 +139,7 @@ document.addEventListener('DOMContentLoaded', function () {
         try {
             const r = await fetch(`/api/mv?title=${encodeURIComponent(song.title)}&artist=${encodeURIComponent(song.artist)}`);
             const d = r.ok ? await r.json() : {};
-            if (song.title !== title) return;
+            if (song.title !== title || song.artist !== (artist || '')) return;
             if (d && d.videoId) { mvLoad(d.videoId, d.offset); updateBarButtons(); return; }
             if (d && d.videoId === '') return;   // 使用者按過「取消 MV」,那是明確的選擇
             await autoPick(title, artist);

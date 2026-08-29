@@ -25,10 +25,23 @@ const { mergeRomaji } = require('./romaji');               // 羅馬拼音合併
 const { mergeWordTimes } = require('./word-times');        // 逐字時間合併 #WORDS# (卡拉OK填色)
 const { pickDistractors, filterArtistTracks } = require('./game');   // 猜歌遊戲:選項與提示句的挑選規則
 const { titleKey } = require('./public/js/song-key');                // 曲目池去重 (前後端共用那份)
+const { MediaTimingSequencer } = require('./media-timing');           // Karaoke clock 的 snapshot 順序與生命週期
+const {
+  KaraokeSession,
+  SESSION_ROLES,
+  handleKaraokeMessage,
+  makeKaraokeMessage,
+  makeKaraokeResultMessage,
+} = require('./karaoke-session');
+const { SongLibrary, ensureSongLibrarySchema } = require('./song-library');
+const { KaraokeQueue } = require('./karaoke-queue');
+const { KaraokeRemoteGateway, activeSession } = require('./karaoke-remote');
+const { buildKaraokeDiagnostics } = require('./karaoke-diagnostics');
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 5720;
+const REMOTE_PORT = Number(process.env.REMOTE_PORT || 5721);
 // 雲端唯讀模式 (Render)。這台沒有媒體監控 (startMediaMonitor 已經在非 Windows 上早退),
 // 只服務行動版的兩件事:靜態頁與 GET /api/lyrics。差異集中在四處,都以這個旗標為閘門,
 // **桌面模式的行為一個字都不變**:B1 允許清單、B2 綁 0.0.0.0、B3 PUBLIC_ORIGIN、B4 關掉 WebSocket。
@@ -37,12 +50,26 @@ const DB_PATH = path.resolve(__dirname, process.env.DB_PATH || '../lyrics_data.d
 const PARENT_DIR = path.join(__dirname, '..');
 
 // Global media state continuously updated by python script
-let currentMediaState = {
+const mediaTiming = new MediaTimingSequencer();
+const karaokeSession = new KaraokeSession();
+let karaokeSongLibrary = null;
+let karaokeQueue = null;
+let karaokeQueueReady = Promise.resolve();
+let karaokeQueueMutationTail = Promise.resolve();
+let karaokeLibraryReady = false;
+let remotePort = 0;
+const remoteConnections = new Set();
+let lastRemoteSessionId = null;
+const karaokeRemote = new KaraokeRemoteGateway({
+  getSession: () => karaokeSession.snapshot(),
+  tokenTtlMs: Number(process.env.REMOTE_TOKEN_TTL_MS) || 30 * 60 * 1000,
+});
+let currentMediaState = mediaTiming.update({
   title: "",
   artist: "",
   position: 0.0,
   is_playing: false
-};
+});
 
 // Middleware
 // 這台伺服器綁 127.0.0.1、沒有任何 auth,所有正當客戶端都是同源的 (網頁後台) 或
@@ -203,6 +230,23 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
   } else {
     console.log('✓ Connected to SQLite database');
     db.run('PRAGMA journal_mode=WAL;');
+    ensureSongLibrarySchema(db).catch((schemaErr) => {
+      console.error('Song Library schema migration failed:', schemaErr.message);
+    });
+    karaokeSongLibrary = new SongLibrary(db);
+    karaokeQueue = new KaraokeQueue(db, {
+      songResolver: (songId) => karaokeSongLibrary.loadSong(songId),
+    });
+    karaokeQueueReady = Promise.all([karaokeSongLibrary.ready, karaokeQueue.ready])
+      .then(async () => {
+        karaokeLibraryReady = true;
+        await reconcileKaraokeQueue(await karaokeQueue.snapshot());
+        broadcastKaraokeSession();
+      })
+      .catch((queueError) => {
+        karaokeLibraryReady = false;
+        console.error('Karaoke Queue startup failed:', queueError.message);
+      });
     
     db.run(`
       CREATE TABLE IF NOT EXISTS listening_history (
@@ -266,6 +310,26 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
     )`);
   }
 });
+
+async function reconcileKaraokeQueue(queueState) {
+  const current = queueState && queueState.items
+    ? queueState.items.find((item) => item.queueId === queueState.currentQueueId)
+    : null;
+  let sessionSong = null;
+  if (current && karaokeSongLibrary) {
+    const song = await karaokeSongLibrary.loadSong(current.songId);
+    if (song) {
+      sessionSong = {
+        id: song.songId,
+        title: song.title,
+        artist: song.artist,
+        durationMs: Number(song.audio && song.audio.durationMs)
+          || Number(song.lyrics && song.lyrics.durationMs) || 0,
+      };
+    }
+  }
+  return karaokeSession.reconcileQueue(queueState, sessionSong);
+}
 
 // 歌手正規名對照。handleMediaUpdate 是同步的,不能在那裡等 db.get,所以整張表
 // (數列而已) 開機載入進記憶體,/api/aliases 寫入後同步更新這份快取。
@@ -429,7 +493,14 @@ function writeListen(state) {
 let lastBroadcastRest = null, lastBroadcastThumb = null, lastBroadcastAt = 0;
 function broadcastMediaState() {
   if (!global.broadcast) return;
-  const { position, thumbnail, ...rest } = currentMediaState;
+  const {
+    position,
+    thumbnail,
+    timing_event: _timingEvent,
+    timing_revision: _timingRevision,
+    timing_order: _timingOrder,
+    ...rest
+  } = currentMediaState;
   const restJson = JSON.stringify(rest);
   if (restJson === lastBroadcastRest && thumbnail === lastBroadcastThumb
       && Date.now() - lastBroadcastAt < 1000) return;
@@ -500,7 +571,7 @@ global.handleMediaUpdate = function(rawState) {
     }
 
     const state = rawState;
-    currentMediaState = { ...currentMediaState, ...state };
+    currentMediaState = mediaTiming.update({ ...currentMediaState, ...state });
     
     broadcastMediaState();
 
@@ -599,6 +670,9 @@ app.use((req, res, next) => {
     position: m.position || 0,
     duration: m.duration || 0,
     is_playing: !!m.is_playing,
+    timing_event: m.timing_event || 'stop',
+    timing_revision: Number.isInteger(m.timing_revision) ? m.timing_revision : 0,
+    timing_order: Number.isInteger(m.timing_order) ? m.timing_order : 0,
     // 封面**不內嵌**,只渲染成一個網址 —— base64 封面實測 175 KB,佔整份 currentMediaState 的
     // 99.8%,內嵌等於每換一次頁就重傳一次 (而且 base64 的 PNG 幾乎壓不掉,gzip 也救不了)。
     // 換成 /api/current-media/cover 之後瀏覽器會拿 ETag revalidate,同一首歌重載只回 304。
@@ -641,6 +715,21 @@ app.get('/game', (req, res) => {
 // 卡拉OK字幕機模式 (兩行大字 + 逐字填色 + 可選的 MV 背景)
 app.get('/karaoke', (req, res) => {
   res.render('karaoke', { activePage: 'karaoke' });
+});
+
+// Pitch Lab 只服務本機瀏覽器頁面；音訊與分析留在前端，不進 server。
+app.get('/pitch', (req, res) => {
+  res.render('pitch', { activePage: 'pitch' });
+});
+
+// Host 與 Node 共用同一份 diagnostics projection，避免瀏覽器端另抄一套規則。
+app.get('/js/karaoke-diagnostics.js', (req, res) => {
+  res.type('application/javascript').sendFile(path.join(__dirname, 'karaoke-diagnostics.js'));
+});
+
+// Host 控制台只投影 canonical session，Stage 仍由 /karaoke 持有播放器。
+app.get('/host', (req, res) => {
+  res.render('host', { activePage: 'host' });
 });
 
 // 靈動島視窗的內容 (由 Electron 主進程的 island.js 載入,見該檔說明)
@@ -2632,8 +2721,352 @@ const wss = new WebSocketServer({
   verifyClient: ({ origin }) => !CLOUD && (!origin || isAllowedOrigin(origin)),
 });
 
+const remotePagePath = path.join(__dirname, 'remote-mobile.html');
+const remoteServer = http.createServer((req, res) => {
+  const requestUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+  if ((req.method === 'GET' || req.method === 'HEAD')
+      && (requestUrl.pathname === '/mobile/karaoke' || requestUrl.pathname === '/mobile/karaoke/')) {
+    if (req.method === 'HEAD') return res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }).end();
+    return fs.readFile(remotePagePath, (error, html) => {
+      if (error) return res.writeHead(503).end();
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(html);
+    });
+  }
+  if (req.method === 'GET' && requestUrl.pathname === '/remote/health') {
+    return sendRemoteJson(res, 200, { ok: true, port: remotePort });
+  }
+  if (req.method === 'POST' && requestUrl.pathname === '/remote/pair') {
+    if (!String(req.headers['content-type'] || '').startsWith('application/json')) {
+      return sendRemoteJson(res, 415, { accepted: false, reason: 'json-required' });
+    }
+    return readRemoteJson(req).then((body) => {
+      const paired = karaokeRemote.pair(body && body.code);
+      if (!paired) return sendRemoteJson(res, 401, { accepted: false, reason: 'invalid-pairing-code' });
+      return sendRemoteJson(res, 200, {
+        ...paired,
+        remoteUrl: remoteUrl(),
+        state: karaokeSession.snapshot(),
+      });
+    }).catch((error) => sendRemoteJson(res, error.statusCode || 400, {
+      accepted: false, reason: error.statusCode ? error.message : 'invalid-json',
+    }));
+  }
+  res.writeHead(404).end();
+});
+const remoteWss = new WebSocketServer({
+  server: remoteServer,
+  path: '/remote/ws',
+  verifyClient: ({ origin, req }) => {
+    if (!origin) return true;
+    try { return new URL(origin).host === req.headers.host; } catch (error) { return false; }
+  },
+});
+
+function sendRemoteJson(res, status, body) {
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+  res.end(JSON.stringify(body));
+}
+
+function readRemoteJson(req) {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    req.setEncoding('utf8');
+    req.on('data', (chunk) => {
+      body += chunk;
+      if (body.length > 32 * 1024) {
+        const error = new Error('request-too-large');
+        error.statusCode = 413;
+        reject(error);
+        req.destroy();
+      }
+    });
+    req.on('end', () => {
+      try { resolve(JSON.parse(body || '{}')); } catch (error) { reject(error); }
+    });
+    req.on('error', reject);
+  });
+}
+
+function remoteUrl() {
+  const configured = String(process.env.REMOTE_ORIGIN || '').replace(/\/+$/, '');
+  if (configured) return `${configured}/mobile/karaoke/`;
+  let host = String(process.env.REMOTE_HOST || '').trim();
+  if (!host) {
+    for (const addresses of Object.values(os.networkInterfaces())) {
+      const found = (addresses || []).find((address) => !address.internal
+        && (address.family === 'IPv4' || address.family === 4));
+      if (found) { host = found.address; break; }
+    }
+  }
+  return `http://${host || '127.0.0.1'}:${remotePort}/mobile/karaoke/`;
+}
+
+function remoteStateMessage(requestId) {
+  return {
+    type: 'remote_state',
+    accepted: true,
+    requestId,
+    state: karaokeSession.snapshot(),
+  };
+}
+
+function sendRemoteAuthorizationError(ws, message, auth) {
+  if (ws.readyState !== 1) return;
+  ws.send(JSON.stringify({
+    type: 'remote_error',
+    accepted: false,
+    requestId: message.requestId,
+    reason: auth.reason,
+    revision: auth.revision ?? karaokeSession.snapshot().revision,
+  }));
+}
+
+function authorizeRemoteMessage(ws, message) {
+  const command = message.type === 'remote_auth' || message.type === 'remote_state_refresh'
+    ? 'state_refresh'
+    : message.type === 'remote_reconnect' ? 'reconnect' : message.command;
+  const token = message.token || ws.remoteToken;
+  const auth = karaokeRemote.authorize({
+    token,
+    sessionId: message.sessionId,
+    requestId: message.requestId,
+    command,
+    expectedRevision: message.expectedRevision,
+  });
+  if (auth.accepted) {
+    ws.remoteToken = token;
+    ws.remoteSessionId = auth.sessionId;
+  }
+  return auth;
+}
+
+async function processRemoteCommand(ws, message, auth) {
+  const command = message.type === 'remote_auth' || message.type === 'remote_state_refresh'
+    ? 'state_refresh' : message.type === 'remote_reconnect' ? 'reconnect' : message.command;
+  if (command === 'reconnect' || command === 'state_refresh') {
+    if (ws.readyState === 1) ws.send(JSON.stringify(remoteStateMessage(message.requestId)));
+    return;
+  }
+
+  let accepted = true;
+  let reason;
+  let result;
+  let canonical = karaokeSession.snapshot();
+  if (command === 'search') {
+    await karaokeQueueReady;
+    result = karaokeSongLibrary ? await karaokeSongLibrary.searchSongs(String(message.query || message.payload?.query || '').slice(0, 100)) : [];
+    result = result.slice(0, 50);
+  } else if (command === 'queue_view') {
+    result = canonical.queue;
+  } else if (command === 'reserve' || command === 'key') {
+    await karaokeQueueReady;
+    if (!karaokeQueue) {
+      accepted = false;
+      reason = 'queue-not-ready';
+    } else {
+      const payload = message.item || message.payload || {};
+      const expected = message.expectedQueueRevision ?? message.queueRevision;
+      const queueResult = command === 'reserve'
+        ? await karaokeQueue.reserve(payload, expected)
+        : await karaokeQueue.setKey(payload.queueId || message.queueId, payload.key ?? message.key, expected);
+      accepted = !!queueResult.accepted;
+      reason = queueResult.reason;
+      result = queueResult.state;
+      if (accepted) {
+        await reconcileKaraokeQueue(queueResult.state);
+        broadcastKaraokeSession();
+        canonical = karaokeSession.snapshot();
+      }
+    }
+  } else {
+    const commandMap = { pause: 'pause', restart: 'restart', skip: 'next', stop: 'stop' };
+    const forwarded = forwardKaraokeStageCommand(commandMap[command], message.sessionId);
+    accepted = forwarded.accepted;
+    reason = forwarded.reason;
+    canonical = karaokeSession.snapshot();
+  }
+
+  if (ws.readyState === 1) {
+    ws.send(JSON.stringify({
+      type: 'remote_command_result', accepted, command, requestId: message.requestId,
+      reason, result, state: canonical, revision: canonical.revision,
+    }));
+  }
+  if (accepted && command === 'stop') invalidateRemoteSession(canonical.sessionId);
+}
+
+remoteWss.on('connection', (ws) => {
+  remoteConnections.add(ws);
+  ws.send(JSON.stringify({ type: 'remote_ready', commands: [
+    'search', 'reserve', 'queue_view', 'key', 'pause', 'restart', 'skip', 'stop',
+    'reconnect', 'state_refresh',
+  ] }));
+  ws.on('message', (raw) => {
+    let message;
+    try { message = JSON.parse(raw); } catch (error) { return; }
+    if (!message || !['remote_auth', 'remote_command', 'remote_reconnect', 'remote_state_refresh'].includes(message.type)) return;
+    const auth = authorizeRemoteMessage(ws, message);
+    if (!auth.accepted) {
+      sendRemoteAuthorizationError(ws, message, auth);
+      if (['replay', 'stale-session', 'token-expired'].includes(auth.reason)) ws.close(4001, auth.reason);
+      return;
+    }
+    processRemoteCommand(ws, message, auth).catch((error) => {
+      if (ws.readyState === 1) ws.send(JSON.stringify({
+        type: 'remote_command_result', accepted: false, command: message.command,
+        requestId: message.requestId, reason: 'remote-command-failed', error: error.message,
+      }));
+    });
+  });
+  ws.on('close', () => remoteConnections.delete(ws));
+});
+
+function karaokeRole(ws) {
+  return SESSION_ROLES.includes(ws.karaokeRole) ? ws.karaokeRole : 'test-client';
+}
+
+function karaokeConnections(role) {
+  let count = 0;
+  wss.clients.forEach((client) => {
+    if (client.readyState === 1 && karaokeRole(client) === role) count += 1;
+  });
+  return count;
+}
+
+function invalidateRemoteSession(sessionId) {
+  if (!sessionId) return;
+  karaokeRemote.invalidateSession(sessionId);
+  for (const client of remoteConnections) {
+    if (client.remoteSessionId === sessionId && client.readyState === 1) client.close(4001, 'session-ended');
+  }
+}
+
+function forwardKaraokeStageCommand(command, sessionId) {
+  const commands = new Set(['play', 'pause', 'playpause', 'restart', 'next', 'stop']);
+  if (!commands.has(command)) return { accepted: false, reason: 'invalid-host-command' };
+  const canonical = karaokeSession.snapshot();
+  if (sessionId && sessionId !== canonical.sessionId) {
+    return {
+      accepted: false, reason: 'stale-session', sessionId: canonical.sessionId, revision: canonical.revision,
+    };
+  }
+  const stage = [...wss.clients].find((client) =>
+    client.readyState === 1 && karaokeRole(client) === 'stage');
+  if (!stage) {
+    return {
+      accepted: false, reason: 'stage-not-connected', sessionId: canonical.sessionId, revision: canonical.revision,
+    };
+  }
+  stage.send(JSON.stringify({ type: 'karaoke_host_command', command }));
+  return { accepted: true, sessionId: canonical.sessionId, revision: canonical.revision };
+}
+
+function processKaraokeRemotePairing(ws) {
+  if (!['host', 'stage'].includes(karaokeRole(ws))) {
+    return ws.send(JSON.stringify({ type: 'karaoke_remote_pairing', accepted: false, reason: 'pairing-role-required' }));
+  }
+  if (!remotePort) {
+    return ws.send(JSON.stringify({ type: 'karaoke_remote_pairing', accepted: false, reason: 'remote-not-ready' }));
+  }
+  const pairing = karaokeRemote.createPairing();
+  if (!pairing) {
+    return ws.send(JSON.stringify({ type: 'karaoke_remote_pairing', accepted: false, reason: 'no-active-session' }));
+  }
+  ws.send(JSON.stringify({
+    type: 'karaoke_remote_pairing', accepted: true, ...pairing, remoteUrl: remoteUrl(),
+  }));
+}
+
+function sendKaraokeDiagnostics(ws) {
+  if (ws.readyState !== 1 || karaokeRole(ws) !== 'host') return;
+  const diagnostics = buildKaraokeDiagnostics({
+    libraryReady: karaokeLibraryReady,
+    stageConnections: karaokeConnections('stage'),
+    hostSocketAlive: true,
+    session: karaokeSession.snapshot(),
+    // Server cannot prove the physical output route; the Host reports this honestly.
+    output: { supported: false, verified: false },
+    remote: { enabled: !CLOUD && remotePort > 0, port: remotePort },
+    microphone: { enabled: false },
+    video: { enabled: false },
+  });
+  ws.send(JSON.stringify({
+    type: 'karaoke_diagnostics',
+    revision: karaokeSession.snapshot().revision,
+    diagnostics,
+  }));
+}
+
+function broadcastKaraokeDiagnostics() {
+  wss.clients.forEach((client) => sendKaraokeDiagnostics(client));
+}
+
+function sendKaraokeSession(ws) {
+  if (ws.readyState === 1) {
+    ws.send(JSON.stringify(makeKaraokeMessage(karaokeSession.snapshot(), karaokeRole(ws))));
+  }
+}
+
+function broadcastKaraokeSession() {
+  const canonical = karaokeSession.snapshot();
+  if (lastRemoteSessionId && (!activeSession(canonical) || canonical.sessionId !== lastRemoteSessionId)) {
+    invalidateRemoteSession(lastRemoteSessionId);
+  }
+  lastRemoteSessionId = canonical.sessionId || null;
+  wss.clients.forEach((client) => {
+    if (client.readyState === 1) {
+      client.send(JSON.stringify(makeKaraokeMessage(canonical, karaokeRole(client))));
+    }
+  });
+  broadcastKaraokeDiagnostics();
+}
+
+function processKaraokeHostCommand(ws, message) {
+  if (karaokeRole(ws) !== 'host') {
+    if (ws.readyState === 1) ws.send(JSON.stringify({
+      type: 'karaoke_host_command_result', accepted: false, reason: 'host-role-required',
+    }));
+    return;
+  }
+  const commands = new Set(['play', 'pause', 'playpause', 'restart', 'next', 'stop']);
+  if (!commands.has(message.command)) {
+    ws.send(JSON.stringify({
+      type: 'karaoke_host_command_result', accepted: false, reason: 'invalid-host-command',
+    }));
+    return;
+  }
+  const forwarded = forwardKaraokeStageCommand(message.command, message.sessionId);
+  ws.send(JSON.stringify({
+    type: 'karaoke_host_command_result', ...forwarded, command: message.command,
+  }));
+}
+
+async function processKaraokeQueueMessage(ws, message) {
+  await karaokeQueueReady;
+  if (!karaokeQueue) return;
+  const result = await handleKaraokeMessage(karaokeSession, message, karaokeQueue);
+  if (!result) return;
+  if (result.accepted) await reconcileKaraokeQueue(result.state);
+  const canonical = karaokeSession.snapshot();
+  const queueResult = makeKaraokeMessage(canonical, karaokeRole(ws));
+  queueResult.type = 'karaoke_queue_result';
+  queueResult.accepted = !!result.accepted;
+  queueResult.queueRevision = result.state.revision;
+  if (result.reason) queueResult.reason = result.reason;
+  if (ws.readyState === 1) ws.send(JSON.stringify(queueResult));
+  if (result.accepted) broadcastKaraokeSession();
+}
+
+function enqueueKaraokeQueueMessage(ws, message) {
+  karaokeQueueMutationTail = karaokeQueueMutationTail
+    .then(() => processKaraokeQueueMessage(ws, message))
+    .catch((error) => console.error('Karaoke Queue mutation failed:', error.message));
+}
+
 wss.on('connection', (ws) => {
   console.log('WebSocket client connected (Dynamic Island)');
+  ws.karaokeRole = 'test-client';
   
   let currentSettings = {};
   if (fs.existsSync(SETTINGS_FILE)) {
@@ -2643,6 +3076,7 @@ wss.on('connection', (ws) => {
   
   ws.send(JSON.stringify({ type: 'init', state: currentMediaState, settings: currentSettings }));
   ws.send(JSON.stringify({ type: 'game_state', active: isGameActive() }));
+  sendKaraokeSession(ws);
 
   // 「猜歌遊戲進行中」與「卡拉OK頁開著」都綁在那一頁自己的連線上,不用旗標檔也不用逾時 ——
   // 關頁/重整/當掉都會斷線,旗標自動歸零,不會卡成「聆聽紀錄永久停寫」或「島再也不回來」。
@@ -2650,6 +3084,33 @@ wss.on('connection', (ws) => {
     let msg;
     try { msg = JSON.parse(raw); } catch (e) { return; }
     if (!msg) return;
+    if (msg.type === 'karaoke_role') {
+      if (SESSION_ROLES.includes(msg.role)) {
+        ws.karaokeRole = msg.role;
+        sendKaraokeSession(ws);
+        sendKaraokeDiagnostics(ws);
+        broadcastKaraokeDiagnostics();
+      }
+      return;
+    }
+    if (msg.type === 'karaoke_host_command') {
+      processKaraokeHostCommand(ws, msg);
+      return;
+    }
+    if (msg.type === 'karaoke_remote_pairing_create') {
+      processKaraokeRemotePairing(ws);
+      return;
+    }
+    if (msg.type && msg.type.startsWith('karaoke_queue_')) {
+      enqueueKaraokeQueueMessage(ws, msg);
+      return;
+    }
+    const karaokeResult = handleKaraokeMessage(karaokeSession, msg);
+    if (karaokeResult) {
+      ws.send(JSON.stringify(makeKaraokeResultMessage(karaokeResult, karaokeRole(ws))));
+      if (karaokeResult.accepted) broadcastKaraokeSession();
+      return;
+    }
     if (msg.type === 'game_active') {
       const active = !!msg.active;
       if (ws.isGame === active) return;
@@ -2672,6 +3133,7 @@ wss.on('connection', (ws) => {
     // 那兩種頁直接關掉時,島要自己開回來 (猜歌還要解除遮蔽)
     if (ws.isGame) global.broadcast({ type: 'game_state', active: isGameActive() });
     if (ws.isGame || ws.isKaraoke) syncIslandHidden();
+    broadcastKaraokeDiagnostics();
   });
 });
 
@@ -2732,6 +3194,25 @@ function findFreePort(preferred) {
     t.listen(preferred, '127.0.0.1', () => t.close(() => resolve(preferred)));
   });
 }
+
+function startRemoteGateway() {
+  const preferred = Number.isInteger(REMOTE_PORT) && REMOTE_PORT > 0 ? REMOTE_PORT : 5721;
+  const listen = (port) => {
+    remoteServer.once('error', (error) => {
+      if (error.code === 'EADDRINUSE' && port !== 0) {
+        remoteServer.close(() => listen(0));
+      } else {
+        console.error('Remote Gateway failed to listen:', error.message);
+      }
+    });
+    remoteServer.listen(port, '0.0.0.0', () => {
+      remotePort = remoteServer.address().port;
+      console.log(`Karaoke Remote Gateway listening on 0.0.0.0:${remotePort}`);
+      broadcastKaraokeDiagnostics();
+    });
+  };
+  listen(preferred);
+}
 // B2:雲端模式綁 0.0.0.0 且用 Render 指定的那個 PORT (換一個 port 它就探測不到、判定部署失敗),
 // 所以**不能**走 findFreePort。上面那段「不綁 0.0.0.0」的理由在雲端不成立:允許清單已經把
 // 所有寫入路由與 /api/settings 變成 404,那台除了可重建的歌詞快取什麼都沒有。
@@ -2740,6 +3221,7 @@ if (CLOUD) {
     console.log(`[cloud] 唯讀歌詞服務 listening on 0.0.0.0:${PORT}`);
   });
 } else {
+  startRemoteGateway();
   findFreePort(PORT).then((p) => {
     ALLOWED_ORIGINS.add(`http://localhost:${p}`);
     ALLOWED_ORIGINS.add(`http://127.0.0.1:${p}`);

@@ -2755,6 +2755,9 @@ body.karaoke-page .page-header { display: none; }
     border-top: 1px solid var(--border-color);
 }
 #k-now { font-size: 13px; color: var(--text-secondary); }
+.k-local-picker { display: flex; align-items: center; gap: 12px; margin-top: 18px; }
+.k-local-picker label { cursor: pointer; }
+.k-local-picker span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); font-size: 13px; }
 
 body.karaoke-page .sidebar { display: none; }
 body.karaoke-page .app-container {
@@ -3025,6 +3028,14 @@ body.hide-furigana .kline rt { display: none; }
    看起來像「這個字沒填滿色」,而底下 .kbase 的黑框從缺口透出來更明顯
    (2026-08-10 回報,docs/3.png、4.png 的 道 與 ん)。全部唱完的字本來就不需要裁。 */
 .kover .kc.sung, .kover rt.rt-sung { --k: 100%; clip-path: none; }
+/* 沒有 #WORDS# 時維持既有整句 active 行為,不要讓已切出的字元 span 把紅字裁成 0%。 */
+.kline:not(.has-word-timing).cur .kover .kc,
+.kline:not(.has-word-timing).done .kover .kc,
+.kline:not(.has-word-timing).cur .kover rt,
+.kline:not(.has-word-timing).done .kover rt {
+    --k: 100%;
+    clip-path: none;
+}
 /* **唱完留紅的那句一律補滿。** 一句停止活躍時最後幾個字常常還沒填到底:收尾點 `endMs`
    是封頂算出來的 (word-times.js),而換到下一句的時機是下一句自己的時間戳,兩者沒有關係。
    舊版那句在同一瞬間就被換掉所以看不見,現在它要留著紅一陣子,沒補滿就是「最後一個字
@@ -3326,3 +3337,101 @@ body.karaoke-remote #karaoke-mv-picker {
     font-size: 11px;
 }
 .kmv-empty { padding: 28px; text-align: center; color: rgba(255, 255, 255, 0.4); font-size: 14px; }
+
+/* ── Karaoke Host ── */
+.host-header { align-items: center; }
+.host-header p { margin-top: 6px; color: var(--text-secondary); font-size: 14px; }
+.host-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.35fr) minmax(280px, 1fr);
+    gap: 18px;
+    padding-bottom: 120px;
+}
+.host-card { padding: 22px; min-width: 0; }
+.host-session-card { grid-row: span 2; }
+.host-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 20px; }
+.host-card-head h2 { font-size: 18px; }
+.host-state, .host-severity, .host-muted { color: var(--text-secondary); font-size: 12px; }
+.host-now-playing { margin: 18px 0 24px; }
+.host-song-title { font-size: clamp(24px, 3vw, 42px); font-weight: 700; overflow-wrap: anywhere; }
+.host-song-artist { margin-top: 5px; color: var(--text-secondary); font-size: 17px; }
+.host-facts { display: flex; flex-wrap: wrap; gap: 14px 28px; margin-bottom: 24px; }
+.host-facts div { min-width: 100px; }
+.host-facts dt { color: var(--text-dim); font-size: 12px; }
+.host-facts dd { margin-top: 4px; font-size: 16px; overflow-wrap: anywhere; }
+.host-controls { display: flex; flex-wrap: wrap; gap: 10px; }
+.host-controls button { border: 0; cursor: pointer; }
+.host-note, .host-empty { margin-top: 16px; color: var(--text-dim); font-size: 12px; }
+.host-queue { display: grid; gap: 8px; }
+.host-queue-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+}
+.host-queue-row.current { border-color: var(--accent-main); background: var(--accent-bg); }
+.host-queue-details { min-width: 0; }
+.host-queue-details strong, .host-queue-details span { display: block; overflow-wrap: anywhere; }
+.host-queue-details span, .host-queue-meta { color: var(--text-secondary); font-size: 12px; }
+.host-queue-meta { white-space: nowrap; }
+.host-queue-remove { padding: 5px 8px; border: 1px solid var(--panel-border); border-radius: 5px; background: transparent; color: var(--text-secondary); cursor: pointer; }
+.host-queue-remove:hover { color: var(--text-primary); border-color: var(--text-secondary); }
+.host-diagnostics { display: grid; gap: 8px; }
+.host-diagnostic-row { display: grid; grid-template-columns: 110px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 9px 10px; border-radius: 7px; background: rgba(255, 255, 255, 0.04); font-size: 13px; }
+.host-diagnostic-row span { color: var(--text-secondary); overflow-wrap: anywhere; }
+.host-diagnostic-severity { white-space: nowrap; color: var(--text-primary) !important; font-size: 11px; }
+.severity-ok { color: var(--accent-main); }
+.severity-warn { color: #f0ad4e; }
+.severity-error { color: #e85d75; }
+.severity-info { color: var(--text-secondary); }
+@media (max-width: 820px) {
+    .host-header { align-items: flex-start; gap: 12px; }
+    .host-grid { grid-template-columns: 1fr; }
+    .host-session-card { grid-row: auto; }
+}
+
+/* Pitch Lab：所有音訊留在瀏覽器，本頁只保存使用者選擇的音域摘要。 */
+.pitch-header p { margin: 5px 0 0; color: var(--text-secondary); }
+.pitch-lab { max-width: 1180px; margin: 0 auto; padding: 0 24px 110px; }
+.pitch-privacy { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; padding: 12px 15px; color: var(--text-secondary); font-size: 13px; }
+.pitch-privacy i { color: var(--accent-main); }
+.pitch-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.pitch-card { min-width: 0; padding: 20px; }
+.pitch-card h2 { margin: 0 0 8px; font-size: 19px; }
+.pitch-help { margin: 0 0 15px; color: var(--text-secondary); font-size: 13px; line-height: 1.6; }
+.pitch-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.pitch-actions button:disabled, #pitch-apply-key:disabled { cursor: not-allowed; opacity: .45; }
+.pitch-status { min-height: 21px; margin: 13px 0 5px; color: var(--text-secondary); font-size: 13px; line-height: 1.5; }
+.pitch-status.is-error { color: #e85d75; }
+.pitch-status.is-warning { color: #f0ad4e; }
+.pitch-meta { margin: 0; color: var(--text-secondary); font-size: 12px; }
+.pitch-summary { min-height: 42px; margin-top: 13px; padding: 10px 12px; border-radius: 7px; background: rgba(255, 255, 255, .04); color: var(--text-primary); font-size: 13px; line-height: 1.6; }
+.pitch-file-label { display: inline-flex; align-items: center; gap: 8px; padding: 9px 13px; border: 1px solid var(--panel-border); border-radius: 7px; color: var(--text-primary); cursor: pointer; font-size: 13px; }
+.pitch-file-label:hover { border-color: var(--accent-main); color: var(--accent-main); }
+.pitch-file-input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.pitch-chart-card { grid-column: 1 / -1; }
+.pitch-card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.pitch-offset-label { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 12px; white-space: nowrap; }
+.pitch-offset-label input { width: 88px; padding: 7px 8px; border: 1px solid var(--panel-border); border-radius: 6px; background: var(--input-bg, rgba(0, 0, 0, .18)); color: var(--text-primary); }
+.pitch-canvas { display: block; width: 100%; height: 300px; margin-top: 8px; border: 1px solid var(--panel-border); border-radius: 7px; }
+.pitch-legend { display: flex; gap: 18px; margin-top: 9px; color: var(--text-secondary); font-size: 12px; }
+.pitch-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.pitch-dot { width: 9px; height: 9px; border-radius: 50%; }
+.pitch-dot-mic { background: #72b7ff; }
+.pitch-dot-reference { background: #ffca73; }
+.pitch-recommendation { min-height: 22px; margin: 0 0 12px; color: var(--text-primary); font-size: 14px; line-height: 1.6; }
+.pitch-table-wrap { overflow-x: auto; }
+.pitch-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.pitch-table th, .pitch-table td { padding: 8px 10px; border-bottom: 1px solid var(--panel-border); text-align: left; white-space: nowrap; }
+.pitch-table th { color: var(--text-secondary); font-weight: 500; }
+.pitch-table tr.is-recommended { background: rgba(92, 214, 146, .12); color: var(--text-primary); }
+@media (max-width: 820px) {
+    .pitch-lab { padding: 0 14px 100px; }
+    .pitch-grid { grid-template-columns: 1fr; }
+    .pitch-chart-card { grid-column: auto; }
+    .pitch-card-heading { flex-direction: column; }
+    .pitch-offset-label { align-self: flex-start; }
+}

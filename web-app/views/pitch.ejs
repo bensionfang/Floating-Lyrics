@@ -1,0 +1,91 @@
+<%- include('header') %>
+
+<div class="page-header pitch-header animate-fade-in">
+    <div>
+        <h1>音域 / Key 建議</h1>
+        <p>用本機麥克風測量自己的舒適音域，再和本機參考音檔比較。</p>
+    </div>
+</div>
+
+<div id="pitch-lab" class="pitch-lab animate-fade-in">
+    <div class="pitch-privacy glass-panel">
+        <i class="fa-solid fa-shield-halved"></i>
+        <span>音訊只在這個瀏覽器本機分析，不會上傳麥克風或音檔。結果是建議，不是能力判定。</span>
+    </div>
+
+    <div class="pitch-grid">
+        <section class="pitch-card glass-panel" aria-labelledby="pitch-mic-title">
+            <h2 id="pitch-mic-title">1. 測量你的音域</h2>
+            <p class="pitch-help">按下開始後唱幾個舒服的低音與高音；不要憋氣或硬推。</p>
+            <div class="pitch-actions">
+                <button type="button" class="game-btn-primary" id="pitch-mic-start">
+                    <i class="fa-solid fa-microphone"></i> 開始測量
+                </button>
+                <button type="button" class="game-btn-secondary" id="pitch-mic-stop" disabled>
+                    停止
+                </button>
+                <button type="button" class="game-btn-secondary" id="pitch-mic-save" disabled>
+                    儲存音域
+                </button>
+            </div>
+            <p id="pitch-mic-status" class="pitch-status" role="status" aria-live="polite">尚未開始麥克風測量</p>
+            <p id="pitch-mic-latency" class="pitch-meta">麥克風：尚未啟用</p>
+            <div id="pitch-range-summary" class="pitch-summary">尚無音域資料</div>
+        </section>
+
+        <section class="pitch-card glass-panel" aria-labelledby="pitch-reference-title">
+            <h2 id="pitch-reference-title">2. 匯入本機參考音檔</h2>
+            <p class="pitch-help">請選擇本機音檔；人聲越乾淨，Key 建議越可靠。</p>
+            <label class="pitch-file-label" for="pitch-reference-file">
+                <i class="fa-solid fa-file-audio"></i> 選擇音檔
+            </label>
+            <input id="pitch-reference-file" type="file" accept="audio/*" class="pitch-file-input">
+            <p id="pitch-reference-status" class="pitch-status" role="status" aria-live="polite">尚未匯入參考音檔</p>
+            <div id="pitch-reference-summary" class="pitch-summary">尚無參考曲線</div>
+        </section>
+    </div>
+
+    <section class="pitch-card pitch-chart-card glass-panel" aria-labelledby="pitch-chart-title">
+        <div class="pitch-card-heading">
+            <div>
+                <h2 id="pitch-chart-title">3. 比較音高曲線</h2>
+                <p class="pitch-help">手動調整參考音檔位置；不會改變播放或歌詞時間。</p>
+            </div>
+            <label class="pitch-offset-label" for="pitch-alignment">
+                時間偏移
+                <input id="pitch-alignment" type="number" min="-60000" max="60000" step="100" value="0">
+                <span>ms</span>
+            </label>
+        </div>
+        <canvas id="pitch-canvas" class="pitch-canvas" aria-label="本機音高曲線"></canvas>
+        <div class="pitch-legend">
+            <span><i class="pitch-dot pitch-dot-mic"></i>你的測量</span>
+            <span><i class="pitch-dot pitch-dot-reference"></i>參考音檔</span>
+        </div>
+    </section>
+
+    <section class="pitch-card glass-panel" aria-labelledby="pitch-advisor-title">
+        <div class="pitch-card-heading">
+            <div>
+                <h2 id="pitch-advisor-title">4. Key Advisor</h2>
+                <p class="pitch-help">只比較 -6 到 +6；播放器目前不會因這裡的操作而實際變調。</p>
+            </div>
+            <button type="button" class="game-btn-primary" id="pitch-apply-key" disabled>套用到比較曲線</button>
+        </div>
+        <p id="pitch-recommendation" class="pitch-recommendation">需要音域與參考音檔後才會產生建議。</p>
+        <p id="pitch-applied" class="pitch-status"></p>
+        <div class="pitch-table-wrap">
+            <table class="pitch-table">
+                <thead>
+                    <tr><th>Key</th><th>舒適音域外</th><th>絕對音域外</th><th>分數</th></tr>
+                </thead>
+                <tbody id="pitch-candidates"></tbody>
+            </table>
+        </div>
+    </section>
+</div>
+
+<script src="/js/pitch-analysis.js?v=1"></script>
+<script src="/js/karaoke-microphone.js?v=1"></script>
+<script src="/js/pitch-lab.js?v=1"></script>
+<%- include('footer') %>
