@@ -25,6 +25,12 @@ const { mergeRomaji } = require('./romaji');               // 羅馬拼音合併
 const { mergeWordTimes } = require('./word-times');        // 逐字時間合併 #WORDS# (卡拉OK填色)
 const { pickDistractors, filterArtistTracks } = require('./game');   // 猜歌遊戲:選項與提示句的挑選規則
 const { titleKey } = require('./public/js/song-key');                // 曲目池去重 (前後端共用那份)
+const {
+  normalizeExtensionState,
+  normalizeKaraokeCommand,
+  readOrCreateExtensionToken,
+  tokenMatches,
+} = require('./youtube-karaoke-protocol');
 require('dotenv').config();
 
 const app = express();
@@ -179,6 +185,7 @@ app.set('views', path.join(__dirname, 'views'));
 
 // 使用者資料目錄 (打包後由 Electron 指向 %APPDATA%,開發模式維持專案根目錄)
 const DATA_DIR = process.env.DATA_DIR || PARENT_DIR;
+const YOUTUBE_EXTENSION_TOKEN = readOrCreateExtensionToken({ dataDir: DATA_DIR });
 
 // Python Environment Detection
 const venvPythonPath = path.join(PARENT_DIR, 'venv', 'Scripts', 'python.exe');
@@ -2625,15 +2632,41 @@ const server = http.createServer(app);
 // WebSocket 的 upgrade 不會經過 express middleware,同源守門要在這裡再擋一次 ——
 // 否則惡意網頁還是能連上來收播放狀態廣播 (你正在聽什麼)。靈動島用 C# ClientWebSocket,
 // 不帶 Origin,照常放行。
+function isYouTubeExtensionHandshake(info) {
+  const origin = info.origin || info.req?.headers?.origin || '';
+  if (!/^chrome-extension:\/\/[a-p]{32}$/.test(origin)) return false;
+  const protoHeader = info.req?.headers?.['sec-websocket-protocol'] || '';
+  const protocols = protoHeader.split(',').map((s) => s.trim()).filter(Boolean);
+  return protocols[0] === 'kanaric-youtube-v1' && tokenMatches(protocols[1], YOUTUBE_EXTENSION_TOKEN);
+}
+
 const wss = new WebSocketServer({
   server,
   // B4:雲端那台沒有媒體監控,也沒有任何正當的 WebSocket 客戶端 (行動版只打 /api/lyrics),
   // 一律拒絕。upgrade 不經過 express middleware,所以上面那道允許清單擋不到這裡。
-  verifyClient: ({ origin }) => !CLOUD && (!origin || isAllowedOrigin(origin)),
+  verifyClient: (info) => !CLOUD && (
+    !info.origin && !info.req?.headers?.origin
+      ? true
+      : isAllowedOrigin(info.origin || info.req?.headers?.origin || '') || isYouTubeExtensionHandshake(info)
+  ),
+  handleProtocols: (protocols, req) => {
+    const offered = Array.from(protocols);
+    if (isYouTubeExtensionHandshake({ req }) && offered[0] === 'kanaric-youtube-v1') return 'kanaric-youtube-v1';
+    return false;
+  },
 });
 
 wss.on('connection', (ws) => {
-  console.log('WebSocket client connected (Dynamic Island)');
+  ws.isYouTubeExtension = ws.protocol === 'kanaric-youtube-v1';
+  if (ws.isYouTubeExtension) {
+    if (global.activeYouTubeExtension && global.activeYouTubeExtension.readyState === 1 && global.activeYouTubeExtension !== ws) {
+      try { global.activeYouTubeExtension.close(4000, 'replaced'); } catch (e) {}
+    }
+    global.activeYouTubeExtension = ws;
+    console.log('WebSocket client connected (YouTube Karaoke Extension)');
+  } else {
+    console.log('WebSocket client connected (Dynamic Island)');
+  }
   
   let currentSettings = {};
   if (fs.existsSync(SETTINGS_FILE)) {
@@ -2641,8 +2674,10 @@ wss.on('connection', (ws) => {
   }
   if (currentSettings.island_lines === undefined) currentSettings.island_lines = 2;
   
-  ws.send(JSON.stringify({ type: 'init', state: currentMediaState, settings: currentSettings }));
-  ws.send(JSON.stringify({ type: 'game_state', active: isGameActive() }));
+  if (!ws.isYouTubeExtension) {
+    ws.send(JSON.stringify({ type: 'init', state: currentMediaState, settings: currentSettings }));
+    ws.send(JSON.stringify({ type: 'game_state', active: isGameActive() }));
+  }
 
   // 「猜歌遊戲進行中」與「卡拉OK頁開著」都綁在那一頁自己的連線上,不用旗標檔也不用逾時 ——
   // 關頁/重整/當掉都會斷線,旗標自動歸零,不會卡成「聆聽紀錄永久停寫」或「島再也不回來」。
@@ -2650,6 +2685,20 @@ wss.on('connection', (ws) => {
     let msg;
     try { msg = JSON.parse(raw); } catch (e) { return; }
     if (!msg) return;
+    if (ws.isYouTubeExtension) {
+      if (msg.type === 'youtube_karaoke_state') {
+        const state = normalizeExtensionState(msg.state || msg);
+        if (!state) return;
+        broadcastToKaraoke({ type: 'youtube_karaoke_state', ...state });
+      }
+      return;
+    }
+    if (msg.type === 'youtube_karaoke_command') {
+      const command = normalizeKaraokeCommand(msg.command);
+      if (!command || !global.activeYouTubeExtension || global.activeYouTubeExtension.readyState !== 1) return;
+      global.activeYouTubeExtension.send(JSON.stringify({ type: 'youtube_karaoke_command', command }));
+      return;
+    }
     if (msg.type === 'game_active') {
       const active = !!msg.active;
       if (ws.isGame === active) return;
@@ -2669,6 +2718,7 @@ wss.on('connection', (ws) => {
 
   ws.on('close', () => {
     console.log('WebSocket client disconnected');
+    if (ws.isYouTubeExtension && global.activeYouTubeExtension === ws) global.activeYouTubeExtension = null;
     // 那兩種頁直接關掉時,島要自己開回來 (猜歌還要解除遮蔽)
     if (ws.isGame) global.broadcast({ type: 'game_state', active: isGameActive() });
     if (ws.isGame || ws.isKaraoke) syncIslandHidden();
@@ -2708,11 +2758,18 @@ function syncIslandHidden() {
 global.broadcast = function(message) {
   const msgStr = JSON.stringify(message);
   wss.clients.forEach(client => {
-    if (client.readyState === 1 /* WebSocket.OPEN */) {
+    if (client.readyState === 1 /* WebSocket.OPEN */ && !client.isYouTubeExtension) {
       client.send(msgStr);
     }
   });
 };
+
+function broadcastToKaraoke(message) {
+  const msgStr = JSON.stringify(message);
+  wss.clients.forEach((client) => {
+    if (client.readyState === 1 && client.isKaraoke) client.send(msgStr);
+  });
+}
 
 // 只綁 127.0.0.1,不綁 0.0.0.0:API 全無認證,同網段的人若能打進來就能改設定、
 // 清資料庫、把備份還原成別的東西。靈動島與網頁前端都走 localhost,不受影響。
@@ -2729,7 +2786,10 @@ function findFreePort(preferred) {
       t2.listen(0, '127.0.0.1', () => { const p = t2.address().port; t2.close(() => resolve(p)); });
     });
     // ponytail: close→listen 之間有極小 TOCTOU 窗口,單機桌面 app 可忽略 (同 electron.js)
-    t.listen(preferred, '127.0.0.1', () => t.close(() => resolve(preferred)));
+    t.listen(preferred, '127.0.0.1', () => {
+      const p = t.address().port;
+      t.close(() => resolve(p));
+    });
   });
 }
 // B2:雲端模式綁 0.0.0.0 且用 Render 指定的那個 PORT (換一個 port 它就探測不到、判定部署失敗),
