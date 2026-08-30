@@ -20,6 +20,7 @@ Lyricify-*/
 node_modules/
 web-app/node_modules/
 venv/
+venv-stems/
 __pycache__/
 dist-py/
 dist-island/

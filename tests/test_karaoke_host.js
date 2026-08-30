@@ -75,6 +75,20 @@ async function run() {
         const hostHtml = await page.text();
         assert.match(hostHtml, /Karaoke Host/);
         assert.match(hostHtml, /data-host-command="stop"/);
+        for (const id of [
+            'host-library-add', 'host-library-preview', 'host-library-import',
+            'host-song-search', 'host-search-results',
+        ]) assert.match(hostHtml, new RegExp(`id=["']${id}["']`));
+
+        const hostJs = await (await fetch(`${BASE}/js/karaoke-host.js`)).text();
+        assert.match(hostJs, /\/api\/karaoke\/library\/scan/);
+        assert.match(hostJs, /\/api\/karaoke\/library\/search/);
+        assert.match(hostJs, /karaoke_queue_reserve/);
+        assert.match(hostJs, /expectedRevision:\s*session\.queue\.revision/);
+        assert.match(hostJs, /singer:\s*['"]Host['"]/);
+        assert.match(hostJs, /key:\s*0/);
+        assert.match(hostJs, /Queue 已更新，請再點一次/);
+        assert.doesNotMatch(hostJs, /\/api\/media-control|\/api\/seek/);
 
         stage = await connect();
         host = await connect();

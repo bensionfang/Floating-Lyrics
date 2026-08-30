@@ -107,6 +107,23 @@ test('queue-empty transition ends the session and invalidates credentials', () =
     assert.deepEqual(invalidated, ['session-1']);
 });
 
+test('first queue reservation reconciles the canonical song and Session identity', () => {
+    const session = createSession();
+    const currentSong = { id: 'local-1', title: 'Local Song', artist: 'Singer', durationMs: 180000 };
+    assert.equal(session.start(currentSong).accepted, true);
+    const queue = {
+        revision: 1,
+        currentQueueId: 'queue-1',
+        hasNext: false,
+        items: [{ queueId: 'queue-1', songId: 'local-1', singer: 'mobile', title: 'Local Song', artist: 'Singer' }],
+    };
+    const reconciled = session.reconcileQueue(queue, currentSong);
+    assert.equal(reconciled.accepted, true);
+    assert.equal(reconciled.state.queue.currentQueueId, reconciled.state.queue.items[0].queueId);
+    assert.equal(reconciled.state.song.id, reconciled.state.queue.items[0].songId);
+    assert.equal(reconciled.state.state, STATES.PREPARING);
+});
+
 test('each new session gets a new identity and revisions never decrease', () => {
     const session = createSession();
     const revisions = [session.snapshot().revision];

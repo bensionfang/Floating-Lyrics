@@ -3359,6 +3359,12 @@ body.karaoke-remote #karaoke-mv-picker {
 .host-facts div { min-width: 100px; }
 .host-facts dt { color: var(--text-dim); font-size: 12px; }
 .host-facts dd { margin-top: 4px; font-size: 16px; overflow-wrap: anywhere; }
+.host-output-control { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 8px; align-items: center; margin-bottom: 20px; }
+.host-output-control label { color: var(--text-dim); font-size: 12px; }
+.host-output-control select { min-width: 0; padding: 8px 9px; border: 1px solid var(--panel-border); border-radius: 6px; background: rgba(255, 255, 255, 0.05); color: var(--text-primary); font: inherit; font-size: 13px; }
+.host-output-control select option { background: #20242d; color: var(--text-primary); }
+.host-output-control button { border: 0; cursor: pointer; }
+.host-output-control .host-muted { white-space: nowrap; }
 .host-controls { display: flex; flex-wrap: wrap; gap: 10px; }
 .host-controls button { border: 0; cursor: pointer; }
 .host-note, .host-empty { margin-top: 16px; color: var(--text-dim); font-size: 12px; }
@@ -3379,6 +3385,30 @@ body.karaoke-remote #karaoke-mv-picker {
 .host-queue-meta { white-space: nowrap; }
 .host-queue-remove { padding: 5px 8px; border: 1px solid var(--panel-border); border-radius: 5px; background: transparent; color: var(--text-secondary); cursor: pointer; }
 .host-queue-remove:hover { color: var(--text-primary); border-color: var(--text-secondary); }
+#karaoke-host .host-library-preview { display: grid; gap: 10px; margin-top: 18px; }
+#karaoke-host .host-library-summary, #karaoke-host .host-library-issues { margin: 0; color: var(--text-secondary); font-size: 12px; }
+#karaoke-host .host-library-issues, #karaoke-host .host-status-error { color: #f0ad4e; }
+#karaoke-host .host-library-candidate { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--panel-border); border-radius: 8px; }
+#karaoke-host .host-library-candidate.has-issues { border-color: rgba(240, 173, 78, 0.55); }
+#karaoke-host .host-library-candidate-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; }
+#karaoke-host .host-library-candidate-head strong, #karaoke-host .host-library-candidate-head span { overflow-wrap: anywhere; }
+#karaoke-host .host-library-candidate-head span { color: var(--text-secondary); font-size: 12px; text-align: right; }
+#karaoke-host .host-library-fields, #karaoke-host .host-library-assets { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+#karaoke-host .host-library-assets { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+#karaoke-host .host-library-field { display: grid; gap: 4px; color: var(--text-dim); font-size: 11px; }
+#karaoke-host .host-library-field input, #karaoke-host .host-library-field select, #karaoke-host .host-search-form input {
+    width: 100%; min-width: 0; padding: 8px 9px; border: 1px solid var(--panel-border); border-radius: 6px;
+    background: rgba(255, 255, 255, 0.05); color: var(--text-primary); font: inherit; font-size: 13px;
+}
+#karaoke-host .host-library-field select option { background: #20242d; color: var(--text-primary); }
+#karaoke-host .host-library-actions { display: flex; justify-content: flex-end; margin-top: 14px; }
+#karaoke-host .host-search-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+#karaoke-host .host-search-results { display: grid; gap: 8px; margin-top: 16px; }
+#karaoke-host .host-search-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 10px 12px; border: 1px solid var(--panel-border); border-radius: 8px; }
+#karaoke-host .host-search-details { min-width: 0; }
+#karaoke-host .host-search-details strong, #karaoke-host .host-search-details span { display: block; overflow-wrap: anywhere; }
+#karaoke-host .host-search-details span { color: var(--text-secondary); font-size: 12px; }
+#karaoke-host .host-song-reserve { white-space: nowrap; }
 .host-diagnostics { display: grid; gap: 8px; }
 .host-diagnostic-row { display: grid; grid-template-columns: 110px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 9px 10px; border-radius: 7px; background: rgba(255, 255, 255, 0.04); font-size: 13px; }
 .host-diagnostic-row span { color: var(--text-secondary); overflow-wrap: anywhere; }
@@ -3391,6 +3421,9 @@ body.karaoke-remote #karaoke-mv-picker {
     .host-header { align-items: flex-start; gap: 12px; }
     .host-grid { grid-template-columns: 1fr; }
     .host-session-card { grid-row: auto; }
+    #karaoke-host .host-library-assets { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .host-output-control { grid-template-columns: auto minmax(0, 1fr); }
+    .host-output-control .host-muted, .host-output-control button { grid-column: 2; }
 }
 
 /* Pitch Lab：所有音訊留在瀏覽器，本頁只保存使用者選擇的音域摘要。 */

@@ -23,6 +23,9 @@ const testFiles = [
   'tests/test_karaoke_microphone.js',
   'tests/test_karaoke_player.js',
   'tests/test_mpv_karaoke_player.js',
+  'tests/test_karaoke_player_service.js',
+  'tests/test_karaoke_stage_mpv.js',
+  'tests/test_karaoke_server_mpv_contract.js',
   'tests/test_karaoke_clock.js',
   'tests/test_media_timing.js',
   'tests/test_karaoke_mode.js',
@@ -53,7 +56,10 @@ const testFiles = [
   'tests/test_mobile_color.js',
   'tests/test_offset_sync.js',
   'tests/test_lrc_time.js',
-  'tests/test_win_corners.js'
+  'tests/test_win_corners.js',
+  'tests/test_karaoke_library_scan.js',
+  'tests/test_karaoke_catalog.js',
+  'tests/test_karaoke_online_catalog.js'
 ];
 
 const failures = [];

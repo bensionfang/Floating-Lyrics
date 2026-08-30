@@ -34,9 +34,12 @@ const {
   makeKaraokeResultMessage,
 } = require('./karaoke-session');
 const { SongLibrary, ensureSongLibrarySchema } = require('./song-library');
+const { createKaraokeCatalog } = require('./karaoke-catalog');
 const { KaraokeQueue } = require('./karaoke-queue');
 const { KaraokeRemoteGateway, activeSession } = require('./karaoke-remote');
 const { buildKaraokeDiagnostics } = require('./karaoke-diagnostics');
+const { createKaraokePlayerService } = require('./karaoke-player-service');
+const { createKaraokeStageController } = require('./karaoke-stage-controller');
 require('dotenv').config();
 
 const app = express();
@@ -53,10 +56,14 @@ const PARENT_DIR = path.join(__dirname, '..');
 const mediaTiming = new MediaTimingSequencer();
 const karaokeSession = new KaraokeSession();
 let karaokeSongLibrary = null;
+let karaokeCatalog = null;
 let karaokeQueue = null;
 let karaokeQueueReady = Promise.resolve();
 let karaokeQueueMutationTail = Promise.resolve();
 let karaokeLibraryReady = false;
+let karaokePlayerService = null;
+let karaokeStageController = null;
+const karaokeOutputRequests = new Map();
 let remotePort = 0;
 const remoteConnections = new Set();
 let lastRemoteSessionId = null;
@@ -234,8 +241,32 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
       console.error('Song Library schema migration failed:', schemaErr.message);
     });
     karaokeSongLibrary = new SongLibrary(db);
+    karaokeCatalog = createKaraokeCatalog({
+      library: karaokeSongLibrary,
+      chooseFolder: async () => {
+        if (typeof global.selectKaraokeLibraryFolder !== 'function') {
+          const error = new Error('karaoke-folder-picker-unavailable');
+          error.code = 'karaoke-folder-picker-unavailable';
+          throw error;
+        }
+        return global.selectKaraokeLibraryFolder();
+      },
+    });
     karaokeQueue = new KaraokeQueue(db, {
       songResolver: (songId) => karaokeSongLibrary.loadSong(songId),
+    });
+    karaokePlayerService = createKaraokePlayerService({
+      library: karaokeSongLibrary,
+      playerFactory: undefined,
+      session: karaokeSession,
+      queue: karaokeQueue,
+    });
+    karaokeStageController = createKaraokeStageController({
+      session: karaokeSession,
+      queue: karaokeQueue,
+      library: karaokeSongLibrary,
+      playerService: karaokePlayerService,
+      onState: () => broadcastKaraokeSession(),
     });
     karaokeQueueReady = Promise.all([karaokeSongLibrary.ready, karaokeQueue.ready])
       .then(async () => {
@@ -312,6 +343,9 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
 });
 
 async function reconcileKaraokeQueue(queueState) {
+  if (karaokeStageController && karaokeMpvStageConnected()) {
+    return (await karaokeStageController.reconcile(queueState)).state;
+  }
   const current = queueState && queueState.items
     ? queueState.items.find((item) => item.queueId === queueState.currentQueueId)
     : null;
@@ -329,6 +363,11 @@ async function reconcileKaraokeQueue(queueState) {
     }
   }
   return karaokeSession.reconcileQueue(queueState, sessionSong);
+}
+
+function karaokeMpvStageConnected() {
+  return typeof wss !== 'undefined' && [...wss.clients].some((client) =>
+    client.readyState === 1 && karaokeRole(client) === 'stage' && client.karaokePlayerMode === 'mpv');
 }
 
 // 歌手正規名對照。handleMediaUpdate 是同步的,不能在那裡等 db.get,所以整張表
@@ -714,7 +753,8 @@ app.get('/game', (req, res) => {
 
 // 卡拉OK字幕機模式 (兩行大字 + 逐字填色 + 可選的 MV 背景)
 app.get('/karaoke', (req, res) => {
-  res.render('karaoke', { activePage: 'karaoke' });
+  const playerMode = req.query.player === 'mpv' ? 'mpv' : (req.query.player === 'local' ? 'local' : 'external');
+  res.render('karaoke', { activePage: 'karaoke', playerMode });
 });
 
 // Pitch Lab 只服務本機瀏覽器頁面；音訊與分析留在前端，不進 server。
@@ -877,6 +917,60 @@ app.get('/api/media-sources', async (req, res) => {
   if (os.platform() !== 'win32') return res.json({ current: 'auto', sources: [] });
   const result = await spawnPyJson(['sessions'], { timeoutMs: 5000, onJson: (j) => j });
   res.json(result || { current: 'auto', sources: [] });
+});
+
+function karaokeCatalogForRequest() {
+  return karaokeQueueReady.then(() => {
+    if (karaokeCatalog) return karaokeCatalog;
+    const error = new Error('karaoke-catalog-not-ready');
+    error.code = 'karaoke-catalog-not-ready';
+    throw error;
+  });
+}
+
+function sendKaraokeCatalogError(res, error) {
+  const code = error && (error.code || error.message) || 'karaoke-catalog-failed';
+  const status = String(code).startsWith('karaoke-') ? 400 : 500;
+  return res.status(status).json({ error: code });
+}
+
+app.post('/api/karaoke/library/scan', async (req, res) => {
+  try {
+    const result = await (await karaokeCatalogForRequest()).createScan();
+    if (result === null) return res.status(204).end();
+    return res.json({
+      scanId: result.scanId,
+      expiresAt: result.expiresAt,
+      candidates: result.candidates,
+      issues: result.issues,
+    });
+  } catch (error) {
+    return sendKaraokeCatalogError(res, error);
+  }
+});
+
+app.post('/api/karaoke/library/scan/:scanId/import', async (req, res) => {
+  try {
+    const corrections = Array.isArray(req.body) ? req.body : req.body && req.body.corrections;
+    if (!Array.isArray(corrections)) {
+      const error = new Error('karaoke-corrections-required');
+      error.code = 'karaoke-corrections-required';
+      throw error;
+    }
+    const result = await (await karaokeCatalogForRequest()).importScan(req.params.scanId, corrections);
+    return res.json(result);
+  } catch (error) {
+    return sendKaraokeCatalogError(res, error);
+  }
+});
+
+app.get('/api/karaoke/library/search', async (req, res) => {
+  try {
+    const items = await (await karaokeCatalogForRequest()).search(req.query.q || '');
+    return res.json({ items });
+  } catch (error) {
+    return sendKaraokeCatalogError(res, error);
+  }
 });
 
 // autoMarkTitleLines 已移到 web-app/title-lines.js (見檔頭 require),
@@ -2942,6 +3036,95 @@ function invalidateRemoteSession(sessionId) {
   }
 }
 
+function karaokePlayerState() {
+  const session = karaokeSession.snapshot();
+  const player = karaokePlayerService && karaokePlayerService.snapshot
+    ? karaokePlayerService.snapshot() : null;
+  return {
+    sessionId: session.sessionId,
+    revision: session.revision,
+    state: session.state,
+    positionMs: player ? player.positionMs : session.transport.positionMs,
+    durationMs: player ? player.durationMs : session.transport.durationMs,
+    output: player ? player.output : { requested: 'auto', active: 'auto', verified: false, degraded: true },
+  };
+}
+
+async function processKaraokePlayerCommand(ws, message) {
+  const command = message && message.command;
+  if (karaokeRole(ws) !== 'stage' || ws.karaokePlayerMode !== 'mpv') {
+    if (ws.readyState === 1) ws.send(JSON.stringify({
+      type: 'karaoke_player_result', accepted: false, command, reason: 'stage-mpv-required',
+      state: karaokePlayerState(),
+    }));
+    return;
+  }
+  const result = karaokeStageController
+    ? await karaokeStageController.command({
+      sessionId: message.sessionId,
+      command,
+      positionMs: message.positionMs,
+      semitones: message.semitones,
+    })
+    : { accepted: false, reason: 'player-service-unavailable', state: karaokeSession.snapshot() };
+  if (ws.readyState === 1) ws.send(JSON.stringify({
+    type: 'karaoke_player_result', accepted: !!result.accepted, command,
+    ...(result.reason ? { reason: result.reason } : {}), state: karaokePlayerState(),
+  }));
+  if (result.accepted) broadcastKaraokeSession();
+}
+
+function stageMpvSocket() {
+  return [...wss.clients].find((client) =>
+    client.readyState === 1 && karaokeRole(client) === 'stage' && client.karaokePlayerMode === 'mpv');
+}
+
+function outputRequestId(message) {
+  return String(message.requestId || `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+}
+
+function outputFailure(ws, type, requestId, reason) {
+  if (ws.readyState === 1) ws.send(JSON.stringify({ type, accepted: false, requestId, reason, state: karaokePlayerState() }));
+}
+
+function processKaraokeOutputRequest(ws, message) {
+  const requestId = outputRequestId(message);
+  if (karaokeRole(ws) === 'stage' && ws.karaokePlayerMode === 'mpv') {
+    const run = message.type === 'karaoke_player_output_devices'
+      ? karaokePlayerService.listOutputDevices().then((devices) => ({ devices }))
+      : karaokePlayerService.setOutputDevice(message.deviceId).then((output) => ({ output }));
+    run.then((result) => {
+      if (ws.readyState === 1) ws.send(JSON.stringify({
+        type: `${message.type}_result`, accepted: true, requestId, ...result, state: karaokePlayerState(),
+      }));
+      if (message.type !== 'karaoke_player_output_devices') broadcastKaraokeDiagnostics();
+    }).catch((error) => outputFailure(ws, `${message.type}_result`, requestId, error.code || 'output-command-failed'));
+    return;
+  }
+  if (karaokeRole(ws) !== 'host') {
+    outputFailure(ws, `${message.type}_result`, requestId, 'host-role-required');
+    return;
+  }
+  const stage = stageMpvSocket();
+  if (!stage) {
+    outputFailure(ws, `${message.type}_result`, requestId, 'stage-mpv-required');
+    return;
+  }
+  karaokeOutputRequests.set(requestId, ws);
+  stage.send(JSON.stringify({
+    type: message.type, requestId, ...(message.type === 'karaoke_player_output_device'
+      ? { deviceId: message.deviceId } : {}),
+  }));
+}
+
+function processKaraokeOutputResult(ws, message) {
+  if (karaokeRole(ws) !== 'stage' || ws.karaokePlayerMode !== 'mpv') return;
+  const requester = karaokeOutputRequests.get(String(message.requestId || ''));
+  if (!requester) return;
+  karaokeOutputRequests.delete(String(message.requestId));
+  if (requester.readyState === 1) requester.send(JSON.stringify(message));
+}
+
 function forwardKaraokeStageCommand(command, sessionId) {
   const commands = new Set(['play', 'pause', 'playpause', 'restart', 'next', 'stop']);
   if (!commands.has(command)) return { accepted: false, reason: 'invalid-host-command' };
@@ -2985,8 +3168,11 @@ function sendKaraokeDiagnostics(ws) {
     stageConnections: karaokeConnections('stage'),
     hostSocketAlive: true,
     session: karaokeSession.snapshot(),
-    // Server cannot prove the physical output route; the Host reports this honestly.
-    output: { supported: false, verified: false },
+    output: {
+      supported: karaokeMpvStageConnected(),
+      ...(karaokePlayerService && karaokePlayerService.snapshot
+        ? karaokePlayerService.snapshot().output : { verified: false, degraded: true }),
+    },
     remote: { enabled: !CLOUD && remotePort > 0, port: remotePort },
     microphone: { enabled: false },
     video: { enabled: false },
@@ -3091,6 +3277,44 @@ wss.on('connection', (ws) => {
         sendKaraokeDiagnostics(ws);
         broadcastKaraokeDiagnostics();
       }
+    return;
+  }
+  if (msg.type === 'karaoke_player_mode') {
+      if (karaokeRole(ws) === 'stage') {
+        ws.karaokePlayerMode = msg.player === 'mpv' ? 'mpv' : 'external';
+        sendKaraokeSession(ws);
+        sendKaraokeDiagnostics(ws);
+        if (ws.karaokePlayerMode === 'mpv') {
+          karaokeQueueReady.then(() => karaokeQueue && karaokeQueue.snapshot())
+            .then((state) => state && reconcileKaraokeQueue(state))
+            .then(() => broadcastKaraokeSession())
+            .catch((error) => console.error('Karaoke mpv preparation failed:', error.message));
+        }
+      }
+      return;
+    }
+    if (msg.type === 'karaoke_player_command') {
+      processKaraokePlayerCommand(ws, msg).catch((error) => {
+        if (ws.readyState === 1) ws.send(JSON.stringify({
+          type: 'karaoke_player_result', accepted: false, command: msg.command,
+          reason: error.code || 'player-command-failed', state: karaokePlayerState(),
+        }));
+      });
+      return;
+    }
+    if (msg.type === 'karaoke_player_output_devices' || msg.type === 'karaoke_player_output_device') {
+      processKaraokeOutputRequest(ws, msg);
+      return;
+    }
+    if (msg.type === 'karaoke_player_output_devices_result' || msg.type === 'karaoke_player_output_device_result') {
+      processKaraokeOutputResult(ws, msg);
+      return;
+    }
+    if (msg.type === 'karaoke_player_event' && karaokeRole(ws) === 'stage' && ws.karaokePlayerMode === 'mpv') {
+      if (ws.readyState === 1) ws.send(JSON.stringify({
+        type: 'karaoke_session_result', accepted: false, reason: 'player-service-authoritative',
+        state: karaokeSession.snapshot(),
+      }));
       return;
     }
     if (msg.type === 'karaoke_host_command') {

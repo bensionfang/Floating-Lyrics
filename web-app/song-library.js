@@ -294,8 +294,10 @@ class SongLibrary {
   async searchSongs(query) {
     await this.ready;
     const needle = `%${normalizeSearchText(query)}%`;
-    return all(this.db, `SELECT s.song_id AS songId, s.title, s.artist, s.album, s.variant
+    return all(this.db, `SELECT s.song_id AS songId, s.title, s.artist, s.album, s.variant,
+        COALESCE(l.status, 'missing') AS lyricsStatus
       FROM songs s JOIN song_search_index i ON i.song_id=s.song_id
+      LEFT JOIN song_lyrics l ON l.song_id=s.song_id
       WHERE i.title LIKE ? OR i.artist LIKE ? OR i.aliases LIKE ? OR i.kana LIKE ? OR i.romaji LIKE ?
       ORDER BY i.artist, i.title, s.variant, s.song_id`, [needle, needle, needle, needle, needle]);
   }

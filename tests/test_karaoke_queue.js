@@ -37,12 +37,12 @@ function makeResolver() {
     return async (songId) => song(songId);
 }
 
-async function makeQueue(db = new sqlite3.Database(':memory:')) {
+async function makeQueue(db = new sqlite3.Database(':memory:'), options = {}) {
     let id = 0;
     const queue = new KaraokeQueue(db, {
         idFactory: () => `queue-${++id}`,
         reservationIdFactory: () => `reservation-${++id}`,
-        songResolver: makeResolver(),
+        songResolver: options.songResolver || makeResolver(),
     });
     await queue.ready;
     return { db, queue };
@@ -157,6 +157,44 @@ async function testPersistenceAndLegacyCacheReadability() {
     assert.deepEqual(await get(db, 'SELECT lyrics FROM cache WHERE artist=? AND title=?', ['artist', 'title']), {
         lyrics: '[00:01.00]lyrics',
     });
+    await close(db);
+    fs.rmSync(root, { recursive: true, force: true });
+}
+
+async function testProjectedSongLabelsAndRestartReresolution() {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kanaric-queue-labels-'));
+    const dbPath = path.join(root, 'queue.db');
+    let resolvedTitle = 'First Love';
+    const resolver = async (songId) => ({
+        id: songId,
+        title: resolvedTitle,
+        artist: '宇多田ヒカル',
+        lyrics: { status: 'ready' },
+    });
+    let db = new sqlite3.Database(dbPath);
+    const first = await makeQueue(db, { songResolver: resolver });
+    const reserved = await first.queue.reserve({ songId: 'local-first-love', singer: 'Host' });
+    assert.equal(reserved.item.title, 'First Love');
+    assert.equal(reserved.item.artist, '宇多田ヒカル');
+    assert.equal(reserved.item.lyricsStatus, 'ready');
+    assert.equal((await first.queue.snapshot()).items[0].title, 'First Love');
+    await close(db);
+
+    resolvedTitle = 'First Love (re-resolved)';
+    db = new sqlite3.Database(dbPath);
+    const second = await makeQueue(db, { songResolver: resolver });
+    const afterRestart = await second.queue.snapshot();
+    assert.equal(afterRestart.items[0].title, 'First Love (re-resolved)');
+    assert.equal(afterRestart.items[0].artist, '宇多田ヒカル');
+    assert.equal(afterRestart.items[0].lyricsStatus, 'ready');
+    await assert.rejects(
+        () => get(db, 'SELECT title FROM karaoke_queue_items'),
+        /no such column: title/,
+    );
+    await assert.rejects(
+        () => get(db, 'SELECT artist FROM karaoke_queue_items'),
+        /no such column: artist/,
+    );
     await close(db);
     fs.rmSync(root, { recursive: true, force: true });
 }
@@ -355,6 +393,7 @@ async function testServerQueueProjection() {
     await testReorderRemoveRaceAndStaleMutation();
     await testCurrentRemovalSkipAndSessionReconciliation();
     await testPersistenceAndLegacyCacheReadability();
+    await testProjectedSongLabelsAndRestartReresolution();
     await testProjectionConsistencyAndStaleRejection();
     await testQueueProtocolAdapter();
     await testKeyRevisionGuard();

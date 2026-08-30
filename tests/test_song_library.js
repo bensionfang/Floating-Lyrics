@@ -54,6 +54,7 @@ async function main() {
   });
   let results = await library.searchSongs('yozora');
   assert.deepStrictEqual(results.map((song) => song.songId), ['local-live-1', 'local-studio-1']);
+  assert.deepStrictEqual(results.map((song) => song.lyricsStatus), ['ready', 'ready']);
   assert.deepStrictEqual((await library.searchSongs('現場')).map((song) => song.variant), ['live']);
 
   await library.importSong({

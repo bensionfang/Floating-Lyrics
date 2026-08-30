@@ -77,6 +77,16 @@ function itemFromRow(row) {
     };
 }
 
+async function projectQueueItem(item, songResolver) {
+    const song = songResolver ? await songResolver(item.songId) : null;
+    return song && typeof song === 'object' ? {
+        ...item,
+        title: song.title,
+        artist: song.artist,
+        lyricsStatus: song.lyrics && song.lyrics.status || 'missing',
+    } : item;
+}
+
 class KaraokeQueue {
     constructor(db, options = {}) {
         this.db = db;
@@ -98,7 +108,7 @@ class KaraokeQueue {
         const rows = await all(this.db, `SELECT queue_id, reservation_id, song_id, singer_id, singer,
             "key" AS key, tempo, scoring, status, position, created_order
             FROM karaoke_queue_items ORDER BY position, created_order`);
-        const items = rows.map(itemFromRow);
+        const items = await Promise.all(rows.map((row) => projectQueueItem(itemFromRow(row), this._songResolver)));
         const currentQueueId = items[0] ? items[0].queueId : null;
         return {
             revision: meta ? meta.revision : 0,
@@ -146,7 +156,8 @@ class KaraokeQueue {
                 await run(this.db, 'UPDATE karaoke_queue_meta SET revision=revision+1 WHERE id=1');
                 await run(this.db, 'COMMIT');
                 const state = await this._state();
-                return { accepted: true, state, ...(result.item ? { item: result.item } : {}) };
+                const item = result.item && state.items.find((candidate) => candidate.queueId === result.item.queueId);
+                return { accepted: true, state, ...(item ? { item } : {}) };
             } catch (error) {
                 try { await run(this.db, 'ROLLBACK'); } catch (rollbackError) { /* preserve original error */ }
                 throw error;

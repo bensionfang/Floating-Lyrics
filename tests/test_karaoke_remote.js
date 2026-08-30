@@ -73,6 +73,8 @@ function run() {
   for (const command of ['search', 'reserve', 'queue_view', 'key', 'pause', 'restart', 'skip', 'stop', 'reconnect', 'state_refresh']) {
     assert.strictEqual(allowed.has(command), true, `missing allowlist command: ${command}`);
   }
+  const remotePage = fs.readFileSync(path.join(__dirname, '..', 'web-app', 'remote-mobile.html'), 'utf8');
+  assert.match(remotePage, /item\.lyricsStatus/);
   const rejectedCommand = gateway.authorize({
     token: first.token,
     sessionId: session.sessionId,
@@ -215,10 +217,18 @@ async function testLiveRemoteBoundary() {
   try {
     await Promise.all([waitForHttp(`${admin}/host`), waitForHttp(`${remote}/remote/health`)]);
     assert.match(await (await fetch(`${remote}/mobile/karaoke/`)).text(), /Karaoke Remote/);
+    assert.equal((await fetch(`${remote}/api/karaoke/library/scan`, { method: 'POST' })).status, 404);
+    assert.equal((await fetch(`${remote}/api/karaoke/library/scan/unknown/import`, { method: 'POST' })).status, 404);
+    assert.equal((await fetch(`${remote}/api/karaoke/library/search?q=Local`)).status, 404);
     assert.equal((await fetch(`${remote}/api/settings`)).status, 404);
     assert.equal((await fetch(`${remote}/api/db-clear`, { method: 'POST' })).status, 404);
     assert.equal((await fetch(`${admin}/remote/health`)).status, 404);
     assert.equal((await fetch(`${admin}/mobile/karaoke/`)).status, 404);
+    const adminSearch = await (await fetch(`${admin}/api/karaoke/library/search?q=Local`)).json();
+    assert.deepStrictEqual(adminSearch.items[0], {
+      songId: 'local-1', title: 'Local Song', artist: 'Singer', album: null, variant: 'studio',
+      lyricsStatus: 'ready',
+    });
 
     const stage = await connect(`ws://localhost:${adminPort}`, admin);
     const host = await connect(`ws://localhost:${adminPort}`, admin);
@@ -263,20 +273,33 @@ async function testLiveRemoteBoundary() {
     remoteOne.send(JSON.stringify({ type: 'remote_command', token: first.body.token, sessionId, requestId: 'search', command: 'search', query: 'Local' }));
     const search = await remoteOne.waitFor((message) => message.requestId === 'search');
     assert.equal(search.accepted, true);
-    assert.equal(search.result[0].songId, 'local-1');
+    assert.deepStrictEqual(search.result[0], {
+      songId: 'local-1', title: 'Local Song', artist: 'Singer', album: null, variant: 'studio',
+      lyricsStatus: 'ready',
+    });
 
     remoteOne.send(JSON.stringify({ type: 'remote_command', token: first.body.token, sessionId, requestId: 'queue-view', command: 'queue_view' }));
     assert.equal((await remoteOne.waitFor((message) => message.requestId === 'queue-view')).state.queue.revision, 0);
     remoteOne.send(JSON.stringify({ type: 'remote_command', token: first.body.token, sessionId, requestId: 'stale-reserve', command: 'reserve', expectedQueueRevision: 99, item: { songId: 'local-1' } }));
     assert.equal((await remoteOne.waitFor((message) => message.requestId === 'stale-reserve')).reason, 'stale-queue-revision');
-    remoteOne.send(JSON.stringify({ type: 'remote_command', token: first.body.token, sessionId, requestId: 'reserve', command: 'reserve', expectedQueueRevision: 0, item: { songId: 'local-1', singer: 'phone' } }));
+    remoteOne.send(JSON.stringify({ type: 'remote_command', token: first.body.token, sessionId, requestId: 'reserve', command: 'reserve', expectedQueueRevision: 0, item: { songId: 'local-1', singer: 'mobile' } }));
     const reserved = await remoteOne.waitFor((message) => message.requestId === 'reserve');
     assert.equal(reserved.accepted, true);
     assert.equal(reserved.state.queue.revision, 1);
+    assert.equal(reserved.state.queue.currentQueueId, reserved.state.queue.items[0].queueId);
+    assert.equal(reserved.state.song.id, reserved.state.queue.items[0].songId);
+    assert.equal(reserved.state.state, 'PREPARING');
+    assert.equal(reserved.state.queue.items[0].title, 'Local Song');
+    assert.equal(reserved.state.queue.items[0].artist, 'Singer');
+    assert.equal(reserved.state.queue.items[0].singer, 'mobile');
+    assert.equal(reserved.state.queue.items[0].lyricsStatus, 'ready');
     remoteTwo.send(JSON.stringify({ type: 'remote_command', token: second.body.token, sessionId, requestId: 'key', command: 'key', queueId: reserved.state.queue.currentQueueId, key: 2, expectedQueueRevision: 1 }));
     const keyed = await remoteTwo.waitFor((message) => message.requestId === 'key');
     assert.equal(keyed.accepted, true);
     assert.equal(keyed.state.queue.revision, 2);
+    assert.equal(keyed.state.queue.items[0].title, 'Local Song');
+    assert.equal(keyed.state.queue.items[0].artist, 'Singer');
+    assert.equal(keyed.state.queue.items[0].lyricsStatus, 'ready');
 
     remoteOne.send(JSON.stringify({ type: 'remote_command', token: first.body.token, sessionId, requestId: 'pause', command: 'pause' }));
     await stage.waitFor((message) => message.type === 'karaoke_host_command' && message.command === 'pause');

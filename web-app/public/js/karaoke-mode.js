@@ -34,6 +34,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const karaokeClock = new clockApi.KaraokeClock();
     const query = new URLSearchParams(location.search);
     const localMode = query.get('player') === 'local';
+    const mpvMode = query.get('player') === 'mpv';
     const playerApi = window.KanaricKaraokePlayer;
     let localPlayer = null;
     let sessionId = null;
@@ -404,6 +405,13 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
+    function sendMpvCommand(command, extra = {}) {
+        if (!mpvMode || !sessionId) return false;
+        return sendLocalSessionMessage({
+            type: 'karaoke_player_command', sessionId, command, ...extra,
+        });
+    }
+
     function requestLocalSession() {
         if (!localMode || !localLoadEvent || localLoadEvent.durationMs <= 0 || sessionId || localSessionRequested) return;
         const song = { ...localSong, durationMs: localLoadEvent.durationMs };
@@ -434,6 +442,7 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function applyHostCommand(command) {
+        if (mpvMode) return sendMpvCommand(command);
         if (command === 'restart') return window.karaokeRestart?.();
         if (command === 'playpause') return window.karaokeTogglePlay?.();
         if (command === 'next') return window.karaokeNext?.();
@@ -465,7 +474,7 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function applySessionState(d) {
-        if (!localMode || !d || !clockApi.sessionStateToEvent) return;
+        if ((!localMode && !mpvMode) || !d || !clockApi.sessionStateToEvent) return;
         const revision = Number.isInteger(d.revision) ? d.revision : -1;
         if (revision < 0 || revision <= sessionRevision) return;
         const applied = karaokeClock.apply(clockApi.sessionStateToEvent(d));
@@ -473,7 +482,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
         const nextSongId = d.song && d.song.id ? d.song.id : null;
         const songChanged = nextSongId !== sessionSongId;
-        const sameLocalSong = nextSongId && localSong && nextSongId === localSong.id;
+        const sameLocalSong = localMode && nextSongId && localSong && nextSongId === localSong.id;
         sessionSongId = nextSongId;
         sessionRevision = revision;
         sessionId = d.sessionId || null;
@@ -490,9 +499,16 @@ document.addEventListener('DOMContentLoaded', function () {
             document.getElementById('ki-artist').textContent = artist;
             nowEl.textContent = title ? `本機歌曲：${title}` : '目前沒有偵測到播放';
             if (!sameLocalSong || !lines.length) clearLyrics();
+            if (mpvMode && d.song.title) {
+                const key = `${d.song.title}|||${d.song.artist || ''}`;
+                if (key !== lyricsKey) {
+                    lyricsKey = key;
+                    fetchLyrics(d.song.title, d.song.artist);
+                }
+            }
         }
 
-        if (localSessionState === 'PREPARING' && localLoadEvent && !localSessionReady) {
+        if (localMode && localSessionState === 'PREPARING' && localLoadEvent && !localSessionReady) {
             const sent = sendLocalSessionMessage({
                 type: 'karaoke_player_event',
                 sessionId,
@@ -500,12 +516,12 @@ document.addEventListener('DOMContentLoaded', function () {
             });
             if (sent) localSessionReady = false;
         }
-        if (['INTRO', 'PLAYING', 'PAUSED'].includes(localSessionState)) {
+        if (localMode && ['INTRO', 'PLAYING', 'PAUSED'].includes(localSessionState)) {
             localSessionReady = true;
         }
         if (localSessionState === 'INTRO') {
             setStatus(lines.length ? '' : '找不到這首歌的歌詞', 'fa-solid fa-face-frown');
-            maybeStartLocalPlayback();
+            if (localMode) maybeStartLocalPlayback();
         }
         if (localSessionState === 'ERROR') {
             localStartRequested = false;
@@ -672,6 +688,8 @@ document.addEventListener('DOMContentLoaded', function () {
             localStartRequested = true;
             requestLocalSession();
             maybeStartLocalPlayback();
+        } else if (mpvMode) {
+            if (!sendMpvCommand('play')) setStatus('中央播放器尚未準備好', 'fa-solid fa-triangle-exclamation');
         } else {
             karaokeRestart();
             mediaAction('play');
@@ -692,6 +710,8 @@ document.addEventListener('DOMContentLoaded', function () {
         if (localPlayer) {
             if (localPlayer.getState() === 'playing') localPlayer.pause();
             localStartRequested = false;
+        } else if (mpvMode) {
+            sendMpvCommand('pause');
         } else {
             mediaAction('pause');
             karaokeClock.reanchor(karaokeClock.positionMs(), false);
@@ -723,7 +743,7 @@ document.addEventListener('DOMContentLoaded', function () {
             applyHostCommand(msg.command);
             return;
         }
-        if (localMode) return;
+        if (localMode || mpvMode) return;
         if (msg.type === 'media_state' || msg.type === 'init') {
             if (msg.state) applyState(msg.state);
             return;
@@ -739,9 +759,10 @@ document.addEventListener('DOMContentLoaded', function () {
         setLyrics(msg.lyrics);
     });
     window.sendMediaSocket({ type: 'karaoke_role', role: 'stage' }, 'karaoke-stage-role');
+    if (mpvMode) window.sendMediaSocket({ type: 'karaoke_player_mode', player: 'mpv' }, 'karaoke-stage-player');
 
     // WebSocket 斷線時的保底 (同 app.js/common.js:連線活著就完全不打)
-    if (!localMode) {
+    if (!localMode && !mpvMode) {
         setInterval(async () => {
             if (window.__mediaSocketAlive) return;
             try {
@@ -777,6 +798,7 @@ document.addEventListener('DOMContentLoaded', function () {
             localPlayer.restart();
             return;
         }
+        if (mpvMode) { sendMpvCommand('restart'); return; }
         fetch('/api/seek', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -796,6 +818,7 @@ document.addEventListener('DOMContentLoaded', function () {
             else localPlayer.play();
             return;
         }
+        if (mpvMode) { sendMpvCommand('playpause'); return; }
         mediaAction('playpause');
     };
 
@@ -804,6 +827,7 @@ document.addEventListener('DOMContentLoaded', function () {
             setStatus('本機 spike 只有一個 fixture', 'fa-solid fa-circle-info');
             return;
         }
+        if (mpvMode) { sendMpvCommand('next'); return; }
         mediaAction('next');
     };
 

@@ -2,9 +2,14 @@
 
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
+const fs = require('node:fs');
+const path = require('node:path');
 const {
     MpvKaraokePlayer,
     keyToPitchFactor,
+    readMpvRuntimeManifest,
+    mpvRuntimeDiagnostic,
+    resolveMpvPath,
 } = require('../web-app/mpv-karaoke-player.js');
 
 class FakeProcess extends EventEmitter {
@@ -18,6 +23,7 @@ class FakeIpc {
         this.duration = 180;
         this.position = 0;
         this.audioDevice = 'auto';
+        this.currentAo = 'auto';
     }
 
     onMessage(listener) {
@@ -32,6 +38,7 @@ class FakeIpc {
         if (command[0] === 'get_property' && command[1] === 'duration') return { error: 'success', data: this.duration };
         if (command[0] === 'get_property' && command[1] === 'time-pos') return { error: 'success', data: this.position };
         if (command[0] === 'get_property' && command[1] === 'audio-device') return { error: 'success', data: this.audioDevice };
+        if (command[0] === 'get_property' && command[1] === 'current-ao') return { error: 'success', data: this.currentAo };
         if (command[0] === 'get_property' && command[1] === 'audio-device-list') {
             return { error: 'success', data: [
                 { name: 'auto', description: 'Autoselect device' },
@@ -56,6 +63,22 @@ async function test(name, fn) {
 }
 
 (async () => {
+    await test('bundled mpv runtime has a fixed x86_64 manifest and truthful missing diagnostics', async () => {
+        const runtimeDir = path.join(__dirname, '..', 'third_party', 'mpv');
+        const manifestPath = path.join(runtimeDir, 'manifest.json');
+        assert.equal(fs.existsSync(manifestPath), true, 'third_party/mpv/manifest.json is required');
+        const manifest = readMpvRuntimeManifest(manifestPath);
+        assert.equal(manifest.architecture, 'x86_64');
+        assert.equal(typeof manifest.version, 'string');
+        assert.equal(typeof manifest.sourceUrl, 'string');
+        assert.equal(typeof manifest.sha256, 'string');
+        assert.equal(resolveMpvPath({ resourcesPath: '' }), path.join(runtimeDir, 'mpv.exe'));
+        assert.equal(mpvRuntimeDiagnostic({
+            executablePath: path.join(runtimeDir, 'not-installed-mpv.exe'),
+            manifestPath,
+        }).code, 'player-unavailable');
+    });
+
     const process = new FakeProcess();
     const ipc = new FakeIpc();
     const player = new MpvKaraokePlayer({
@@ -67,6 +90,8 @@ async function test(name, fn) {
         },
         createIpc: () => ipc,
         pipeNameFactory: () => 'test-mpv-pipe',
+        fileExists: () => true,
+        runtimeManifestPath: path.join(__dirname, '..', 'third_party', 'mpv', 'manifest.json'),
     });
 
     await test('loads a local file and exposes mpv transport commands', async () => {
@@ -80,6 +105,7 @@ async function test(name, fn) {
         assert.equal(player.getDuration(), 180000);
         assert.ok(process.args.includes('--idle=yes'));
         assert.ok(process.args.includes('--keep-open=no'));
+        assert.ok(process.args.includes('--audio-fallback-to-null=yes'));
         assert.deepEqual(ipc.commands.find((command) => command[0] === 'loadfile'), [
             'loadfile', 'C:\\fixture.m4a', 'replace',
         ]);
@@ -116,6 +142,22 @@ async function test(name, fn) {
             selected: true,
         });
         assert.equal(player.getPosition(), 0);
+
+        const events = [];
+        player.on((event) => events.push(event));
+        ipc.currentAo = 'wasapi/{speaker}';
+        ipc.emitMessage({ event: 'property-change', name: 'current-ao', data: 'wasapi/{speaker}' });
+        assert.deepEqual(events.at(-1).output, {
+            requested: 'wasapi/{speaker}', active: 'wasapi/{speaker}', verified: true, degraded: false,
+        });
+        ipc.currentAo = 'null';
+        ipc.emitMessage({ event: 'property-change', name: 'current-ao', data: 'null' });
+        assert.deepEqual(events.at(-1).output, {
+            requested: 'wasapi/{speaker}', active: 'null', verified: false, degraded: true,
+        });
+        assert.ok(ipc.commands.some((command) => command[0] === 'set_property'
+            && command[1] === 'audio-device' && command[2] === 'auto'),
+        'a missing selected device must request mpv auto fallback');
     });
 
     await test('EOF and process errors become truthful lifecycle events', async () => {

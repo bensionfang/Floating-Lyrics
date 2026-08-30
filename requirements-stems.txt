@@ -1,0 +1,6 @@
+# Local CPU stem worker. The model is installed separately and never packaged.
+audio-separator[cpu]==0.44.5
+# audio-separator 0.44.5 imports this dependency without declaring it.
+audioread==3.1.0
+# audio-separator 0.44.5 calls librosa.get_duration(filename=...).
+librosa==0.10.2.post1

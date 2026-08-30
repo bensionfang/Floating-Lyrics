@@ -5,7 +5,7 @@
  * 2. 在主進程內直接載入 server.js (Express + WebSocket + Python 子進程)。
  * 3. 開儀表板視窗 + 系統匣圖示 + 靈動島視窗 (island.js),結束時收乾淨所有子進程。
  */
-const { app, BrowserWindow, Tray, Menu, nativeImage } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const net = require('net');
@@ -67,6 +67,15 @@ let splashWindow = null;
 let tray = null;
 let quitting = false;
 let updatePending = null;   // 已下載完、等下次結束才安裝的新版號
+
+global.selectKaraokeLibraryFolder = async () => {
+  if (quitting) return null;
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: '加入卡拉OK歌曲資料夾',
+    properties: ['openDirectory'],
+  });
+  return result.canceled ? null : result.filePaths[0];
+};
 
 const TRAY_ICON = nativeImage.createFromDataURL(
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAM0lEQVR4nGNgoCaoifn/nxhMfQMIaUAHGAYNHQNwhsUwNQAbINoAXIAiF1AlRdIuL1ACAHGrJsks7N9DAAAAAElFTkSuQmCC'

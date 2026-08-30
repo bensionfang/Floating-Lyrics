@@ -3,10 +3,11 @@
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
+const fs = require('node:fs');
 const { spawn } = require('node:child_process');
 
 const PLAYER_EVENT_TYPES = Object.freeze([
-    'load', 'play', 'pause', 'seek', 'restart', 'stop', 'ended', 'error',
+    'load', 'play', 'pause', 'seek', 'restart', 'stop', 'ended', 'error', 'output',
 ]);
 
 function integerMs(value) {
@@ -32,10 +33,44 @@ function normalizeError(error, fallbackCode = 'mpv-error') {
     };
 }
 
-function resolveMpvPath({ env = process.env, resourcesPath = process.resourcesPath } = {}) {
+function resolveMpvPath({
+    env = process.env,
+    resourcesPath = process.resourcesPath,
+    isPackaged = !!(process.versions.electron && !process.defaultApp),
+} = {}) {
     if (env.KANARIC_MPV_PATH) return env.KANARIC_MPV_PATH;
-    if (resourcesPath) return path.join(resourcesPath, 'third_party', 'mpv', 'mpv.exe');
+    if (isPackaged && resourcesPath) return path.join(resourcesPath, 'third_party', 'mpv', 'mpv.exe');
     return path.join(__dirname, '..', 'third_party', 'mpv', 'mpv.exe');
+}
+
+function readMpvRuntimeManifest(manifestPath = path.join(__dirname, '..', 'third_party', 'mpv', 'manifest.json')) {
+    return JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+}
+
+function mpvRuntimeDiagnostic({
+    executablePath,
+    manifestPath = path.join(path.dirname(executablePath), 'manifest.json'),
+    exists = fs.existsSync,
+} = {}) {
+    if (!executablePath || !exists(executablePath)) {
+        return { domain: 'player', code: 'player-unavailable', message: `mpv executable is unavailable: ${executablePath || '(unset)'}` };
+    }
+    if (!manifestPath || !exists(manifestPath)) {
+        return { domain: 'player', code: 'player-unavailable', message: `mpv runtime manifest is unavailable: ${manifestPath || '(unset)'}` };
+    }
+    try {
+        const manifest = readMpvRuntimeManifest(manifestPath);
+        if (manifest.architecture !== 'x86_64'
+            || typeof manifest.version !== 'string'
+            || typeof manifest.sourceUrl !== 'string'
+            || !/^[a-f0-9]{64}$/i.test(String(manifest.sha256 || ''))
+            || typeof manifest.licenseFile !== 'string') {
+            return { domain: 'player', code: 'player-unavailable', message: 'mpv runtime manifest is invalid' };
+        }
+    } catch (error) {
+        return { domain: 'player', code: 'player-unavailable', message: `mpv runtime manifest could not be read: ${error.message}` };
+    }
+    return null;
 }
 
 class MpvIpcClient {
@@ -141,6 +176,8 @@ class MpvKaraokePlayer {
         pipeNameFactory = () => `kanaric-mpv-${process.pid}-${Date.now()}`,
         platform = process.platform,
         loadTimeoutMs = 15000,
+        runtimeManifestPath,
+        fileExists = fs.existsSync,
     } = {}) {
         this.executablePath = executablePath;
         this.spawnProcess = spawnProcess;
@@ -148,6 +185,8 @@ class MpvKaraokePlayer {
         this.pipeNameFactory = pipeNameFactory;
         this.platform = platform;
         this.loadTimeoutMs = loadTimeoutMs;
+        this.runtimeManifestPath = runtimeManifestPath || path.join(path.dirname(executablePath), 'manifest.json');
+        this.fileExists = fileExists;
         this.child = null;
         this.ipc = null;
         this.unsubscribeIpc = null;
@@ -158,6 +197,9 @@ class MpvKaraokePlayer {
         this.durationMs = 0;
         this.pitch = 1;
         this.tempo = 1;
+        this.requestedOutput = 'auto';
+        this.activeOutput = 'auto';
+        this.fallbackPending = false;
         this.revision = -1;
         this.order = -1;
         this.listeners = new Set();
@@ -192,11 +234,20 @@ class MpvKaraokePlayer {
 
     async _ensureStarted() {
         if (this.ipc) return;
+        const diagnostic = mpvRuntimeDiagnostic({
+            executablePath: this.executablePath,
+            manifestPath: this.runtimeManifestPath,
+            exists: this.fileExists,
+        });
+        if (diagnostic) {
+            this._fail(diagnostic);
+            throw Object.assign(new Error(diagnostic.message), diagnostic);
+        }
         const ipcPath = this._ipcPath();
         const args = [
             '--no-config', '--no-video', '--force-window=no', '--audio-display=no',
             '--terminal=no', '--really-quiet', '--idle=yes', '--keep-open=no',
-            '--no-input-default-bindings', '--audio-device=auto',
+            '--no-input-default-bindings', '--audio-device=auto', '--audio-fallback-to-null=yes',
             `--input-ipc-server=${ipcPath}`,
         ];
         const child = this.spawnProcess(this.executablePath, args, {
@@ -221,6 +272,7 @@ class MpvKaraokePlayer {
         await this.ipc.request(['observe_property', 1, 'time-pos']);
         await this.ipc.request(['observe_property', 2, 'duration']);
         await this.ipc.request(['observe_property', 3, 'pause']);
+        await this.ipc.request(['observe_property', 4, 'current-ao']);
     }
 
     async load(song) {
@@ -331,7 +383,24 @@ class MpvKaraokePlayer {
         if (typeof deviceId !== 'string' || !deviceId) throw new TypeError('deviceId is required');
         await this.ipc.request(['set_property', 'audio-device', deviceId]);
         const readback = (await this.ipc.request(['get_property', 'audio-device'])).data;
+        this.requestedOutput = deviceId;
+        this.activeOutput = String(readback || 'null');
         return { supported: true, deviceId, readback, selected: readback === deviceId };
+    }
+
+    _fallbackOutput() {
+        if (this.fallbackPending || this.requestedOutput === 'auto' || !this.ipc) return;
+        this.fallbackPending = true;
+        this.requestedOutput = 'auto';
+        let request;
+        try { request = this.ipc.request(['set_property', 'audio-device', 'auto']); }
+        catch (error) { request = Promise.reject(error); }
+        Promise.resolve(request)
+            .then(() => this._emit('output', {
+                output: { requested: 'auto', active: this.activeOutput, verified: false, degraded: true },
+            }))
+            .catch(() => {})
+            .finally(() => { this.fallbackPending = false; });
     }
 
     getPosition() { return this.durationMs > 0 ? Math.min(this.positionMs, this.durationMs) : this.positionMs; }
@@ -384,6 +453,18 @@ class MpvKaraokePlayer {
             if (message.name === 'time-pos' && Number.isFinite(message.data)) this.positionMs = secondsToMs(message.data);
             if (message.name === 'duration' && Number.isFinite(message.data) && message.data > 0) this.durationMs = secondsToMs(message.data);
             if (message.name === 'pause' && this.state === 'playing' && message.data === true) this.state = 'paused';
+            if (message.name === 'current-ao') {
+                this.activeOutput = String(message.data || 'null');
+                this._emit('output', {
+                    output: {
+                        requested: this.requestedOutput,
+                        active: this.activeOutput,
+                        verified: this.activeOutput !== 'null' && this.activeOutput === this.requestedOutput,
+                        degraded: this.activeOutput === 'null' || this.activeOutput !== this.requestedOutput,
+                    },
+                });
+                if (this.activeOutput === 'null') this._fallbackOutput();
+            }
             return;
         }
         if (message.event === 'end-file') {
@@ -413,6 +494,8 @@ module.exports = {
     integerMs,
     keyToPitchFactor,
     normalizeError,
+    readMpvRuntimeManifest,
+    mpvRuntimeDiagnostic,
     resolveMpvPath,
     secondsToMs,
 };

@@ -25,6 +25,14 @@
             <div><dt>Session</dt><dd id="host-session-id">—</dd></div>
             <div><dt>Key</dt><dd id="host-key">—</dd></div>
         </dl>
+        <div class="host-output-control">
+            <label for="host-output-device">輸出裝置</label>
+            <select id="host-output-device" disabled>
+                <option value="auto">等待 Stage…</option>
+            </select>
+            <span id="host-output-status" class="host-muted" aria-live="polite">尚未驗證</span>
+            <button type="button" id="host-output-refresh" class="game-btn-ghost">重新整理</button>
+        </div>
         <div class="host-controls" aria-label="Stage 控制">
             <button type="button" class="game-btn-primary" data-host-command="play"><i class="fa-solid fa-play"></i> 播放</button>
             <button type="button" class="game-btn-ghost" data-host-command="pause"><i class="fa-solid fa-pause"></i> 暫停</button>
@@ -35,6 +43,20 @@
         <p class="host-note">控制命令會轉交已連線的 Stage；沒有 Stage 時不會直接改動 canonical state。</p>
     </section>
 
+    <section class="glass-panel host-card" aria-labelledby="host-library-heading">
+        <div class="host-card-head">
+            <h2 id="host-library-heading">歌曲庫</h2>
+            <span id="host-library-status" class="host-muted" aria-live="polite">尚未掃描</span>
+        </div>
+        <button type="button" id="host-library-add" class="game-btn-primary">
+            <i class="fa-solid fa-folder-plus"></i> 加入歌曲資料夾
+        </button>
+        <div id="host-library-preview" class="host-library-preview" aria-live="polite" hidden></div>
+        <div class="host-library-actions">
+            <button type="button" id="host-library-import" class="game-btn-primary" hidden disabled>確認匯入</button>
+        </div>
+    </section>
+
     <section class="glass-panel host-card" aria-labelledby="host-queue-heading">
         <div class="host-card-head">
             <h2 id="host-queue-heading">Queue</h2>
@@ -42,6 +64,21 @@
         </div>
         <div id="host-queue" class="host-queue" aria-live="polite">
             <p class="host-empty">尚未同步 Queue</p>
+        </div>
+    </section>
+
+    <section class="glass-panel host-card" aria-labelledby="host-search-heading">
+        <div class="host-card-head">
+            <h2 id="host-search-heading">搜尋點歌</h2>
+            <span id="host-search-status" class="host-muted" aria-live="polite">搜尋本機歌曲庫</span>
+        </div>
+        <form id="host-song-search" class="host-search-form">
+            <label class="sr-only" for="host-song-search-input">搜尋歌名或歌手</label>
+            <input id="host-song-search-input" name="q" type="search" autocomplete="off" placeholder="搜尋歌名或歌手">
+            <button type="submit" class="game-btn-primary"><i class="fa-solid fa-magnifying-glass"></i> 搜尋</button>
+        </form>
+        <div id="host-search-results" class="host-search-results" aria-live="polite">
+            <p class="host-empty">尚未搜尋</p>
         </div>
     </section>
 

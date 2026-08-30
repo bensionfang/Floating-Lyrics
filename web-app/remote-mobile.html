@@ -91,7 +91,8 @@
     (queue.items || []).forEach((item, index) => {
       const row = document.createElement('li');
       const label = document.createElement('span');
-      label.textContent = `${index + 1}. ${item.title || item.songId} · Key ${item.key ?? 0}`;
+      const lyricsStatus = item.lyricsStatus ? ` · ${item.lyricsStatus}` : '';
+      label.textContent = `${index + 1}. ${item.title || item.songId}${lyricsStatus} · Key ${item.key ?? 0}`;
       const keyControls = document.createElement('span');
       keyControls.className = 'row';
       for (const [text, delta] of [['Key −', -1], ['Key ＋', 1]]) {

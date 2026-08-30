@@ -1,13 +1,13 @@
 {
   "name": "kanaric",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "跨平台動態歌詞與聽歌分析系統",
   "main": "electron.js",
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
     "app": "electron.cmd .",
-    "build:py": "..\\venv\\Scripts\\python.exe -m PyInstaller --noconfirm --onedir --name pytools --collect-data pykakasi --collect-all unidic_lite --collect-data fugashi --distpath ..\\dist-py --workpath ..\\build-py --specpath ..\\build-py ..\\pytools.py",
+    "build:py": "if exist ..\\venv\\Scripts\\python.exe (..\\venv\\Scripts\\python.exe -m PyInstaller --noconfirm --onedir --name pytools --collect-data pykakasi --collect-all unidic_lite --collect-data fugashi --distpath ..\\dist-py --workpath ..\\build-py --specpath ..\\build-py ..\\pytools.py) else (..\\..\\Kanaric\\venv\\Scripts\\python.exe -m PyInstaller --noconfirm --onedir --name pytools --collect-data pykakasi --collect-all unidic_lite --collect-data fugashi --distpath ..\\dist-py --workpath ..\\build-py --specpath ..\\build-py ..\\pytools.py)",
     "dist": "npm run build:py && electron-builder",
     "test": "node ../tests/run_all.js"
   },
@@ -34,6 +34,7 @@
     "appId": "com.resuaumis.kanaric",
     "productName": "Kanaric",
     "compression": "maximum",
+    "npmRebuild": false,
     "copyright": "Copyright © 2026 Resuaumis",
     "directories": {
       "output": "release"
@@ -45,8 +46,13 @@
       "karaoke-diagnostics.js",
       "karaoke-queue.js",
       "karaoke-remote.js",
+      "karaoke-catalog.js",
       "song-library.js",
       "mpv-karaoke-player.js",
+      "karaoke-player-service.js",
+      "karaoke-stage-controller.js",
+      "media-timing.js",
+      "karaoke-library-scan.js",
       "s2t.js",
       "lyric-quality.js",
       "browser-query.js",
